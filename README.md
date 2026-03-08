@@ -10,6 +10,19 @@ This project may incorporate, adapt, or build upon **other open-source projects*
 
 ---
 
+## Showcase
+
+| | |
+|:---:|:---:|
+| ![Home](arf_pictures/home.png) | ![Sub-GHz Scanner](arf_pictures/subghz_scan.png) |
+| Home Screen | Sub-GHz Scanner |
+| ![Keeloq Key Manager](arf_pictures/keeloq_key_manager.png) | ![Mod Hopping](arf_pictures/mod_hopping.png) |
+| Keeloq Key Manager | Mod Hopping Config |
+| ![PSA Decrypt](arf_pictures/psa_decrypt_builtin.png) | ![Counter BruteForce](arf_pictures/counter_bruteforce.png) |
+| PSA XTEA Decrypt | Counter BruteForce |
+
+---
+
 ### How to Build
 
 Compact release build:
