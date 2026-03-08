@@ -174,6 +174,8 @@ Contributions are welcome if they:
 
 > Non-automotive features are considered out-of-scope for now.
 
+### This code is a mess!
+![Talk is cheap, submit patches](arf_pictures/send_patches.jpeg) 
 ---
 
 # Disclaimer
