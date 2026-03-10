@@ -4,7 +4,7 @@
 #include <lib/toolbox/manchester_decoder.h>
 
 
-#define KIA_PROTOCOL_V2_NAME "Kia V2"
+#define KIA_PROTOCOL_V2_NAME "KIA/HYU V2"
 
 typedef struct SubGhzProtocolDecoderKiaV2 SubGhzProtocolDecoderKiaV2;
 typedef struct SubGhzProtocolEncoderKiaV2 SubGhzProtocolEncoderKiaV2;

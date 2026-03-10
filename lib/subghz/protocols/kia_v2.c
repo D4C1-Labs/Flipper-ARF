@@ -265,8 +265,7 @@ SubGhzProtocolStatus
         } else {
             instance->generic.btn = (uint8_t)((instance->generic.data >> 16) & 0x0F);
         }
-        if(subghz_custom_btn_get_original() == 0)
-            subghz_custom_btn_set_original(instance->generic.btn);
+        subghz_custom_btn_set_original(instance->generic.btn);
         subghz_custom_btn_set_max(4);
         instance->generic.btn = kia_v2_get_btn_code();
 
@@ -538,8 +537,7 @@ SubGhzProtocolStatus
 void kia_protocol_decoder_v2_get_string(void* context, FuriString* output) {
     furi_check(context);
     SubGhzProtocolDecoderKiaV2* instance = context;
-    if(subghz_custom_btn_get_original() == 0)
-        subghz_custom_btn_set_original(instance->generic.btn);
+    subghz_custom_btn_set_original(instance->generic.btn);
     subghz_custom_btn_set_max(4);
 
     uint8_t crc = instance->generic.data & 0x0F;

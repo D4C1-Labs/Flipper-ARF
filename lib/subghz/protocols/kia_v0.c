@@ -1,6 +1,13 @@
 #include "kia_v0.h"
 #include "../blocks/custom_btn_i.h"
 
+static const char* kia_v0_btn_name(uint8_t btn) {
+    if(btn == 0x01) return "Lock";
+    if(btn == 0x02) return "Unlock";
+    if(btn == 0x03) return "Boot";
+    return "?";
+}
+
 static uint8_t kia_v0_get_btn_code() {
     uint8_t custom_btn = subghz_custom_btn_get();
     uint8_t original_btn = subghz_custom_btn_get_original();
@@ -259,6 +266,7 @@ SubGhzProtocolStatus
     furi_check(context);
     SubGhzProtocolEncoderKIA* instance = context;
 
+    flipper_format_rewind(flipper_format);
     instance->encoder.is_running = false;
     instance->encoder.front = 0;
     instance->encoder.repeat = 10;
@@ -370,8 +378,7 @@ SubGhzProtocolStatus
         } else {
             instance->button = (key >> 8) & 0x0F;
         }
-        if(subghz_custom_btn_get_original() == 0)
-            subghz_custom_btn_set_original(instance->button);
+        subghz_custom_btn_set_original(instance->button);
         subghz_custom_btn_set_max(4);
         instance->button = kia_v0_get_btn_code();
 
@@ -726,8 +733,7 @@ void subghz_protocol_decoder_kia_get_string(void* context, FuriString* output) {
     SubGhzProtocolDecoderKIA* instance = context;
 
     subghz_protocol_kia_check_remote_controller(&instance->generic);
-    if(subghz_custom_btn_get_original() == 0)
-        subghz_custom_btn_set_original(instance->generic.btn);
+    subghz_custom_btn_set_original(instance->generic.btn);
     subghz_custom_btn_set_max(4);
     uint32_t code_found_hi = instance->generic.data >> 32;
     uint32_t code_found_lo = instance->generic.data & 0x00000000ffffffff;
@@ -740,14 +746,14 @@ void subghz_protocol_decoder_kia_get_string(void* context, FuriString* output) {
         output,
         "%s %dbit\r\n"
         "Key:%08lX%08lX\r\n"
-        "Sn:%07lX Btn:%X Cnt:%04lX\r\n"
+        "Sn:%07lX Btn:[%s] Cnt:%04lX\r\n"
         "CRC:%02X %s\r\n",
         instance->generic.protocol_name,
         instance->generic.data_count_bit,
         code_found_hi,
         code_found_lo,
         instance->generic.serial,
-        kia_v0_get_btn_code(),
+        kia_v0_btn_name(kia_v0_get_btn_code()),
         instance->generic.cnt,
         received_crc,
         crc_valid ? "(OK)" : "(FAIL)");

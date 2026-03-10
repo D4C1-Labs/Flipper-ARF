@@ -3,7 +3,7 @@
 #include "kia_generic.h"
 
 
-#define KIA_PROTOCOL_V0_NAME "Kia V0"
+#define KIA_PROTOCOL_V0_NAME "KIA/HYU V0"
 
 typedef struct SubGhzProtocolDecoderKIA SubGhzProtocolDecoderKIA;
 typedef struct SubGhzProtocolEncoderKIA SubGhzProtocolEncoderKIA;
