@@ -251,10 +251,12 @@ static void gui_redraw(Gui* gui) {
 
         if(gui_is_lockdown(gui)) {
             gui_redraw_desktop(gui);
-            bool need_attention =
-                (gui_view_port_find_enabled(gui->layers[GuiLayerWindow]) != 0 ||
-                 gui_view_port_find_enabled(gui->layers[GuiLayerFullscreen]) != 0);
-            gui_redraw_status_bar(gui, need_attention);
+            if(!gui->hide_status_bar) {
+                bool need_attention =
+                    (gui_view_port_find_enabled(gui->layers[GuiLayerWindow]) != 0 ||
+                     gui_view_port_find_enabled(gui->layers[GuiLayerFullscreen]) != 0);
+                gui_redraw_status_bar(gui, need_attention);
+            }
         } else {
             if(!gui_redraw_fs(gui)) {
                 if(!gui_redraw_window(gui)) {
