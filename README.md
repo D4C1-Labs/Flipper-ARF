@@ -189,7 +189,8 @@ The following academic publications have been invaluable to the development and 
 
 - **Lock It and Still Lose It — On the (In)Security of Automotive Remote Keyless Entry Systems**
   Flavio D. Garcia, David Oswald, Timo Kasper, Pierre Pavlidès
-  *USENIX Security 2016*
+  *USENIX Security 2016, pp. 929–944*
+  DOI: [10.5555/3241094.3241166](https://doi.org/10.5555/3241094.3241166)
   https://www.usenix.org/system/files/conference/usenixsecurity16/sec16_paper_garcia.pdf
 
 - **Clonable Key Fobs: Analyzing and Breaking RKE Protocols**
@@ -212,33 +213,65 @@ The following academic publications have been invaluable to the development and 
   *Wiley, February 2025*
   DOI: [10.1002/9781394351930.ch11](https://doi.org/10.1002/9781394351930.ch11)
 
+### DST Cipher Family (DST40 / DST80)
+
+- **Security Analysis of a Cryptographically-Enabled RFID Device**
+  Steve Bono, Matthew Green, Adam Stubblefield, Ari Juels, Avi Rubin, Michael Szydlo
+  *14th USENIX Security Symposium (USENIX Security '05)*
+  https://www.usenix.org/conference/14th-usenix-security-symposium/security-analysis-cryptographically-enabled-rfid-device
+  https://www.usenix.org/legacy/event/sec05/tech/bono/bono.pdf
+
+- **Dismantling DST80-based Immobiliser Systems**
+  Lennert Wouters, Jan Van den Herrewegen, Flavio D. Garcia, David Oswald, Benedikt Gierlichs, Bart Preneel
+  *IACR Transactions on Cryptographic Hardware and Embedded Systems (TCHES), 2020, Vol. 2020(2), pp. 99–127*
+  DOI: [10.13154/tches.v2020.i2.99-127](https://doi.org/10.13154/tches.v2020.i2.99-127)
+
 ### KeeLoq Cryptanalysis
 
 - **Cryptanalysis of the KeeLoq Block Cipher**
   Andrey Bogdanov
-  *Cryptology ePrint Archive, Paper 2007/055*
+  *Cryptology ePrint Archive, Paper 2007/055; also presented at RFIDSec 2007*
   https://eprint.iacr.org/2007/055
-
-- **On the Power of Power Analysis in the Real World: A Complete Break of the KeeLoq Code Hopping Scheme**
-  Thomas Eisenbarth, Timo Kasper, Amir Moradi, Christof Paar, Mahmoud Salmasizadeh, Mohammad T. Manzuri Shalmani
-  *CRYPTO 2008*
-  https://www.iacr.org/archive/crypto2008/51570204/51570204.pdf
 
 - **A Practical Attack on KeeLoq**
   Sebastiaan Indesteege, Nathan Keller, Orr Dunkelman, Eli Biham, Bart Preneel
-  *EUROCRYPT 2008*
+  *EUROCRYPT 2008 (LNCS vol. 4965, pp. 1–18)*
+  DOI: [10.1007/978-3-540-78967-3_1](https://doi.org/10.1007/978-3-540-78967-3_1)
   https://www.iacr.org/archive/eurocrypt2008/49650001/49650001.pdf
 
+- **Algebraic and Slide Attacks on KeeLoq**
+  Nicolas T. Courtois, Gregory V. Bard, David Wagner
+  *FSE 2008 (LNCS vol. 5086, pp. 97–115)*
+  DOI: [10.1007/978-3-540-71039-4_6](https://doi.org/10.1007/978-3-540-71039-4_6)
+
+- **On the Power of Power Analysis in the Real World: A Complete Break of the KeeLoq Code Hopping Scheme**
+  Thomas Eisenbarth, Timo Kasper, Amir Moradi, Christof Paar, Mahmoud Salmasizadeh, Mohammad T. Manzuri Shalmani
+  *CRYPTO 2008 (LNCS vol. 5157, pp. 203–220)*
+  DOI: [10.1007/978-3-540-85174-5_12](https://doi.org/10.1007/978-3-540-85174-5_12)
+  https://www.iacr.org/archive/crypto2008/51570204/51570204.pdf
+
 - **Breaking KeeLoq in a Flash: On Extracting Keys at Lightning Speed**
-  *Springer*
+  Markus Kasper, Timo Kasper, Amir Moradi, Christof Paar
+  *AFRICACRYPT 2009 (LNCS vol. 5580, pp. 403–420)*
   DOI: [10.1007/978-3-642-02384-2_25](https://doi.org/10.1007/978-3-642-02384-2_25)
 
-### Immobiliser & Transponder Systems
+### Immobiliser & Transponder Cipher Attacks
 
-- **Dismantling DST80-based Immobiliser Systems**
-  Lennert Wouters, Jan Van den Herrewegen, Flavio D. Garcia, David Oswald, Benedikt Gierlichs, Bart Preneel
-  *IACR Transactions on Cryptographic Hardware and Embedded Systems (TCHES), 2020, Vol. 2*
-  DOI: [10.13154/tches.v2020.i2.99-127](https://doi.org/10.13154/tches.v2020.i2.99-127)
+- **Gone in 360 Seconds: Hijacking with Hitag2**
+  Roel Verdult, Flavio D. Garcia, Josep Balasch
+  *21st USENIX Security Symposium (USENIX Security '12), pp. 237–252*
+  DOI: [10.5555/2362793.2362830](https://doi.org/10.5555/2362793.2362830)
+  https://www.usenix.org/system/files/conference/usenixsecurity12/sec12-final95.pdf
+
+- **Dismantling Megamos Crypto: Wirelessly Lockpicking a Vehicle Immobilizer**
+  Roel Verdult, Flavio D. Garcia, Baris Ege
+  *Supplement to 22nd USENIX Security Symposium (USENIX Security '13/15), pp. 703–718*
+  https://www.usenix.org/sites/default/files/sec15_supplement.pdf
+
+- **Dismantling the AUT64 Automotive Cipher**
+  Christopher Hicks, Flavio D. Garcia, David Oswald
+  *IACR Transactions on Cryptographic Hardware and Embedded Systems (TCHES), 2018, Vol. 2018(2), pp. 46–69*
+  DOI: [10.13154/tches.v2018.i2.46-69](https://doi.org/10.13154/tches.v2018.i2.46-69)
 
 ### RFID & Protocol Analysis Tooling
 
@@ -248,6 +281,11 @@ The following academic publications have been invaluable to the development and 
   DOI: [10.1109/rfid.2012.19](https://doi.org/10.1109/rfid.2012.19)
 
 ### Relay & Replay Attacks
+
+- **Relay Attacks on Passive Keyless Entry and Start Systems in Modern Cars**
+  Aurélien Francillon, Boris Danev, Srdjan Čapkun
+  *NDSS 2011*
+  https://www.ndss-symposium.org/ndss2011/relay-attacks-on-passive-keyless-entry-and-start-systems-in-modern-cars/
 
 - **Implementing and Testing RollJam on Software-Defined Radios**
   *Università di Bologna (UNIBO), CRIS*
@@ -259,13 +297,14 @@ The following academic publications have been invaluable to the development and 
 
 - **RollBack: A New Time-Agnostic Replay Attack Against the Automotive Remote Keyless Entry Systems**
   Levente Csikor, Hoon Wei Lim, Jun Wen Wong, Soundarya Ramesh, Rohini Poolat Parameswarath, Mun Choon Chan
-  *ACM*
+  *Black Hat USA 2022; ACM Transactions on Cyber-Physical Systems, 2024*
   DOI: [10.1145/3627827](https://doi.org/10.1145/3627827)
+  https://i.blackhat.com/USA-22/Thursday/US-22-Csikor-Rollback-A-New-Time-Agnostic-Replay-wp.pdf
 
-- **Relay Attacks on Passive Keyless Entry and Start Systems in Modern Cars**
-  Aurelien Francillon, Boris Danev, Srdjan Capkun
-  *NDSS 2011*
-  https://www.ndss-symposium.org/ndss2011/relay-attacks-on-passive-keyless-entry-and-start-systems-in-modern-cars/
+- **Rolling-PWN Attack (Honda RKE Vulnerability)**
+  Kevin2600 (Haoqi Shan), Wesley Li — Star-V Lab
+  *Independent disclosure, 2022 (CVE-2021-46145)*
+  https://rollingpwn.github.io/rolling-pwn/
 
 ---
 
