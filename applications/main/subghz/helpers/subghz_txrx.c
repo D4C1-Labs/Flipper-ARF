@@ -35,6 +35,9 @@ SubGhzTxRx* subghz_txrx_alloc(void) {
     instance->txrx_state = SubGhzTxRxStateSleep;
 
     subghz_txrx_hopper_set_state(instance, SubGhzHopperStateOFF);
+    subghz_txrx_preset_hopper_set_state(instance, SubGhzPresetHopperStateOFF);
+    instance->preset_hopper_idx = 0;
+    instance->preset_hopper_timeout = 0;
     subghz_txrx_speaker_set_state(instance, SubGhzSpeakerStateDisable);
     subghz_txrx_set_debug_pin_state(instance, false);
 
@@ -495,63 +498,153 @@ void subghz_txrx_hopper_pause(SubGhzTxRx* instance) {
     }
 }
 
-bool subghz_txrx_mod_hopper_get_running(SubGhzTxRx* instance) {
+void subghz_txrx_preset_hopper_update(SubGhzTxRx* instance, float stay_threshold) {
     furi_assert(instance);
-    return instance->mod_hopper_running;
-}
 
-void subghz_txrx_mod_hopper_set_running(
-    SubGhzTxRx* instance,
-    bool running,
-    uint8_t dwell_ticks,
-    float rssi_threshold) {
-    furi_assert(instance);
-    instance->mod_hopper_running = running;
-    instance->mod_hopper_dwell = dwell_ticks;
-    instance->mod_hopper_rssi_threshold = rssi_threshold;
-    if(running) instance->mod_hopper_timer = dwell_ticks;
-}
-
-void subghz_txrx_mod_hopper_update(SubGhzTxRx* instance, float current_rssi) {
-    furi_assert(instance);
-    if(!instance->mod_hopper_running) return;
-
-    // If RSSI gating is enabled and signal is present, pause hopping
-    if(!isnan(instance->mod_hopper_rssi_threshold) &&
-       current_rssi > instance->mod_hopper_rssi_threshold) {
-        instance->mod_hopper_timer = instance->mod_hopper_dwell;
+    switch(instance->preset_hopper_state) {
+    case SubGhzPresetHopperStateOFF:
+    case SubGhzPresetHopperStatePause:
         return;
+    case SubGhzPresetHopperStateRSSITimeOut:
+        if(instance->preset_hopper_timeout != 0) {
+            instance->preset_hopper_timeout--;
+            return;
+        }
+        break;
+    default:
+        break;
     }
 
-    if(instance->mod_hopper_timer > 0) {
-        instance->mod_hopper_timer--;
-        return;
+    if(instance->preset_hopper_state != SubGhzPresetHopperStateRSSITimeOut) {
+        float rssi = subghz_devices_get_rssi(instance->radio_device);
+
+        if(rssi > stay_threshold) {
+            instance->preset_hopper_timeout = 20;
+            instance->preset_hopper_state = SubGhzPresetHopperStateRSSITimeOut;
+            return;
+        }
+    } else {
+        instance->preset_hopper_state = SubGhzPresetHopperStateRunning;
     }
-    instance->mod_hopper_timer = instance->mod_hopper_dwell;
 
-    size_t count = subghz_setting_get_preset_count(instance->setting);
-    if(count == 0) return;
+    size_t hopper_preset_count = subghz_setting_get_hopper_preset_count(instance->setting);
 
-    // Advance index, skip CUSTOM presets
-    uint8_t tries = 0;
-    do {
-        instance->mod_hopper_idx = (instance->mod_hopper_idx + 1) % count;
-        tries++;
-    } while(tries < count &&
-            strcmp(
-                subghz_setting_get_preset_name(instance->setting, instance->mod_hopper_idx),
-                "CUSTOM") == 0);
+    if(hopper_preset_count > 0) {
+        if(instance->preset_hopper_idx < hopper_preset_count - 1) {
+            instance->preset_hopper_idx++;
+        } else {
+            instance->preset_hopper_idx = 0;
+        }
 
-    const char* preset_name =
-        subghz_setting_get_preset_name(instance->setting, instance->mod_hopper_idx);
-    uint8_t* preset_data =
-        subghz_setting_get_preset_data(instance->setting, instance->mod_hopper_idx);
-    size_t preset_data_size =
-        subghz_setting_get_preset_data_size(instance->setting, instance->mod_hopper_idx);
+        size_t actual_preset_idx = subghz_setting_get_hopper_preset_index(
+            instance->setting, instance->preset_hopper_idx);
 
-    subghz_txrx_set_preset(
-        instance, preset_name, instance->preset->frequency, preset_data, preset_data_size);
-    subghz_txrx_rx_start(instance);
+        if(instance->txrx_state == SubGhzTxRxStateRx) {
+            subghz_txrx_rx_end(instance);
+        }
+        if(instance->txrx_state == SubGhzTxRxStateIDLE) {
+            const char* old_preset_name = furi_string_get_cstr(instance->preset->name);
+
+            const char* preset_name =
+                subghz_setting_get_preset_name(instance->setting, actual_preset_idx);
+            subghz_txrx_set_preset_internal(
+                instance, instance->preset->frequency, actual_preset_idx, 0);
+
+            bool old_is_am = (strstr(old_preset_name, "AM") != NULL);
+            bool new_is_am = (strstr(preset_name, "AM") != NULL);
+            bool modulation_changed = (old_is_am != new_is_am);
+
+            if(modulation_changed) {
+                subghz_devices_reset(instance->radio_device);
+                subghz_devices_load_preset(
+                    instance->radio_device,
+                    FuriHalSubGhzPresetCustom,
+                    instance->preset->data);
+            } else {
+                subghz_devices_load_preset(
+                    instance->radio_device,
+                    FuriHalSubGhzPresetCustom,
+                    instance->preset->data);
+            }
+
+            subghz_txrx_rx(instance, instance->preset->frequency);
+        }
+    } else {
+        size_t preset_count = subghz_setting_get_preset_count(instance->setting);
+        if(instance->preset_hopper_idx < preset_count - 1) {
+            instance->preset_hopper_idx++;
+        } else {
+            instance->preset_hopper_idx = 0;
+        }
+
+        if(instance->txrx_state == SubGhzTxRxStateRx) {
+            subghz_txrx_rx_end(instance);
+        }
+        if(instance->txrx_state == SubGhzTxRxStateIDLE) {
+            const char* old_preset_name = furi_string_get_cstr(instance->preset->name);
+
+            const char* preset_name =
+                subghz_setting_get_preset_name(instance->setting, instance->preset_hopper_idx);
+            subghz_txrx_set_preset_internal(
+                instance, instance->preset->frequency, instance->preset_hopper_idx, 0);
+
+            bool old_is_am = (strstr(old_preset_name, "AM") != NULL);
+            bool new_is_am = (strstr(preset_name, "AM") != NULL);
+            bool modulation_changed = (old_is_am != new_is_am);
+
+            if(modulation_changed) {
+                subghz_devices_reset(instance->radio_device);
+                subghz_devices_load_preset(
+                    instance->radio_device,
+                    FuriHalSubGhzPresetCustom,
+                    instance->preset->data);
+            } else {
+                subghz_devices_load_preset(
+                    instance->radio_device,
+                    FuriHalSubGhzPresetCustom,
+                    instance->preset->data);
+            }
+
+            subghz_txrx_rx(instance, instance->preset->frequency);
+        }
+    }
+}
+
+SubGhzPresetHopperState subghz_txrx_preset_hopper_get_state(SubGhzTxRx* instance) {
+    furi_assert(instance);
+    return instance->preset_hopper_state;
+}
+
+void subghz_txrx_preset_hopper_set_state(SubGhzTxRx* instance, SubGhzPresetHopperState state) {
+    furi_assert(instance);
+    instance->preset_hopper_state = state;
+
+    if(state == SubGhzPresetHopperStateRunning) {
+        subghz_devices_reset(instance->radio_device);
+        subghz_devices_load_preset(
+            instance->radio_device,
+            FuriHalSubGhzPresetCustom,
+            instance->preset->data);
+    }
+}
+
+void subghz_txrx_preset_hopper_unpause(SubGhzTxRx* instance) {
+    furi_assert(instance);
+    if(instance->preset_hopper_state == SubGhzPresetHopperStatePause) {
+        instance->preset_hopper_state = SubGhzPresetHopperStateRunning;
+    }
+}
+
+void subghz_txrx_preset_hopper_pause(SubGhzTxRx* instance) {
+    furi_assert(instance);
+    if(instance->preset_hopper_state == SubGhzPresetHopperStateRunning) {
+        instance->preset_hopper_state = SubGhzPresetHopperStatePause;
+    }
+}
+
+void subghz_txrx_preset_hopper_reset_index(SubGhzTxRx* instance, size_t index) {
+    furi_assert(instance);
+    instance->preset_hopper_idx = index;
 }
 
 void subghz_txrx_speaker_on(SubGhzTxRx* instance) {

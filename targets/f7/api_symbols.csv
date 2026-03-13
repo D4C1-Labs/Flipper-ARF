@@ -1,5 +1,5 @@
 entry,status,name,type,params
-Version,+,87.9,,
+Version,+,87.10,,
 Header,+,applications/drivers/subghz/cc1101_ext/cc1101_ext_interconnect.h,,
 Header,+,applications/services/applications.h,,
 Header,+,applications/services/bt/bt_service/bt.h,,
@@ -3692,6 +3692,8 @@ Function,+,subghz_setting_get_frequency_count,size_t,SubGhzSetting*
 Function,+,subghz_setting_get_frequency_default_index,uint32_t,SubGhzSetting*
 Function,+,subghz_setting_get_hopper_frequency,uint32_t,"SubGhzSetting*, size_t"
 Function,+,subghz_setting_get_hopper_frequency_count,size_t,SubGhzSetting*
+Function,+,subghz_setting_get_hopper_preset_count,size_t,SubGhzSetting*
+Function,+,subghz_setting_get_hopper_preset_index,size_t,"SubGhzSetting*, size_t"
 Function,+,subghz_setting_get_inx_preset_by_name,int,"SubGhzSetting*, const char*"
 Function,+,subghz_setting_get_preset_count,size_t,SubGhzSetting*
 Function,+,subghz_setting_get_preset_data,uint8_t*,"SubGhzSetting*, size_t"

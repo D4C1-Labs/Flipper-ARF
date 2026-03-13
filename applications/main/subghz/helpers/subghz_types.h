@@ -29,6 +29,14 @@ typedef enum {
     SubGhzHopperStateRSSITimeOut,
 } SubGhzHopperState;
 
+/** SubGhzPresetHopperState state */
+typedef enum {
+    SubGhzPresetHopperStateOFF,
+    SubGhzPresetHopperStateRunning,
+    SubGhzPresetHopperStatePause,
+    SubGhzPresetHopperStateRSSITimeOut,
+} SubGhzPresetHopperState;
+
 /** SubGhzSpeakerState state */
 typedef enum {
     SubGhzSpeakerStateDisable,

@@ -3,6 +3,7 @@
 
 #include <math.h>
 #include <furi.h>
+#include <m-list.h>
 #include <furi_hal.h>
 #include <lib/flipper_format/flipper_format.h>
 
@@ -11,6 +12,9 @@ extern "C" {
 #endif
 
 #define SUBGHZ_SETTING_DEFAULT_PRESET_COUNT 4
+
+LIST_DEF(PresetIndexList, size_t)
+#define M_OPL_PresetIndexList_t() LIST_OPLIST(PresetIndexList)
 
 typedef struct SubGhzSetting SubGhzSetting;
 
@@ -54,6 +58,9 @@ uint32_t subghz_setting_get_default_frequency(SubGhzSetting* instance);
 void subghz_setting_set_default_frequency(SubGhzSetting* instance, uint32_t frequency_to_setup);
 
 uint8_t subghz_setting_customs_presets_to_log(SubGhzSetting* instance);
+
+size_t subghz_setting_get_hopper_preset_count(SubGhzSetting* instance);
+size_t subghz_setting_get_hopper_preset_index(SubGhzSetting* instance, size_t idx);
 
 #ifdef __cplusplus
 }

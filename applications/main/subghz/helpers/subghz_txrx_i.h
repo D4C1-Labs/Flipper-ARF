@@ -19,11 +19,9 @@ struct SubGhzTxRx {
     bool is_database_loaded;
     SubGhzHopperState hopper_state;
 
-    uint8_t mod_hopper_idx;            // index into setting presets (wraps around)
-    uint8_t mod_hopper_timer;          // countdown ticks before advancing modulation
-    uint8_t mod_hopper_dwell;          // stored dwell ticks (configurable)
-    float mod_hopper_rssi_threshold;   // RSSI threshold; NAN = no RSSI gating
-    bool mod_hopper_running;           // is mod hopping active
+    uint8_t preset_hopper_timeout;
+    size_t preset_hopper_idx;
+    SubGhzPresetHopperState preset_hopper_state;
 
     SubGhzTxRxState txrx_state;
     SubGhzSpeakerState speaker_state;

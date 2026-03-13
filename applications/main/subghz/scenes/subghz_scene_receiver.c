@@ -1,5 +1,4 @@
 #include "../subghz_i.h"
-#include <math.h>
 #include <dolphin/dolphin.h>
 #include <lib/subghz/protocols/bin_raw.h>
 
@@ -214,11 +213,12 @@ void subghz_scene_receiver_on_enter(void* context) {
     } else {
         subghz_txrx_hopper_set_state(subghz->txrx, SubGhzHopperStateOFF);
     }
-    subghz_txrx_mod_hopper_set_running(
-        subghz->txrx,
-        !isnan(subghz->last_settings->mod_hopping_threshold),
-        (uint8_t)subghz->last_settings->mod_hopping_dwell,
-        subghz->last_settings->mod_hopping_threshold);
+
+    if(subghz->last_settings->enable_preset_hopping) {
+        subghz_txrx_preset_hopper_set_state(subghz->txrx, SubGhzPresetHopperStateRunning);
+    } else {
+        subghz_txrx_preset_hopper_set_state(subghz->txrx, SubGhzPresetHopperStateOFF);
+    }
 
     subghz_txrx_rx_start(subghz->txrx);
     subghz_view_receiver_set_idx_menu(subghz->subghz_receiver, subghz->idx_menu_chosen);
@@ -247,6 +247,7 @@ bool subghz_scene_receiver_on_event(void* context, SceneManagerEvent event) {
             subghz->state_notifications = SubGhzNotificationStateIDLE;
             subghz_txrx_stop(subghz->txrx);
             subghz_txrx_hopper_set_state(subghz->txrx, SubGhzHopperStateOFF);
+            subghz_txrx_preset_hopper_set_state(subghz->txrx, SubGhzPresetHopperStateOFF);
             subghz_txrx_set_rx_callback(subghz->txrx, NULL, subghz);
 
             if(subghz_rx_key_state_get(subghz) == SubGhzRxKeyStateAddKey) {
@@ -307,9 +308,8 @@ bool subghz_scene_receiver_on_event(void* context, SceneManagerEvent event) {
             subghz_txrx_hopper_update(subghz->txrx, subghz->last_settings->hopping_threshold);
             subghz_scene_receiver_update_statusbar(subghz);
         }
-        if(subghz_txrx_mod_hopper_get_running(subghz->txrx)) {
-            float rssi = subghz_txrx_radio_device_get_rssi(subghz->txrx);
-            subghz_txrx_mod_hopper_update(subghz->txrx, rssi);
+        if(subghz_txrx_preset_hopper_get_state(subghz->txrx) != SubGhzPresetHopperStateOFF) {
+            subghz_txrx_preset_hopper_update(subghz->txrx, subghz->last_settings->preset_hopping_threshold);
             subghz_scene_receiver_update_statusbar(subghz);
         }
 

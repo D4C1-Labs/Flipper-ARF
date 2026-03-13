@@ -12,21 +12,22 @@
 #define SUBGHZ_LAST_SETTING_DEFAULT_PRESET                    1
 #define SUBGHZ_LAST_SETTING_DEFAULT_FREQUENCY                 433920000
 #define SUBGHZ_LAST_SETTING_FREQUENCY_ANALYZER_FEEDBACK_LEVEL 2
+#define SUBGHZ_LAST_SETTING_DEFAULT_PRESET_HOPPING_THRESHOLD  (-80.0f)
 
 typedef struct {
     uint32_t frequency;
-    uint32_t preset_index; // AKA Modulation
+    uint32_t preset_index;
     uint32_t frequency_analyzer_feedback_level;
     float frequency_analyzer_trigger;
     bool protocol_file_names;
     bool enable_hopping;
-    float mod_hopping_threshold; // RSSI threshold for mod hopping, NAN = disabled
-    uint32_t mod_hopping_dwell;  // Dwell time in ticks (100ms units)
     uint32_t ignore_filter;
     uint32_t filter;
     float rssi;
     bool delete_old_signals;
     float hopping_threshold;
+    bool enable_preset_hopping;
+    float preset_hopping_threshold;
     bool leds_and_amp;
     uint8_t tx_power;
 } SubGhzLastSettings;
