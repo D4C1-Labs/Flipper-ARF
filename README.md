@@ -134,10 +134,9 @@ Flipper-ARF aims to achieve:
 ## To Do / Planned Features
 
 - [ ] Add Scher Khan & Starline protocols
-- [ ] Marelli BSI encodere and encryption
-- [ ] Fix and reintegrate RollJam app (future updates)
+- [ ] Marelli BSI encoder and encryption
+- [ ] Improve RollJam app 
 - [ ] Expand and refine Subaru, Kia, PSA, and other manufacturer protocols
-- [ ] Improve collaboration workflow to avoid overlapping work
 
 ---
 
