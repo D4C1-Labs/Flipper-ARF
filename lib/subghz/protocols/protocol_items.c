@@ -43,6 +43,8 @@ const SubGhzProtocol* const subghz_protocol_registry_items[] = {
     &subghz_protocol_kia_v2,       &subghz_protocol_kia_v3_v4,
     &subghz_protocol_kia_v5,       &subghz_protocol_kia_v6,
     &subghz_protocol_suzuki, &subghz_protocol_mitsubishi_v0,
+    &subghz_protocol_bmw, &subghz_protocol_mitsubishi_v1, &subghz_protocol_honda,
+    &subghz_protocol_citroen, &subghz_protocol_peugeot,
 };
 
 const SubGhzProtocolRegistry subghz_protocol_registry = {
