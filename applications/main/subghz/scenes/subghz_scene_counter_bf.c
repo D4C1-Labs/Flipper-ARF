@@ -37,13 +37,14 @@ static void counter_bf_draw(SubGhz* subghz, CounterBfContext* ctx) {
     FuriString* str = furi_string_alloc();
     furi_string_printf(
         str,
+        "WARNING: THIS MAY BE DESYNC YOUR FOB\n"
         "Counter BruteForce\n"
         "Cnt: 0x%08lX\n"
-        "Sent: %lu pkts\n"
-        "Start: 0x%08lX",
+        "Start: 0x%08lX\n"
+        "Sent: %lu",
         ctx->current_cnt,
-        ctx->packets_sent,
-        ctx->start_cnt);
+        ctx->start_cnt,
+        ctx->packets_sent);
     widget_add_string_multiline_element(
         subghz->widget, 0, 0, AlignLeft, AlignTop, FontSecondary, furi_string_get_cstr(str));
     furi_string_free(str);
