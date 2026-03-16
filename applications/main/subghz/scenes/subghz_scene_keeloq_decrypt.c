@@ -200,16 +200,17 @@ bool subghz_scene_keeloq_decrypt_on_event(void* context, SceneManagerEvent event
                     subghz_txrx_get_fff_data(subghz->txrx),
                     furi_string_get_cstr(subghz->file_path));
 
-                if(subghz->keeloq_keys_manager) {
-                    char key_name[24];
-                    snprintf(key_name, sizeof(key_name), "BF_%07lX", ctx->serial);
-                    subghz_keeloq_keys_add(
-                        subghz->keeloq_keys_manager,
-                        ctx->recovered_mfkey,
-                        ctx->recovered_type,
-                        key_name);
-                    subghz_keeloq_keys_save(subghz->keeloq_keys_manager);
+                if(!subghz->keeloq_keys_manager) {
+                    subghz->keeloq_keys_manager = subghz_keeloq_keys_alloc();
                 }
+                char key_name[24];
+                snprintf(key_name, sizeof(key_name), "BF_%07lX", ctx->serial);
+                subghz_keeloq_keys_add(
+                    subghz->keeloq_keys_manager,
+                    ctx->recovered_mfkey,
+                    ctx->recovered_type,
+                    key_name);
+                subghz_keeloq_keys_save(subghz->keeloq_keys_manager);
 
                 subghz_view_keeloq_decrypt_set_result(
                     subghz->subghz_keeloq_decrypt, true, furi_string_get_cstr(ctx->result));
