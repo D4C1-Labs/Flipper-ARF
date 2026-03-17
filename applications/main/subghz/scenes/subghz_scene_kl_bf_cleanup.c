@@ -101,15 +101,15 @@ void subghz_scene_kl_bf_cleanup_on_enter(void* context) {
         subghz_keeloq_keys_save(subghz->keeloq_keys_manager);
 
         furi_string_printf(msg,
-            "Cleaned %lu keys.\nKept valid key:\n%s",
+            "Cleaned %u keys.\nKept valid key:\n%s",
             deleted, new_name);
     } else if(ctx->valid_count == 0) {
         furi_string_printf(msg,
-            "%lu BF keys found\nbut none validates\nhop. Kept all.",
+            "%u BF keys found\nbut none validates\nhop. Kept all.",
             ctx->bf_count);
     } else {
         furi_string_printf(msg,
-            "%lu BF keys, %lu valid.\nCannot auto-select.\nKept all.",
+            "%u BF keys, %u valid.\nCannot auto-select.\nKept all.",
             ctx->bf_count, ctx->valid_count);
     }
 
