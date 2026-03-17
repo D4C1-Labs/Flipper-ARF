@@ -50,8 +50,10 @@ static void subghz_view_psa_decrypt_draw(Canvas* canvas, void* _model) {
         // Progress bar outline + fill
         canvas_draw_rframe(canvas, 3, 15, 122, 12, 2);
         uint8_t fill = (uint8_t)((uint16_t)model->progress * 116 / 100);
-        if(fill > 0) {
+	    if(fill > 2) {
             canvas_draw_rbox(canvas, 5, 17, fill, 8, 1);
+        } else if(fill > 0) {
+            canvas_draw_box(canvas, 5, 17, fill, 8);
         }
 
         canvas_set_font(canvas, FontSecondary);

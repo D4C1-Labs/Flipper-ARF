@@ -290,6 +290,32 @@ __attribute__((optimize("O3"), always_inline)) static inline void
     *v1 = b;
 }
 
+typedef struct {
+    uint32_t s0[TEA_ROUNDS];
+    uint32_t s1[TEA_ROUNDS];
+} PsaTeaSchedule;
+
+__attribute__((optimize("O3"), always_inline)) static inline void
+    psa_tea_build_schedule(const uint32_t* key, PsaTeaSchedule* out) {
+    for(int i = 0; i < TEA_ROUNDS; i++) {
+        uint32_t sum0 = (uint32_t)((uint64_t)i * TEA_DELTA);
+        uint32_t sum1 = (uint32_t)((uint64_t)(i + 1) * TEA_DELTA);
+        out->s0[i] = key[sum0 & 3] + sum0;
+        out->s1[i] = key[(sum1 >> 11) & 3] + sum1;
+    }
+}
+
+__attribute__((optimize("O3"), always_inline)) static inline void
+    psa_tea_encrypt_with_schedule(uint32_t* restrict v0, uint32_t* restrict v1, const PsaTeaSchedule* sched) {
+    uint32_t a = *v0, b = *v1;
+    for(int i = 0; i < TEA_ROUNDS; i++) {
+        a += (sched->s0[i] ^ (((b >> 5) ^ (b << 4)) + b));
+        b += (sched->s1[i] ^ (((a >> 5) ^ (a << 4)) + a));
+    }
+    *v0 = a;
+    *v1 = b;
+}
+
 static void psa_prepare_tea_data(uint8_t* buffer, uint32_t* w0, uint32_t* w1) {
     *w0 = ((uint32_t)buffer[3] << 16) | ((uint32_t)buffer[2] << 24) |
           ((uint32_t)buffer[4] << 8) | (uint32_t)buffer[5];
@@ -380,6 +406,8 @@ static void psa_extract_fields_mode36(uint8_t* buffer, SubGhzProtocolDecoderPSA*
 
 __attribute__((optimize("O3"))) static bool psa_brute_force_decrypt_bf1(SubGhzProtocolDecoderPSA* instance, uint8_t* buffer, uint32_t w0, uint32_t w1, PsaDecryptProgressCallback progress_cb, void* progress_ctx) {
 	uint32_t bf1_total = PSA_BF1_END - PSA_BF1_START;
+	PsaTeaSchedule bf1_sched;
+	psa_tea_build_schedule(PSA_BF1_KEY_SCHEDULE, &bf1_sched);
 	for(uint32_t counter = PSA_BF1_START; counter < PSA_BF1_END; counter++) {
 		if(progress_cb && ((counter - PSA_BF1_START) & 0xFFFF) == 0) {
 			uint8_t pct = (uint8_t)(((uint64_t)(counter - PSA_BF1_START) * 50) / bf1_total);
@@ -387,24 +415,24 @@ __attribute__((optimize("O3"))) static bool psa_brute_force_decrypt_bf1(SubGhzPr
 		}
         uint32_t wk2 = PSA_BF1_CONST_U4;
         uint32_t wk3 = counter;
-        psa_tea_encrypt(&wk2, &wk3, PSA_BF1_KEY_SCHEDULE);
-        
+        psa_tea_encrypt_with_schedule(&wk2, &wk3, &bf1_sched);
+
         uint32_t wk0 = (counter << 8) | 0x0E;
         uint32_t wk1 = PSA_BF1_CONST_U5;
-        psa_tea_encrypt(&wk0, &wk1, PSA_BF1_KEY_SCHEDULE);
-        
+        psa_tea_encrypt_with_schedule(&wk0, &wk1, &bf1_sched);
+
         uint32_t working_key[4] = {wk0, wk1, wk2, wk3};
-        
+
         uint32_t dec_v0 = w0;
         uint32_t dec_v1 = w1;
         psa_tea_decrypt(&dec_v0, &dec_v1, working_key);
-        
+
         if((counter & 0xFFFFFF) == (dec_v0 >> 8)) {
             uint8_t crc = psa_calculate_tea_crc(dec_v0, dec_v1);
             if(crc == (dec_v1 & 0xFF)) {
                 psa_unpack_tea_result_to_buffer(buffer, dec_v0, dec_v1);
                 psa_extract_fields_mode36(buffer, instance);
-				instance->decrypted_seed = counter; // bf1 found key
+				instance->decrypted_seed = counter;
                 return true;
             }
         }
