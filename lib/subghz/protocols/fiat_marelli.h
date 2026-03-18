@@ -3,7 +3,7 @@
 #include "base.h"
 #include <flipper_format/flipper_format.h>
 
-#define FIAT_MARELLI_PROTOCOL_NAME "Fiat Marelli"
+#define FIAT_MARELLI_PROTOCOL_NAME "MARELLI"
 
 typedef struct SubGhzProtocolDecoderFiatMarelli SubGhzProtocolDecoderFiatMarelli;
 typedef struct SubGhzProtocolEncoderFiatMarelli SubGhzProtocolEncoderFiatMarelli;
