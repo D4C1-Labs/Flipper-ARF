@@ -9,7 +9,6 @@ App(
         "nfc",
         "subghz",
         "rolljam",
-        "lf_sniffer",
         "subghz_bruteforcer",
         "archive",
         "subghz_remote",
