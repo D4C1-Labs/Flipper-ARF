@@ -45,19 +45,19 @@ This project may incorporate, adapt, or build upon **other open-source projects*
 | Manufacturer | Protocol | Frequency | Modulation | Encoder | Decoder | CRC |
 |:---|:---|:---:|:---:|:---:|:---:|:---:|
 | VAG (VW/Audi/Skoda/Seat) | VAG GROUP | 433 MHz | AM | Yes | Yes | No |
-| Porsche | Cayenne | 433/868 MHz | AM | Yes | Yes | No |
+| Porsche | Porsche AG | 433/868 MHz | AM | Yes | Yes | No |
 | PSA (Peugeot/Citroën/DS) | PSA GROUP | 433 MHz | AM/FM | Yes | Yes | Yes |
 | Ford | Ford V0 | 315/433 MHz | AM | Yes | Yes | Yes |
 | Fiat | Fiat SpA | 433 MHz | AM | Yes | Yes | Yes |
-| Fiat | Fiat Marelli/Delphi | 433 MHz | AM | No | Yes | No |
+| Fiat | Marelli/Delphi | 433 MHz | AM | No | Yes | No |
+| Mazda | Siemens (5WK49365D) | 315/433 MHz | AM/FM | Yes | Yes | Yes |
+| Kia/Hyundai | KIA/HYU V0 | 433 MHz | FM | Yes | Yes | Yes |
+| Kia/Hyundai | KIA/HYU V1 | 315/433 MHz | AM | Yes | Yes | Yes |
+| Kia/Hyundai | KIA/HYU V2 | 315/433 MHz | AM/FM | Yes | Yes | Yes |
+| Kia/Hyundai | KIA/HYU V3/V4 | 315/433 MHz | AM/FM | Yes | Yes | Yes |
+| Kia/Hyundai | KIA/HYU V5 | 433 MHz | FM | Yes | Yes | Yes |
+| Kia/Hyundai | KIA/HYU V6 | 433 MHz | FM | Yes | Yes | Yes |
 | Subaru | Subaru | 433 MHz | AM | Yes | Yes | No |
-| Mazda | Siemens (5WK49365D) | 315/433 MHz | FM | Yes | Yes | Yes |
-| Kia/Hyundai | Kia V0 | 433 MHz | FM | Yes | Yes | Yes |
-| Kia/Hyundai | Kia V1 | 315/433 MHz | AM | Yes | Yes | Yes |
-| Kia/Hyundai | Kia V2 | 315/433 MHz | FM | Yes | Yes | Yes |
-| Kia/Hyundai | Kia V3/V4 | 315/433 MHz | AM/FM | Yes | Yes | Yes |
-| Kia/Hyundai | Kia V5 | 433 MHz | FM | Yes | Yes | Yes |
-| Kia/Hyundai | Kia V6 | 433 MHz | FM | Yes | Yes | Yes |
 | Suzuki | Suzuki | 433 MHz | FM | Yes | Yes | Yes |
 | Mitsubishi | Mitsubishi V0 | 868 MHz | FM | Yes | Yes | No |
 
@@ -72,6 +72,8 @@ This project may incorporate, adapt, or build upon **other open-source projects*
 | CAME TWEE | 433 MHz | AM | Yes | Yes | No |
 | CAME Atomo | 433 MHz | AM | Yes | Yes | No |
 | Faac SLH | 433/868 MHz | AM | Yes | Yes | No |
+| Holtek | 433 MHz | AM | Yes | Yes | No |
+| Holtek-Ht12x | 433 MHz | AM | Yes | Yes | No |
 | Somfy Telis | 433 MHz | AM | Yes | Yes | Yes |
 | Somfy Keytis | 433 MHz | AM | Yes | Yes | Yes |
 | Alutech AT-4N | 433 MHz | AM | Yes | Yes | Yes |
@@ -81,7 +83,7 @@ This project may incorporate, adapt, or build upon **other open-source projects*
 | Marantec | 433 MHz | AM | Yes | Yes | Yes |
 | Marantec24 | 433 MHz | AM | Yes | Yes | Yes |
 
-### General Static Protocols
+### General Protocols
 
 | Protocol | Frequency | Modulation | Encoder | Decoder | CRC |
 |:---|:---:|:---:|:---:|:---:|:---:|
@@ -101,8 +103,6 @@ This project may incorporate, adapt, or build upon **other open-source projects*
 | Hay21 | 433 MHz | AM | Yes | Yes | No |
 | Revers RB2 | 433 MHz | AM | Yes | Yes | No |
 | Roger | 433 MHz | AM | Yes | Yes | No |
-| BinRAW | 433/315/868 MHz | AM/FM | Yes | Yes | No |
-| RAW | All | All | Yes | Yes | No |
 
 ---
 
@@ -110,8 +110,13 @@ This project may incorporate, adapt, or build upon **other open-source projects*
 
 Compact release build:
 
+To build:
 ```
 ./fbt COMPACT=1 DEBUG=0 updater_package
+```
+To flash:
+```
+./fbt COMPACT=1 DEBUG=0 flash_usb_full
 ```
 
 ---
@@ -125,7 +130,7 @@ Flipper-ARF aims to achieve:
 - Stable encoder/decoder implementations
 - Modular protocol expansion
 
-**Primary focus:** VAG, PSA, Fiat, Ford, Asian platforms, and aftermarket alarm systems.
+**Primary focus:** Automotives/Alarm's keyfob protocols, keeloq, and keyless systems.
 
 > ⚠ This is a protocol-focused research firmware, not a general-purpose firmware.
 
@@ -133,10 +138,9 @@ Flipper-ARF aims to achieve:
 
 ## To Do / Planned Features
 
-- [ ] Add Scher Khan & Starline protocols
 - [ ] Marelli BSI encoder and encryption
 - [ ] Improve RollJam app 
-- [ ] Expand and refine Subaru, Kia, PSA, and other manufacturer protocols
+- [ ] Expand and refine as many manufacturer protocols as possible
 
 ---
 
