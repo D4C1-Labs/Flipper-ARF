@@ -5,11 +5,10 @@
 #include <furi_hal_power.h>
 
 // ============================================================
-// 5V OTG power for external modules (e.g. Rabbit Lab Flux Capacitor)
+// 5V OTG power
 // ============================================================
 
-static bool otg_was_enabled = false;
-
+static bool otg_was_enabled   = false;
 static bool use_flux_capacitor = false;
 
 void rolljam_ext_set_flux_capacitor(bool enabled) {
@@ -33,9 +32,6 @@ static void rolljam_ext_power_off(void) {
     }
 }
 
-// ============================================================
-// GPIO Pins
-// ============================================================
 static const GpioPin* pin_mosi = &gpio_ext_pa7;
 static const GpioPin* pin_miso = &gpio_ext_pa6;
 static const GpioPin* pin_cs   = &gpio_ext_pa4;
@@ -97,30 +93,43 @@ static const GpioPin* pin_amp  = &gpio_ext_pc3;
 #define MARC_TX      0x13
 
 // ============================================================
-// Bit-bang SPI
+// Band calibration
 // ============================================================
 
+typedef struct {
+    uint32_t min_freq;
+    uint32_t max_freq;
+    uint8_t fscal3;
+    uint8_t fscal2;
+    uint8_t fscal1;
+    uint8_t fscal0;
+} ExtBandCal;
+
+static const ExtBandCal ext_band_cals[] = {
+    { 299000000, 348000000, 0xEA, 0x2A, 0x00, 0x1F },
+    { 386000000, 464000000, 0xE9, 0x2A, 0x00, 0x1F },
+    { 778000000, 928000000, 0xEA, 0x2A, 0x00, 0x11 },
+};
+#define EXT_BAND_CAL_COUNT (sizeof(ext_band_cals) / sizeof(ext_band_cals[0]))
+
+static const ExtBandCal* ext_get_band_cal(uint32_t freq) {
+    for(size_t i = 0; i < EXT_BAND_CAL_COUNT; i++) {
+        if(freq >= ext_band_cals[i].min_freq && freq <= ext_band_cals[i].max_freq)
+            return &ext_band_cals[i];
+    }
+    return &ext_band_cals[1];
+}
+
 static inline void spi_delay(void) {
-    __NOP(); __NOP(); __NOP(); __NOP();
-    __NOP(); __NOP(); __NOP(); __NOP();
-    __NOP(); __NOP(); __NOP(); __NOP();
-    __NOP(); __NOP(); __NOP(); __NOP();
+    for(int i = 0; i < 16; i++) __NOP();
 }
 
-static inline void cs_lo(void) {
-    furi_hal_gpio_write(pin_cs, false);
-    spi_delay(); spi_delay();
-}
-
-static inline void cs_hi(void) {
-    spi_delay();
-    furi_hal_gpio_write(pin_cs, true);
-    spi_delay(); spi_delay();
-}
+static inline void cs_lo(void) { furi_hal_gpio_write(pin_cs, false); spi_delay(); }
+static inline void cs_hi(void) { spi_delay(); furi_hal_gpio_write(pin_cs, true); spi_delay(); }
 
 static bool wait_miso(uint32_t us) {
     CoreDebug->DEMCR |= CoreDebug_DEMCR_TRCENA_Msk;
-    DWT->CTRL |= DWT_CTRL_CYCCNTENA_Msk;
+    DWT->CTRL        |= DWT_CTRL_CYCCNTENA_Msk;
     uint32_t s = DWT->CYCCNT;
     uint32_t t = (SystemCoreClock / 1000000) * us;
     while(furi_hal_gpio_read(pin_miso)) {
@@ -154,18 +163,8 @@ static uint8_t cc_strobe(uint8_t cmd) {
 static void cc_write(uint8_t a, uint8_t v) {
     cs_lo();
     if(!wait_miso(5000)) { cs_hi(); return; }
-    spi_byte(a);
-    spi_byte(v);
+    spi_byte(a); spi_byte(v);
     cs_hi();
-}
-
-static uint8_t cc_read(uint8_t a) {
-    cs_lo();
-    if(!wait_miso(5000)) { cs_hi(); return 0xFF; }
-    spi_byte(a | 0x80);
-    uint8_t v = spi_byte(0x00);
-    cs_hi();
-    return v;
 }
 
 static uint8_t cc_read_status(uint8_t a) {
@@ -184,10 +183,6 @@ static void cc_write_burst(uint8_t a, const uint8_t* d, uint8_t n) {
     for(uint8_t i = 0; i < n; i++) spi_byte(d[i]);
     cs_hi();
 }
-
-// ============================================================
-// Helpers
-// ============================================================
 
 static bool cc_reset(void) {
     cs_hi(); furi_delay_us(30);
@@ -210,13 +205,8 @@ static bool cc_check(void) {
     return (v == 0x14 || v == 0x04 || v == 0x03);
 }
 
-static uint8_t cc_state(void) {
-    return cc_read_status(CC_MARCSTATE) & 0x1F;
-}
-
-static uint8_t cc_txbytes(void) {
-    return cc_read_status(CC_TXBYTES) & 0x7F;
-}
+static uint8_t cc_state(void) { return cc_read_status(CC_MARCSTATE) & 0x1F; }
+static uint8_t cc_txbytes(void) { return cc_read_status(CC_TXBYTES) & 0x7F; }
 
 static void cc_idle(void) {
     cc_strobe(CC_SIDLE);
@@ -229,98 +219,14 @@ static void cc_idle(void) {
 static void cc_set_freq(uint32_t f) {
     uint32_t r = (uint32_t)(((uint64_t)f << 16) / 26000000ULL);
     cc_write(CC_FREQ2, (r >> 16) & 0xFF);
-    cc_write(CC_FREQ1, (r >> 8) & 0xFF);
-    cc_write(CC_FREQ0, r & 0xFF);
+    cc_write(CC_FREQ1, (r >>  8) & 0xFF);
+    cc_write(CC_FREQ0,  r        & 0xFF);
 }
 
 static bool cc_configure_jam(uint32_t freq) {
-    FURI_LOG_I(TAG, "EXT: Config OOK noise jam at %lu Hz", freq);
+    const ExtBandCal* cal = ext_get_band_cal(freq);
+    FURI_LOG_I(TAG, "EXT: Config OOK jam at %lu Hz", freq);
     cc_idle();
-
-    cc_write(CC_IOCFG0, 0x02);
-    cc_write(CC_IOCFG2, 0x2F);
-
-    // Fixed packet length, 255 bytes per packet
-    cc_write(CC_PKTCTRL0, 0x00); // Fixed length, no CRC, no whitening
-    cc_write(CC_PKTCTRL1, 0x00); // No address check
-    cc_write(CC_PKTLEN, 0xFF);   // 255 bytes per packet
-
-    // FIFO threshold: alert when TX FIFO has space for 33+ bytes
-    cc_write(CC_FIFOTHR, 0x07);
-
-    // No sync word - just raw data
-    cc_write(CC_SYNC1, 0x00);
-    cc_write(CC_SYNC0, 0x00);
-
-    // Frequency
-    cc_set_freq(freq);
-
-    cc_write(CC_FSCTRL1, 0x06);
-    cc_write(CC_FSCTRL0, 0x00);
-
-    // CRITICAL: LOW data rate to prevent FIFO underflow
-    // 1.2 kBaud: DRATE_E=5, DRATE_M=67
-    // At this rate, 64 bytes = 64*8/1200 = 426ms before FIFO empty
-    cc_write(CC_MDMCFG4, 0x85);  // BW=325kHz (for TX spectral output), DRATE_E=5
-    cc_write(CC_MDMCFG3, 0x43);  // DRATE_M=67 → ~1.2 kBaud
-    cc_write(CC_MDMCFG2, 0x30);  // ASK/OOK, no sync word
-    cc_write(CC_MDMCFG1, 0x00);  // No preamble
-    cc_write(CC_MDMCFG0, 0xF8);
-    cc_write(CC_DEVIATN, 0x47);
-
-    // Auto-return to TX after packet sent
-    cc_write(CC_MCSM1, 0x00);  // TXOFF -> IDLE (we manually re-enter TX)
-    cc_write(CC_MCSM0, 0x18);  // Auto-cal IDLE->TX
-
-    // MAX TX power
-    cc_write(CC_FREND0, 0x11);  // PA index 1 for OOK high
-
-    // PATABLE: ALL entries at max power
-    // Index 0 = 0x00 for OOK "0" (off)
-    // Index 1 = 0xC0 for OOK "1" (+12 dBm)
-    uint8_t pa[8] = {0x00, 0xC0, 0xC0, 0xC0, 0xC0, 0xC0, 0xC0, 0xC0};
-    cc_write_burst(CC_PATABLE, pa, 8);
-
-    // Calibration
-    cc_write(CC_FSCAL3, 0xEA);
-    cc_write(CC_FSCAL2, 0x2A);
-    cc_write(CC_FSCAL1, 0x00);
-    cc_write(CC_FSCAL0, 0x1F);
-
-    // Test regs
-    cc_write(CC_TEST2, 0x81);
-    cc_write(CC_TEST1, 0x35);
-    cc_write(CC_TEST0, 0x09);
-
-    // Calibrate
-    cc_idle();
-    cc_strobe(CC_SCAL);
-    furi_delay_ms(2);
-    cc_idle();
-
-    // Verify configuration
-    uint8_t st = cc_state();
-    uint8_t mdm4 = cc_read(CC_MDMCFG4);
-    uint8_t mdm3 = cc_read(CC_MDMCFG3);
-    uint8_t mdm2 = cc_read(CC_MDMCFG2);
-    uint8_t pkt0 = cc_read(CC_PKTCTRL0);
-    uint8_t plen = cc_read(CC_PKTLEN);
-    uint8_t pa0  = cc_read(CC_PATABLE);
-
-    FURI_LOG_I(TAG, "EXT: MDM4=0x%02X MDM3=0x%02X MDM2=0x%02X PKT0=0x%02X PLEN=%d PA=0x%02X state=0x%02X",
-               mdm4, mdm3, mdm2, pkt0, plen, pa0, st);
-
-    return (st == MARC_IDLE);
-}
-
-// ============================================================
-// FSK jam configuration (FM238 / FM476)
-// Same low-rate FIFO approach but 2-FSK modulation
-// ============================================================
-static bool cc_configure_jam_fsk(uint32_t freq, bool wide) {
-    FURI_LOG_I(TAG, "EXT: Config FSK noise jam at %lu Hz (wide=%d)", freq, wide);
-    cc_idle();
-
     cc_write(CC_IOCFG0,   0x02);
     cc_write(CC_IOCFG2,   0x2F);
     cc_write(CC_PKTCTRL0, 0x00);
@@ -329,51 +235,115 @@ static bool cc_configure_jam_fsk(uint32_t freq, bool wide) {
     cc_write(CC_FIFOTHR,  0x07);
     cc_write(CC_SYNC1,    0x00);
     cc_write(CC_SYNC0,    0x00);
-
     cc_set_freq(freq);
-    cc_write(CC_FSCTRL1, 0x06);
-    cc_write(CC_FSCTRL0, 0x00);
-
-    // 1.2 kBaud 2-FSK, same low rate to avoid FIFO underflow
-    cc_write(CC_MDMCFG4, 0x85);  // BW=325kHz, DRATE_E=5
-    cc_write(CC_MDMCFG3, 0x43);  // DRATE_M=67 → ~1.2 kBaud
-    cc_write(CC_MDMCFG2, 0x00);  // 2-FSK, no sync word
-    cc_write(CC_MDMCFG1, 0x00);
-    cc_write(CC_MDMCFG0, 0xF8);
-
-    // Deviation: FM238=~2.4kHz, FM476=~47.6kHz
-    cc_write(CC_DEVIATN, wide ? 0x47 : 0x15);
-
-    cc_write(CC_MCSM1, 0x00);
-    cc_write(CC_MCSM0, 0x18);
-
-    // FSK: constant PA, no OOK shaping
-    cc_write(CC_FREND0, 0x10);
-    uint8_t pa[8] = {0xC0, 0xC0, 0xC0, 0xC0, 0xC0, 0xC0, 0xC0, 0xC0};
+    cc_write(CC_FSCTRL1,  0x06);
+    cc_write(CC_FSCTRL0,  0x00);
+    cc_write(CC_MDMCFG4,  0x85);
+    cc_write(CC_MDMCFG3,  0x43);
+    cc_write(CC_MDMCFG2,  0x30);
+    cc_write(CC_MDMCFG1,  0x00);
+    cc_write(CC_MDMCFG0,  0xF8);
+    cc_write(CC_DEVIATN,  0x47);
+    cc_write(CC_MCSM1,    0x00);
+    cc_write(CC_MCSM0,    0x18);
+    cc_write(CC_FREND0,   0x11);
+    uint8_t pa[8] = {0x00,0xC0,0xC0,0xC0,0xC0,0xC0,0xC0,0xC0};
     cc_write_burst(CC_PATABLE, pa, 8);
-
-    cc_write(CC_FSCAL3, 0xEA);
-    cc_write(CC_FSCAL2, 0x2A);
-    cc_write(CC_FSCAL1, 0x00);
-    cc_write(CC_FSCAL0, 0x1F);
-    cc_write(CC_TEST2,  0x81);
-    cc_write(CC_TEST1,  0x35);
-    cc_write(CC_TEST0,  0x09);
-
+    cc_write(CC_FSCAL3,  cal->fscal3);
+    cc_write(CC_FSCAL2,  cal->fscal2);
+    cc_write(CC_FSCAL1,  cal->fscal1);
+    cc_write(CC_FSCAL0,  cal->fscal0);
+    cc_write(CC_TEST2,   0x81);
+    cc_write(CC_TEST1,   0x35);
+    cc_write(CC_TEST0,   0x09);
     cc_idle();
     cc_strobe(CC_SCAL);
     furi_delay_ms(2);
     cc_idle();
-
-    uint8_t st   = cc_state();
-    uint8_t mdm2 = cc_read(CC_MDMCFG2);
-    uint8_t dev  = cc_read(CC_DEVIATN);
-    FURI_LOG_I(TAG, "EXT FSK: MDM2=0x%02X DEV=0x%02X state=0x%02X", mdm2, dev, st);
+    uint8_t st = cc_state();
+    FURI_LOG_I(TAG, "EXT: state=0x%02X FSCAL={0x%02X,0x%02X,0x%02X,0x%02X}",
+               st, cal->fscal3, cal->fscal2, cal->fscal1, cal->fscal0);
     return (st == MARC_IDLE);
 }
 
+static bool cc_configure_jam_fsk(uint32_t freq, bool wide) {
+    const ExtBandCal* cal = ext_get_band_cal(freq);
+    FURI_LOG_I(TAG, "EXT: Config FSK jam at %lu Hz (wide=%d)", freq, wide);
+    cc_idle();
+    cc_write(CC_IOCFG0,   0x02);
+    cc_write(CC_IOCFG2,   0x2F);
+    cc_write(CC_PKTCTRL0, 0x00);
+    cc_write(CC_PKTCTRL1, 0x00);
+    cc_write(CC_PKTLEN,   0xFF);
+    cc_write(CC_FIFOTHR,  0x07);
+    cc_write(CC_SYNC1,    0x00);
+    cc_write(CC_SYNC0,    0x00);
+    cc_set_freq(freq);
+    cc_write(CC_FSCTRL1,  0x06);
+    cc_write(CC_FSCTRL0,  0x00);
+    cc_write(CC_MDMCFG4,  0x85);
+    cc_write(CC_MDMCFG3,  0x43);
+    cc_write(CC_MDMCFG2,  0x00);
+    cc_write(CC_MDMCFG1,  0x00);
+    cc_write(CC_MDMCFG0,  0xF8);
+    cc_write(CC_DEVIATN,  wide ? 0x47 : 0x15);
+    cc_write(CC_MCSM1,    0x00);
+    cc_write(CC_MCSM0,    0x18);
+    cc_write(CC_FREND0,   0x10);
+    uint8_t pa[8] = {0xC0,0xC0,0xC0,0xC0,0xC0,0xC0,0xC0,0xC0};
+    cc_write_burst(CC_PATABLE, pa, 8);
+    cc_write(CC_FSCAL3,  cal->fscal3);
+    cc_write(CC_FSCAL2,  cal->fscal2);
+    cc_write(CC_FSCAL1,  cal->fscal1);
+    cc_write(CC_FSCAL0,  cal->fscal0);
+    cc_write(CC_TEST2,   0x81);
+    cc_write(CC_TEST1,   0x35);
+    cc_write(CC_TEST0,   0x09);
+    cc_idle();
+    cc_strobe(CC_SCAL);
+    furi_delay_ms(2);
+    cc_idle();
+    return (cc_state() == MARC_IDLE);
+}
+
+static void ext_gpio_init_spi_pins(void) {
+    furi_hal_gpio_init(pin_cs,   GpioModeOutputPushPull, GpioPullNo, GpioSpeedVeryHigh);
+    furi_hal_gpio_write(pin_cs, true);
+    furi_hal_gpio_init(pin_sck,  GpioModeOutputPushPull, GpioPullNo, GpioSpeedVeryHigh);
+    furi_hal_gpio_write(pin_sck, false);
+    furi_hal_gpio_init(pin_mosi, GpioModeOutputPushPull, GpioPullNo, GpioSpeedVeryHigh);
+    furi_hal_gpio_write(pin_mosi, false);
+    furi_hal_gpio_init(pin_miso, GpioModeInput, GpioPullUp, GpioSpeedVeryHigh);
+    furi_hal_gpio_init(pin_gdo0, GpioModeInput, GpioPullDown, GpioSpeedVeryHigh);
+}
+
+static void ext_gpio_deinit_spi_pins(void) {
+    furi_hal_gpio_init(pin_cs,   GpioModeAnalog, GpioPullNo, GpioSpeedLow);
+    furi_hal_gpio_init(pin_sck,  GpioModeAnalog, GpioPullNo, GpioSpeedLow);
+    furi_hal_gpio_init(pin_mosi, GpioModeAnalog, GpioPullNo, GpioSpeedLow);
+    furi_hal_gpio_init(pin_miso, GpioModeAnalog, GpioPullNo, GpioSpeedLow);
+    furi_hal_gpio_init(pin_gdo0, GpioModeAnalog, GpioPullNo, GpioSpeedLow);
+}
+
+void rolljam_ext_gpio_init(void) {
+    FURI_LOG_I(TAG, "EXT GPIO init (deferred to jam thread)");
+    if(use_flux_capacitor) {
+        furi_hal_gpio_init_simple(pin_amp, GpioModeOutputPushPull);
+        furi_hal_gpio_write(pin_amp, false);
+    }
+}
+
+void rolljam_ext_gpio_deinit(void) {
+    if(use_flux_capacitor) {
+        furi_hal_gpio_write(pin_amp, false);
+        furi_hal_gpio_init_simple(pin_amp, GpioModeAnalog);
+    }
+
+    FURI_LOG_I(TAG, "EXT GPIO deinit");
+}
+
 // ============================================================
-// Jam thread - FIFO-fed OOK at low data rate
+// Noise pattern & jam helpers
 // ============================================================
 
 static void jam_start_tx(const uint8_t* pattern, uint8_t len) {
@@ -387,34 +357,41 @@ static void jam_start_tx(const uint8_t* pattern, uint8_t len) {
 static int32_t jam_thread_worker(void* context) {
     RollJamApp* app = context;
 
-    bool is_fsk = (app->mod_index == ModIndex_FM238 || app->mod_index == ModIndex_FM476);
-    uint32_t jam_freq_pos = app->frequency + app->jam_offset_hz;
-    uint32_t jam_freq_neg = app->frequency - app->jam_offset_hz;
+    bool is_fsk       = (app->mod_index == ModIndex_FM238 || app->mod_index == ModIndex_FM476);
+    uint32_t freq_pos = app->frequency + app->jam_offset_hz;
+    uint32_t freq_neg = app->frequency - app->jam_offset_hz;
 
-    FURI_LOG_I(TAG, "========================================");
-    FURI_LOG_I(TAG, "JAM: Target=%lu Offset=%lu FSK=%d",
+    FURI_LOG_I(TAG, "JAM thread start: target=%lu offset=%lu FSK=%d",
                app->frequency, app->jam_offset_hz, is_fsk);
-    FURI_LOG_I(TAG, "========================================");
+
+    ext_gpio_init_spi_pins();
+    furi_delay_ms(5);
 
     if(!cc_reset()) {
-        FURI_LOG_E(TAG, "JAM: Reset failed!");
+        FURI_LOG_E(TAG, "JAM: Reset failed — CC1101 externo no conectado o mal cableado");
+        ext_gpio_deinit_spi_pins();
+        app->jamming_active = false;
         return -1;
     }
     if(!cc_check()) {
-        FURI_LOG_E(TAG, "JAM: No chip!");
+        FURI_LOG_E(TAG, "JAM: Chip no detectado");
+        ext_gpio_deinit_spi_pins();
+        app->jamming_active = false;
         return -1;
     }
 
-    bool jam_ok = false;
-    if(app->mod_index == ModIndex_FM238) {
-        jam_ok = cc_configure_jam_fsk(jam_freq_pos, false);
-    } else if(app->mod_index == ModIndex_FM476) {
-        jam_ok = cc_configure_jam_fsk(jam_freq_pos, true);
-    } else {
-        jam_ok = cc_configure_jam(jam_freq_pos);
-    }
+    bool jam_ok;
+    if(app->mod_index == ModIndex_FM238)
+        jam_ok = cc_configure_jam_fsk(freq_pos, false);
+    else if(app->mod_index == ModIndex_FM476)
+        jam_ok = cc_configure_jam_fsk(freq_pos, true);
+    else
+        jam_ok = cc_configure_jam(freq_pos);
+
     if(!jam_ok) {
-        FURI_LOG_E(TAG, "JAM: Config failed!");
+        FURI_LOG_E(TAG, "JAM: Config failed");
+        ext_gpio_deinit_spi_pins();
+        app->jamming_active = false;
         return -1;
     }
 
@@ -438,18 +415,20 @@ static int32_t jam_thread_worker(void* context) {
         jam_start_tx(noise_pattern, 62);
         st = cc_state();
         if(st != MARC_TX) {
+            FURI_LOG_E(TAG, "JAM: Cannot enter TX (state=0x%02X)", st);
             if(use_flux_capacitor) furi_hal_gpio_write(pin_amp, false);
-            FURI_LOG_E(TAG, "JAM: Cannot enter TX!");
+            ext_gpio_deinit_spi_pins();
+            app->jamming_active = false;
             return -1;
         }
     }
 
-    FURI_LOG_I(TAG, "JAM: *** ACTIVE ***");
+    FURI_LOG_I(TAG, "JAM: *** ACTIVE *** freq_pos=%lu", freq_pos);
 
-    uint32_t loops = 0;
+    uint32_t loops      = 0;
     uint32_t underflows = 0;
-    uint32_t refills = 0;
-    bool on_positive_offset = true;
+    uint32_t refills    = 0;
+    bool on_pos         = true;
 
     while(app->jam_thread_running) {
         loops++;
@@ -458,10 +437,8 @@ static int32_t jam_thread_worker(void* context) {
             cc_idle();
             cc_strobe(CC_SFTX);
             furi_delay_us(100);
-
-            on_positive_offset = !on_positive_offset;
-            cc_set_freq(on_positive_offset ? jam_freq_pos : jam_freq_neg);
-
+            on_pos = !on_pos;
+            cc_set_freq(on_pos ? freq_pos : freq_neg);
             cc_write_burst(CC_TXFIFO, noise_pattern, 62);
             cc_strobe(CC_STX);
             furi_delay_ms(1);
@@ -469,7 +446,6 @@ static int32_t jam_thread_worker(void* context) {
         }
 
         st = cc_state();
-
         if(st != MARC_TX) {
             underflows++;
             cc_idle();
@@ -500,69 +476,46 @@ static int32_t jam_thread_worker(void* context) {
     cc_idle();
     if(use_flux_capacitor) furi_hal_gpio_write(pin_amp, false);
     cc_write(CC_IOCFG2, 0x2E);
+
+    ext_gpio_deinit_spi_pins();
+
     FURI_LOG_I(TAG, "JAM: STOPPED (loops=%lu uf=%lu refills=%lu)", loops, underflows, refills);
     return 0;
 }
 
 // ============================================================
-// GPIO
-// ============================================================
-
-void rolljam_ext_gpio_init(void) {
-    FURI_LOG_I(TAG, "EXT GPIO init");
-    furi_hal_gpio_init(pin_cs, GpioModeOutputPushPull, GpioPullNo, GpioSpeedVeryHigh);
-    furi_hal_gpio_write(pin_cs, true);
-    furi_hal_gpio_init(pin_sck, GpioModeOutputPushPull, GpioPullNo, GpioSpeedVeryHigh);
-    furi_hal_gpio_write(pin_sck, false);
-    furi_hal_gpio_init(pin_mosi, GpioModeOutputPushPull, GpioPullNo, GpioSpeedVeryHigh);
-    furi_hal_gpio_write(pin_mosi, false);
-    furi_hal_gpio_init(pin_miso, GpioModeInput, GpioPullUp, GpioSpeedVeryHigh);
-    furi_hal_gpio_init(pin_gdo0, GpioModeInput, GpioPullDown, GpioSpeedVeryHigh);
-    if(use_flux_capacitor) {
-        furi_hal_gpio_init_simple(pin_amp, GpioModeOutputPushPull);
-        furi_hal_gpio_write(pin_amp, false);
-    }
-}
-
-void rolljam_ext_gpio_deinit(void) {
-    if(use_flux_capacitor) {
-        furi_hal_gpio_write(pin_amp, false);
-        furi_hal_gpio_init_simple(pin_amp, GpioModeAnalog);
-    }
-    furi_hal_gpio_init(pin_cs, GpioModeAnalog, GpioPullNo, GpioSpeedLow);
-    furi_hal_gpio_init(pin_sck, GpioModeAnalog, GpioPullNo, GpioSpeedLow);
-    furi_hal_gpio_init(pin_mosi, GpioModeAnalog, GpioPullNo, GpioSpeedLow);
-    furi_hal_gpio_init(pin_miso, GpioModeAnalog, GpioPullNo, GpioSpeedLow);
-    furi_hal_gpio_init(pin_gdo0, GpioModeAnalog, GpioPullNo, GpioSpeedLow);
-    FURI_LOG_I(TAG, "EXT GPIO deinit");
-}
-
-// ============================================================
-// Public
+// Public API
 // ============================================================
 
 void rolljam_jammer_start(RollJamApp* app) {
     if(app->jamming_active) return;
-    app->jam_frequency = app->frequency + app->jam_offset_hz;
-    rolljam_ext_power_on();
-    furi_delay_ms(100);
-    rolljam_ext_gpio_init();
-    furi_delay_ms(10);
+
+    app->jam_frequency     = app->frequency + app->jam_offset_hz;
     app->jam_thread_running = true;
+    app->jamming_active     = true;
+
+    rolljam_ext_power_on();
+    furi_delay_ms(50);
+
+    rolljam_ext_gpio_init();
+
     app->jam_thread = furi_thread_alloc_ex("RJ_Jam", 4096, jam_thread_worker, app);
     furi_thread_start(app->jam_thread);
-    app->jamming_active = true;
-    FURI_LOG_I(TAG, ">>> JAMMER STARTED <<<");
+
+    FURI_LOG_I(TAG, ">>> JAMMER THREAD STARTED <<<");
 }
 
 void rolljam_jammer_stop(RollJamApp* app) {
     if(!app->jamming_active) return;
+
     app->jam_thread_running = false;
     furi_thread_join(app->jam_thread);
     furi_thread_free(app->jam_thread);
     app->jam_thread = NULL;
+
     rolljam_ext_gpio_deinit();
     rolljam_ext_power_off();
     app->jamming_active = false;
+
     FURI_LOG_I(TAG, ">>> JAMMER STOPPED <<<");
 }

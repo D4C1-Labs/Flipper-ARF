@@ -48,7 +48,7 @@ bool rolljam_scene_result_on_event(void* context, SceneManagerEvent event) {
 
     if(event.type == SceneManagerEventTypeCustom) {
         if(event.event == RollJamEventSaveSignal) {
-            // Save to .sub file
+
             rolljam_save_signal(app, &app->signal_second);
 
             popup_reset(app->popup);
@@ -68,7 +68,7 @@ bool rolljam_scene_result_on_event(void* context, SceneManagerEvent event) {
             return true;
 
         } else if(event.event == RollJamEventReplayNow) {
-            // Show sending screen
+
             popup_reset(app->popup);
             popup_set_header(
                 app->popup, "Transmitting...",
@@ -79,7 +79,6 @@ bool rolljam_scene_result_on_event(void* context, SceneManagerEvent event) {
             view_dispatcher_switch_to_view(
                 app->view_dispatcher, RollJamViewPopup);
 
-            // Transmit second signal
             rolljam_transmit_signal(app, &app->signal_second);
 
             notification_message(app->notification, &sequence_success);

@@ -9,10 +9,8 @@
 static void phase2_timer_callback(void* context) {
     RollJamApp* app = context;
 
-    if(app->signal_second.size > 0 &&
+    if(app->signal_second.size >= 20 &&
        rolljam_signal_is_valid(&app->signal_second)) {
-        rolljam_signal_cleanup(&app->signal_second);
-        app->signal_second.valid = true;
         view_dispatcher_send_custom_event(
             app->view_dispatcher, RollJamEventSignalCaptured);
     }
@@ -38,21 +36,14 @@ void rolljam_scene_attack_phase2_on_enter(void* context) {
         app->widget, 64, 56, AlignCenter, AlignTop,
         FontSecondary, "[BACK] cancel");
 
-    view_dispatcher_switch_to_view(
-        app->view_dispatcher, RollJamViewWidget);
+    view_dispatcher_switch_to_view(app->view_dispatcher, RollJamViewWidget);
 
-    // CRITICAL: completely clear second signal
     memset(app->signal_second.data, 0, sizeof(app->signal_second.data));
-    app->signal_second.size = 0;
+    app->signal_second.size  = 0;
     app->signal_second.valid = false;
 
-    // Stop previous capture if any
     rolljam_capture_stop(app);
-
-    // Small delay to let radio settle
     furi_delay_ms(50);
-
-    // Start fresh capture for second signal
     rolljam_capture_start(app);
 
     notification_message(app->notification, &sequence_blink_yellow_100);
@@ -72,19 +63,30 @@ bool rolljam_scene_attack_phase2_on_event(void* context, SceneManagerEvent event
 
     if(event.type == SceneManagerEventTypeCustom) {
         if(event.event == RollJamEventSignalCaptured) {
-            notification_message(app->notification, &sequence_success);
-
-            FURI_LOG_I(TAG, "Phase2: 2nd signal captured! size=%d",
-                       app->signal_second.size);
-
             rolljam_capture_stop(app);
 
-            scene_manager_next_scene(
-                app->scene_manager, RollJamSceneAttackPhase3);
+            if(!rolljam_signal_is_valid(&app->signal_second)) {
+                FURI_LOG_W(TAG, "Phase2: false capture, restarting RX...");
+                app->signal_second.size  = 0;
+                app->signal_second.valid = false;
+                furi_delay_ms(50);
+                rolljam_capture_start(app);
+                return true;
+            }
+
+            rolljam_signal_cleanup(&app->signal_second);
+            app->signal_second.valid = true;
+
+            notification_message(app->notification, &sequence_success);
+            FURI_LOG_I(TAG, "Phase2: 2nd signal captured! size=%d",
+                       (int)app->signal_second.size);
+
+            rolljam_capture_stop(app);
+            scene_manager_next_scene(app->scene_manager, RollJamSceneAttackPhase3);
             return true;
         }
     } else if(event.type == SceneManagerEventTypeBack) {
-        FURI_LOG_I(TAG, "Phase2: cancelled by user");
+        FURI_LOG_I(TAG, "Phase2: cancelled");
         rolljam_capture_stop(app);
         rolljam_jammer_stop(app);
         scene_manager_search_and_switch_to_another_scene(

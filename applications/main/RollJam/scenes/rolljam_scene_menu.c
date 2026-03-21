@@ -4,43 +4,68 @@
 // Menu scene: select frequency, modulation, start attack
 // ============================================================
 
+static uint8_t get_min_offset_index(uint8_t mod_index) {
+    if(mod_index == ModIndex_AM270) return JamOffIndex_1000k;
+    return JamOffIndex_300k;
+}
+
+static void enforce_min_offset(RollJamApp* app, VariableItem* offset_item) {
+    uint8_t min_idx = get_min_offset_index(app->mod_index);
+    if(app->jam_offset_index < min_idx) {
+        app->jam_offset_index = min_idx;
+        app->jam_offset_hz    = jam_offset_values[min_idx];
+        if(offset_item) {
+            variable_item_set_current_value_index(offset_item, min_idx);
+            variable_item_set_current_value_text(offset_item, jam_offset_names[min_idx]);
+        }
+        FURI_LOG_I(TAG, "Menu: offset ajustado a %s para AM270",
+                   jam_offset_names[min_idx]);
+    }
+}
+
+static VariableItem* s_offset_item = NULL;
+
 static void menu_freq_changed(VariableItem* item) {
     RollJamApp* app = variable_item_get_context(item);
     uint8_t index = variable_item_get_current_value_index(item);
-
     app->freq_index = index;
-    app->frequency = freq_values[index];
+    app->frequency  = freq_values[index];
     variable_item_set_current_value_text(item, freq_names[index]);
 }
 
 static void menu_mod_changed(VariableItem* item) {
     RollJamApp* app = variable_item_get_context(item);
     uint8_t index = variable_item_get_current_value_index(item);
-
     app->mod_index = index;
     variable_item_set_current_value_text(item, mod_names[index]);
+
+    enforce_min_offset(app, s_offset_item);
 }
 
 static void menu_jam_offset_changed(VariableItem* item) {
     RollJamApp* app = variable_item_get_context(item);
     uint8_t index = variable_item_get_current_value_index(item);
 
+    uint8_t min_idx = get_min_offset_index(app->mod_index);
+    if(index < min_idx) {
+        index = min_idx;
+        variable_item_set_current_value_index(item, index);
+    }
+
     app->jam_offset_index = index;
-    app->jam_offset_hz = jam_offset_values[index];
+    app->jam_offset_hz    = jam_offset_values[index];
     variable_item_set_current_value_text(item, jam_offset_names[index]);
 }
 
 static void menu_hw_changed(VariableItem* item) {
     RollJamApp* app = variable_item_get_context(item);
     uint8_t index = variable_item_get_current_value_index(item);
-
     app->hw_index = index;
     variable_item_set_current_value_text(item, hw_names[index]);
 }
 
 static void menu_enter_callback(void* context, uint32_t index) {
     RollJamApp* app = context;
-
     if(index == 4) {
         view_dispatcher_send_custom_event(
             app->view_dispatcher, RollJamEventStartAttack);
@@ -72,12 +97,17 @@ void rolljam_scene_menu_on_enter(void* context) {
     variable_item_set_current_value_index(mod_item, app->mod_index);
     variable_item_set_current_value_text(mod_item, mod_names[app->mod_index]);
 
+    // --- Jam Offset ---
     VariableItem* offset_item = variable_item_list_add(
         app->var_item_list,
         "Jam Offset",
         JamOffIndex_COUNT,
         menu_jam_offset_changed,
         app);
+
+    s_offset_item = offset_item;
+    enforce_min_offset(app, offset_item);
+
     variable_item_set_current_value_index(offset_item, app->jam_offset_index);
     variable_item_set_current_value_text(offset_item, jam_offset_names[app->jam_offset_index]);
 
@@ -111,8 +141,9 @@ bool rolljam_scene_menu_on_event(void* context, SceneManagerEvent event) {
 
     if(event.type == SceneManagerEventTypeCustom) {
         if(event.event == RollJamEventStartAttack) {
-            // Clear previous captures
-            memset(&app->signal_first, 0, sizeof(RawSignal));
+            enforce_min_offset(app, NULL);
+
+            memset(&app->signal_first,  0, sizeof(RawSignal));
             memset(&app->signal_second, 0, sizeof(RawSignal));
 
             scene_manager_next_scene(
@@ -125,5 +156,6 @@ bool rolljam_scene_menu_on_event(void* context, SceneManagerEvent event) {
 
 void rolljam_scene_menu_on_exit(void* context) {
     RollJamApp* app = context;
+    s_offset_item = NULL;
     variable_item_list_reset(app->var_item_list);
 }

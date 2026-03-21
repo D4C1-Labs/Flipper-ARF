@@ -10,7 +10,6 @@
 void rolljam_scene_attack_phase3_on_enter(void* context) {
     RollJamApp* app = context;
 
-    // UI
     widget_reset(app->widget);
     widget_add_string_element(
         app->widget, 64, 2, AlignCenter, AlignTop,
@@ -28,23 +27,18 @@ void rolljam_scene_attack_phase3_on_enter(void* context) {
     view_dispatcher_switch_to_view(
         app->view_dispatcher, RollJamViewWidget);
 
-    // LED: green
     notification_message(app->notification, &sequence_blink_green_100);
 
-    // 1) Stop the jammer
     rolljam_jammer_stop(app);
 
-    // Wait for jammer thread to fully stop and radio to settle
     furi_delay_ms(1000);
 
-    // 2) Transmit first captured signal via internal CC1101
     rolljam_transmit_signal(app, &app->signal_first);
 
     FURI_LOG_I(TAG, "Phase3: 1st code replayed. Keeping 2nd code.");
 
     notification_message(app->notification, &sequence_success);
 
-    // Brief display then advance
     furi_delay_ms(800);
 
     view_dispatcher_send_custom_event(

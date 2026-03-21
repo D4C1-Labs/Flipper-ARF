@@ -18,7 +18,6 @@
 
 #define TAG "RollJam"
 
-// Max raw signal buffer
 #define RAW_SIGNAL_MAX_SIZE 4096
 
 // ============================================================
@@ -127,20 +126,17 @@ typedef struct {
 // Main app struct
 // ============================================================
 typedef struct {
-    // Core
     Gui* gui;
     ViewDispatcher* view_dispatcher;
     SceneManager* scene_manager;
     NotificationApp* notification;
     Storage* storage;
 
-    // Views / modules
     VariableItemList* var_item_list;
     Widget* widget;
     DialogEx* dialog_ex;
     Popup* popup;
 
-    // Settings
     FreqIndex freq_index;
     ModIndex mod_index;
     JamOffIndex jam_offset_index;
@@ -149,16 +145,14 @@ typedef struct {
     uint32_t jam_frequency;
     uint32_t jam_offset_hz;
 
-    // Captured signals
     RawSignal signal_first;
     RawSignal signal_second;
 
-    // Jamming state
     bool jamming_active;
     FuriThread* jam_thread;
     volatile bool jam_thread_running;
 
-    // Capture state
     volatile bool raw_capture_active;
+
 
 } RollJamApp;

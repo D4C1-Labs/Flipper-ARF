@@ -180,7 +180,6 @@ static RollJamApp* rolljam_app_alloc(void) {
 // ============================================================
 
 static void rolljam_app_free(RollJamApp* app) {
-    // Safety: stop everything
     if(app->jamming_active) {
         rolljam_jammer_stop(app);
     }
@@ -188,7 +187,6 @@ static void rolljam_app_free(RollJamApp* app) {
         rolljam_capture_stop(app);
     }
 
-    // Remove views
     view_dispatcher_remove_view(app->view_dispatcher, RollJamViewVarItemList);
     variable_item_list_free(app->var_item_list);
 
@@ -201,11 +199,9 @@ static void rolljam_app_free(RollJamApp* app) {
     view_dispatcher_remove_view(app->view_dispatcher, RollJamViewPopup);
     popup_free(app->popup);
 
-    // Core
     scene_manager_free(app->scene_manager);
     view_dispatcher_free(app->view_dispatcher);
 
-    // Services
     furi_record_close(RECORD_GUI);
     furi_record_close(RECORD_NOTIFICATION);
     furi_record_close(RECORD_STORAGE);
