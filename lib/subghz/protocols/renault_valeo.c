@@ -37,7 +37,7 @@ static void feed(void* ctx,bool level,uint32_t d){
     UNUSED(level);
     RenaultValeoDecoder* i = ctx;
 
-    if(d<600){ // heurística simple
+    if(d<600){
         i->data <<=1;
         i->bit_count++;
     } else if(d<1200){
@@ -51,7 +51,7 @@ static void feed(void* ctx,bool level,uint32_t d){
             i->generic.serial = (uint32_t)(i->data>>32);
             i->generic.cnt = (i->data>>8)&0xFFFF;
 
-            // 🔐 placeholder crypto
+            // placeholder
             // uint64_t key = [MFKey keeloq key];
 
             if(i->base.callback)

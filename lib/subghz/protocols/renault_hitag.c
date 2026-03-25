@@ -6,7 +6,6 @@
 
 #define TAG "RenaultHitag"
 
-// reemplazo de DURATION_DIFF
 #define ABS_DIFF(a, b) ((a) > (b) ? ((a) - (b)) : ((b) - (a)))
 
 static const SubGhzBlockConst renault_hitag_const = {
@@ -47,7 +46,7 @@ static void renault_hitag_reset(void* ctx) {
 }
 
 static void renault_hitag_feed(void* ctx, bool level, uint32_t duration) {
-    UNUSED(level); // 👈 FIX warning
+    UNUSED(level);
 
     RenaultHitagDecoder* inst = ctx;
 
