@@ -77,3 +77,6 @@
 #include "star_line.h"
 #include "scher_khan.h"
 #include "sheriff_cfm.h"
+#include "renault_hitag.h"
+#include "renault_siemens.h"
+#include "renault_valeo.h"
