@@ -1,4 +1,4 @@
-#include "renault_valeo.h"
+#include "renault_valeo_fsk.h"
 
 #include "../blocks/const.h"
 #include "../blocks/decoder.h"
@@ -6,33 +6,34 @@
 #include "keeloq_common.h"
 #include "../subghz_keystore.h"
 #include "../subghz_keystore_i.h"
+#include <lib/toolbox/manchester_decoder.h>
 #include <m-array.h>
 
-#define TAG "RenaultValeo"
+#define TAG "RenaultValeoFSK"
 
-// Valeo OOK keyfob — Captur 2017 / Clio IV / PCF7961
-// OOK PWM encoding:
-//   te_short ≈ 66 µs  → bit 0 (mark)
-//   te_long  ≈ 264 µs → bit 1 (mark)
-//   Space between bits ≈ te_short (66 µs)
-//   Gap between frames > 500 µs
-//
-// Trama (64-96 bits):
-//   [MSB..32] fix: btn[4] + serial[28]
-//   [31..0]   hop: 32 bits KeeLoq encrypted
+// Valeo FSK (Megane III, Scenic III, Ren3) — 2FSKDev476Async
+// Manchester encoding over FSK
+// te_short = 500 µs (half-bit cell)
+// te_long  = 1000 µs (full-bit cell)
+// te_delta = 200 µs
+// Preamble: alternating half-cells (min 8)
 
-#define VALEO_TE_SHORT  66
-#define VALEO_TE_LONG   264
-#define VALEO_TE_DELTA  60
-#define VALEO_MIN_BITS  64
-#define VALEO_MAX_BITS  96
-#define VALEO_GAP_MIN   500
+#define VALEO_FSK_TE_SHORT   500
+#define VALEO_FSK_TE_LONG    1000
+#define VALEO_FSK_TE_DELTA   200
+#define VALEO_FSK_MIN_BITS   64
+#define VALEO_FSK_MAX_BITS   96
+#define VALEO_FSK_PREAMBLE_MIN 8
+
+#ifndef DURATION_DIFF
+#define DURATION_DIFF(x, y) (((x) > (y)) ? ((x) - (y)) : ((y) - (x)))
+#endif
 
 typedef enum {
-    ValeoStepReset = 0,
-    ValeoStepWaitMark,
-    ValeoStepWaitSpace,
-} ValeoStep;
+    ValeoFSKStepReset = 0,
+    ValeoFSKStepPreamble,
+    ValeoFSKStepDecode,
+} ValeoFSKStep;
 
 // ─── Struct ──────────────────────────────────────────────────────────────────
 
@@ -43,20 +44,15 @@ typedef struct {
 
     uint64_t data;
     uint8_t bit_count;
-    uint8_t parser_step;
+    uint8_t preamble_count;
+    ManchesterState manchester_state;
     SubGhzKeystore* keystore;
     const char* manufacture_name;
-} RenaultValeoDecoder;
-
-// ─── Helpers ─────────────────────────────────────────────────────────────────
-
-static inline uint32_t valeo_abs_diff(uint32_t a, uint32_t b) {
-    return (a > b) ? (a - b) : (b - a);
-}
+} RenaultValeoFSKDecoder;
 
 // ─── KeeLoq decode ───────────────────────────────────────────────────────────
 
-static void renault_valeo_decode_keeloq(RenaultValeoDecoder* inst) {
+static void renault_valeo_fsk_decode_keeloq(RenaultValeoFSKDecoder* inst) {
     if(!inst->keystore) return;
 
     uint32_t fix = (uint32_t)(inst->data >> 32);
@@ -71,7 +67,6 @@ static void renault_valeo_decode_keeloq(RenaultValeoDecoder* inst) {
 
     for
         M_EACH(mf, *subghz_keystore_get_data(inst->keystore), SubGhzKeyArray_t) {
-            // Normal Learning (Valeo primary)
             if(mf->type == KEELOQ_LEARNING_NORMAL ||
                mf->type == KEELOQ_LEARNING_UNKNOWN) {
                 uint64_t man = subghz_protocol_keeloq_common_normal_learning(fix, mf->key);
@@ -83,7 +78,6 @@ static void renault_valeo_decode_keeloq(RenaultValeoDecoder* inst) {
                     return;
                 }
             }
-            // Simple Learning fallback
             if(mf->type == KEELOQ_LEARNING_SIMPLE ||
                mf->type == KEELOQ_LEARNING_UNKNOWN) {
                 uint32_t decrypt = subghz_protocol_keeloq_common_decrypt(hop, mf->key);
@@ -97,131 +91,122 @@ static void renault_valeo_decode_keeloq(RenaultValeoDecoder* inst) {
         }
 }
 
-// ─── Alloc / Free / Reset ────────────────────────────────────────────────────
+// ─── Accept helper ───────────────────────────────────────────────────────────
 
-static void* renault_valeo_alloc(SubGhzEnvironment* env) {
-    RenaultValeoDecoder* inst = malloc(sizeof(RenaultValeoDecoder));
-    memset(inst, 0, sizeof(RenaultValeoDecoder));
-    inst->base.protocol = &subghz_protocol_renault_valeo;
-    inst->generic.protocol_name = inst->base.protocol->name;
-    inst->keystore = subghz_environment_get_keystore(env);
-    inst->manufacture_name = "Unknown";
-    return inst;
-}
-
-static void renault_valeo_free(void* ctx) {
-    furi_assert(ctx);
-    free(ctx);
-}
-
-static void renault_valeo_reset(void* ctx) {
-    furi_assert(ctx);
-    RenaultValeoDecoder* inst = ctx;
-    inst->data = 0;
-    inst->bit_count = 0;
-    inst->parser_step = ValeoStepReset;
-}
-
-// ─── Feed — OOK PWM ─────────────────────────────────────────────────────────
-
-static void renault_valeo_try_accept(RenaultValeoDecoder* inst) {
-    if(inst->bit_count >= VALEO_MIN_BITS && inst->bit_count <= VALEO_MAX_BITS) {
+static void renault_valeo_fsk_try_accept(RenaultValeoFSKDecoder* inst) {
+    if(inst->bit_count >= VALEO_FSK_MIN_BITS &&
+       inst->bit_count <= VALEO_FSK_MAX_BITS) {
         inst->generic.data = inst->data;
         inst->generic.data_count_bit = inst->bit_count;
-        renault_valeo_decode_keeloq(inst);
+        renault_valeo_fsk_decode_keeloq(inst);
         if(inst->base.callback) {
             inst->base.callback(&inst->base, inst->base.context);
         }
     }
 }
 
-static void renault_valeo_feed(void* ctx, bool level, uint32_t duration) {
+// ─── Alloc / Free / Reset ────────────────────────────────────────────────────
+
+static void* renault_valeo_fsk_alloc(SubGhzEnvironment* env) {
+    RenaultValeoFSKDecoder* inst = malloc(sizeof(RenaultValeoFSKDecoder));
+    memset(inst, 0, sizeof(RenaultValeoFSKDecoder));
+    inst->base.protocol = &subghz_protocol_renault_valeo_fsk;
+    inst->generic.protocol_name = inst->base.protocol->name;
+    inst->keystore = subghz_environment_get_keystore(env);
+    inst->manufacture_name = "Unknown";
+    inst->manchester_state = ManchesterStateMid1;
+    inst->decoder.parser_step = ValeoFSKStepReset;
+    return inst;
+}
+
+static void renault_valeo_fsk_free(void* ctx) {
     furi_assert(ctx);
-    RenaultValeoDecoder* inst = ctx;
+    free(ctx);
+}
 
-    switch(inst->parser_step) {
+static void renault_valeo_fsk_reset(void* ctx) {
+    furi_assert(ctx);
+    RenaultValeoFSKDecoder* inst = ctx;
+    inst->data = 0;
+    inst->bit_count = 0;
+    inst->preamble_count = 0;
+    inst->manchester_state = ManchesterStateMid1;
+    inst->decoder.parser_step = ValeoFSKStepReset;
+}
 
-    case ValeoStepReset:
-        if(level) {
-            if(valeo_abs_diff(duration, VALEO_TE_SHORT) < VALEO_TE_DELTA) {
-                inst->data = (inst->data << 1);
-                inst->bit_count++;
-                inst->parser_step = ValeoStepWaitSpace;
-            } else if(valeo_abs_diff(duration, VALEO_TE_LONG) < VALEO_TE_DELTA) {
-                inst->data = (inst->data << 1) | 1;
-                inst->bit_count++;
-                inst->parser_step = ValeoStepWaitSpace;
-            }
+// ─── Feed — Manchester over FSK ──────────────────────────────────────────────
+
+static void renault_valeo_fsk_feed(void* ctx, bool level, uint32_t duration) {
+    furi_assert(ctx);
+    RenaultValeoFSKDecoder* inst = ctx;
+
+    // Classify duration
+    ManchesterEvent event = ManchesterEventReset;
+
+    if(DURATION_DIFF(duration, VALEO_FSK_TE_SHORT) < VALEO_FSK_TE_DELTA) {
+        event = level ? ManchesterEventShortHigh : ManchesterEventShortLow;
+    } else if(DURATION_DIFF(duration, VALEO_FSK_TE_LONG) < VALEO_FSK_TE_DELTA) {
+        event = level ? ManchesterEventLongHigh : ManchesterEventLongLow;
+    } else {
+        // Out of range — gap or noise
+        renault_valeo_fsk_try_accept(inst);
+        renault_valeo_fsk_reset(ctx);
+        return;
+    }
+
+    switch(inst->decoder.parser_step) {
+
+    case ValeoFSKStepReset:
+        if(event == ManchesterEventShortHigh || event == ManchesterEventShortLow) {
+            inst->preamble_count = 1;
+            inst->decoder.parser_step = ValeoFSKStepPreamble;
         }
         break;
 
-    case ValeoStepWaitSpace:
-        if(!level) {
-            if(valeo_abs_diff(duration, VALEO_TE_SHORT) < VALEO_TE_DELTA) {
-                inst->parser_step = ValeoStepWaitMark;
-            } else if(duration >= VALEO_GAP_MIN) {
-                renault_valeo_try_accept(inst);
+    case ValeoFSKStepPreamble:
+        if(event == ManchesterEventShortHigh || event == ManchesterEventShortLow) {
+            inst->preamble_count++;
+            if(inst->preamble_count >= VALEO_FSK_PREAMBLE_MIN) {
                 inst->data = 0;
                 inst->bit_count = 0;
-                inst->parser_step = ValeoStepReset;
-            } else {
-                // Allow some tolerance on space — accept wider spaces as inter-bit
-                if(duration < VALEO_GAP_MIN) {
-                    inst->parser_step = ValeoStepWaitMark;
-                } else {
-                    renault_valeo_try_accept(inst);
-                    inst->data = 0;
-                    inst->bit_count = 0;
-                    inst->parser_step = ValeoStepReset;
-                }
-            }
-        }
-        break;
-
-    case ValeoStepWaitMark:
-        if(level) {
-            if(valeo_abs_diff(duration, VALEO_TE_SHORT) < VALEO_TE_DELTA) {
-                inst->data = (inst->data << 1);
-                inst->bit_count++;
-                inst->parser_step = ValeoStepWaitSpace;
-            } else if(valeo_abs_diff(duration, VALEO_TE_LONG) < VALEO_TE_DELTA) {
-                inst->data = (inst->data << 1) | 1;
-                inst->bit_count++;
-                inst->parser_step = ValeoStepWaitSpace;
-            } else {
-                renault_valeo_try_accept(inst);
-                inst->data = 0;
-                inst->bit_count = 0;
-                inst->parser_step = ValeoStepReset;
+                inst->manchester_state = ManchesterStateMid1;
+                inst->decoder.parser_step = ValeoFSKStepDecode;
             }
         } else {
-            if(duration >= VALEO_GAP_MIN) {
-                renault_valeo_try_accept(inst);
-                inst->data = 0;
-                inst->bit_count = 0;
-                inst->parser_step = ValeoStepReset;
-            }
+            renault_valeo_fsk_reset(ctx);
         }
         break;
 
-    default:
-        renault_valeo_reset(ctx);
+    case ValeoFSKStepDecode: {
+        bool bit_out = false;
+        ManchesterState next_state;
+
+        if(manchester_advance(
+               inst->manchester_state, event, &next_state, &bit_out)) {
+            inst->data = (inst->data << 1) | (bit_out ? 1 : 0);
+            inst->bit_count++;
+
+            if(inst->bit_count >= VALEO_FSK_MAX_BITS) {
+                renault_valeo_fsk_try_accept(inst);
+                renault_valeo_fsk_reset(ctx);
+                return;
+            }
+        }
+        inst->manchester_state = next_state;
         break;
     }
 
-    if(inst->bit_count > VALEO_MAX_BITS) {
-        renault_valeo_try_accept(inst);
-        inst->data = 0;
-        inst->bit_count = 0;
-        inst->parser_step = ValeoStepReset;
+    default:
+        renault_valeo_fsk_reset(ctx);
+        break;
     }
 }
 
 // ─── Hash ────────────────────────────────────────────────────────────────────
 
-static uint8_t renault_valeo_get_hash(void* ctx) {
+static uint8_t renault_valeo_fsk_get_hash(void* ctx) {
     furi_assert(ctx);
-    RenaultValeoDecoder* inst = ctx;
+    RenaultValeoFSKDecoder* inst = ctx;
     return (uint8_t)(inst->generic.data ^
                      (inst->generic.data >> 8) ^
                      (inst->generic.data >> 16) ^
@@ -230,12 +215,12 @@ static uint8_t renault_valeo_get_hash(void* ctx) {
 
 // ─── Serialize / Deserialize ─────────────────────────────────────────────────
 
-static SubGhzProtocolStatus renault_valeo_serialize(
+static SubGhzProtocolStatus renault_valeo_fsk_serialize(
     void* ctx,
     FlipperFormat* flipper_format,
     SubGhzRadioPreset* preset) {
     furi_assert(ctx);
-    RenaultValeoDecoder* inst = ctx;
+    RenaultValeoFSKDecoder* inst = ctx;
     SubGhzProtocolStatus res =
         subghz_block_generic_serialize(&inst->generic, flipper_format, preset);
     if(res == SubGhzProtocolStatusOk) {
@@ -248,27 +233,24 @@ static SubGhzProtocolStatus renault_valeo_serialize(
 }
 
 static SubGhzProtocolStatus
-    renault_valeo_deserialize(void* ctx, FlipperFormat* flipper_format) {
+    renault_valeo_fsk_deserialize(void* ctx, FlipperFormat* flipper_format) {
     furi_assert(ctx);
-    RenaultValeoDecoder* inst = ctx;
+    RenaultValeoFSKDecoder* inst = ctx;
     SubGhzProtocolStatus res =
         subghz_block_generic_deserialize_check_count_bit(
-            &inst->generic, flipper_format, VALEO_MIN_BITS);
+            &inst->generic, flipper_format, VALEO_FSK_MIN_BITS);
     if(res == SubGhzProtocolStatusOk) {
         inst->data = inst->generic.data;
         inst->bit_count = inst->generic.data_count_bit;
 
-        // Read manufacture name safely
         FuriString* mf = furi_string_alloc();
         if(flipper_format_read_string(flipper_format, "Manufacture", mf)) {
-            // Store a copy since mf will be freed
             if(furi_string_size(mf) > 0) {
                 inst->manufacture_name = "Loaded";
             }
         }
         furi_string_free(mf);
 
-        // Re-extract fields
         uint32_t fix = (uint32_t)(inst->generic.data >> 32);
         inst->generic.serial = fix & 0x0FFFFFFF;
         inst->generic.btn = (fix >> 28) & 0xF;
@@ -278,9 +260,9 @@ static SubGhzProtocolStatus
 
 // ─── get_string ──────────────────────────────────────────────────────────────
 
-static void renault_valeo_get_string(void* ctx, FuriString* output) {
+static void renault_valeo_fsk_get_string(void* ctx, FuriString* output) {
     furi_assert(ctx);
-    RenaultValeoDecoder* inst = ctx;
+    RenaultValeoFSKDecoder* inst = ctx;
 
     uint32_t fix = (uint32_t)(inst->generic.data >> 32);
     inst->generic.serial = fix & 0x0FFFFFFF;
@@ -310,25 +292,25 @@ static void renault_valeo_get_string(void* ctx, FuriString* output) {
 
 // ─── Descriptor ──────────────────────────────────────────────────────────────
 
-static const SubGhzProtocolDecoder renault_valeo_decoder = {
-    .alloc = renault_valeo_alloc,
-    .free = renault_valeo_free,
-    .feed = renault_valeo_feed,
-    .reset = renault_valeo_reset,
-    .get_hash_data = renault_valeo_get_hash,
-    .serialize = renault_valeo_serialize,
-    .deserialize = renault_valeo_deserialize,
-    .get_string = renault_valeo_get_string,
+static const SubGhzProtocolDecoder renault_valeo_fsk_decoder = {
+    .alloc = renault_valeo_fsk_alloc,
+    .free = renault_valeo_fsk_free,
+    .feed = renault_valeo_fsk_feed,
+    .reset = renault_valeo_fsk_reset,
+    .get_hash_data = renault_valeo_fsk_get_hash,
+    .serialize = renault_valeo_fsk_serialize,
+    .deserialize = renault_valeo_fsk_deserialize,
+    .get_string = renault_valeo_fsk_get_string,
 };
 
-const SubGhzProtocol subghz_protocol_renault_valeo = {
-    .name = SUBGHZ_PROTOCOL_RENAULT_VALEO_NAME,
+const SubGhzProtocol subghz_protocol_renault_valeo_fsk = {
+    .name = SUBGHZ_PROTOCOL_RENAULT_VALEO_FSK_NAME,
     .type = SubGhzProtocolTypeDynamic,
     .flag = SubGhzProtocolFlag_433 |
-            SubGhzProtocolFlag_AM |
+            SubGhzProtocolFlag_FM |
             SubGhzProtocolFlag_Decodable |
             SubGhzProtocolFlag_Load |
             SubGhzProtocolFlag_Save,
-    .decoder = &renault_valeo_decoder,
+    .decoder = &renault_valeo_fsk_decoder,
     .encoder = NULL,
 };

@@ -5,9 +5,9 @@
 typedef enum {
     RenaultProtoUnknown,
     RenaultProtoHitag,
-    RenaultProtoMarelli,
+    RenaultProtoSiemens,
     RenaultProtoValeo,
-    RenaultProtoSiemens
+    RenaultProtoMarelli,
 } RenaultProtocolType;
 
 RenaultProtocolType renault_classify(uint8_t bits);

@@ -80,3 +80,5 @@
 #include "renault_hitag.h"
 #include "renault_siemens.h"
 #include "renault_valeo.h"
+#include "renault_valeo_fsk.h"
+#include "renault_marelli.h"
