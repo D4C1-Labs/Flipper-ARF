@@ -75,11 +75,18 @@ const SubGhzProtocol* const subghz_protocol_registry_items[] = {
     &subghz_protocol_star_line,
     &subghz_protocol_scher_khan,
     &subghz_protocol_sheriff_cfm,
+<<<<<<< Updated upstream
     &subghz_protocol_renault_hitag,
     &subghz_protocol_renault_siemens,
     &subghz_protocol_renault_valeo,
     &subghz_protocol_renault_valeo_fsk,
     &subghz_protocol_renault_marelli,
+=======
+    &subghz_protocol_chrysler,
+    &honda_static_protocol,
+    &porsche_touareg_protocol,
+    //&subghz_protocol_honda,
+>>>>>>> Stashed changes
 };
 
 const SubGhzProtocolRegistry subghz_protocol_registry = {
