@@ -77,16 +77,13 @@
 #include "star_line.h"
 #include "scher_khan.h"
 #include "sheriff_cfm.h"
-<<<<<<< Updated upstream
 #include "renault_hitag.h"
 #include "renault_siemens.h"
 #include "renault_valeo.h"
 #include "renault_valeo_fsk.h"
 #include "renault_marelli.h"
-=======
-#include "chrysler.h"
-#include "honda_static.h"
 #include "ford_v1.h"
-#include "porsche_touareg.h"
-//#include "honda_pandora.h"
->>>>>>> Stashed changes
+#include "honda_v1.h"
+#include "honda_static.h"
+#include "fiat_v0.h"
+#include "fiat_v1.h"

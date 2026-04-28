@@ -1,5 +1,12 @@
 #include "kia_v0.h"
 
+#include "../blocks/const.h"
+#include "../blocks/decoder.h"
+#include "../blocks/encoder.h"
+#include "../blocks/generic.h"
+#include "../blocks/math.h"
+#include "../blocks/custom_btn_i.h"
+
 #include <string.h>
 
 #define TAG "KiaV0"
@@ -369,7 +376,7 @@ static const char* kia_v0_protocol_name(uint8_t type) {
     case KIA_V0_TYPE_HONDA:
         return "Honda V0";
     default:
-        return KIA_PROTOCOL_V0_NAME;
+        return SUBGHZ_PROTOCOL_KIA_V0_NAME;
     }
 }
 
@@ -721,7 +728,7 @@ void* subghz_protocol_encoder_kia_alloc(SubGhzEnvironment* environment) {
     furi_check(instance);
     memset(instance, 0, sizeof(*instance));
 
-    instance->base.protocol = &kia_protocol_v0;
+    instance->base.protocol = &subghz_protocol_kia_v0;
     instance->generic.protocol_name = instance->base.protocol->name;
     instance->encoder.repeat = KIA_V0_ENCODER_DEFAULT_REPEAT;
     instance->encoder.upload = malloc(KIA_V0_UPLOAD_CAPACITY * sizeof(LevelDuration));
@@ -915,7 +922,7 @@ void* subghz_protocol_decoder_kia_alloc(SubGhzEnvironment* environment) {
     furi_check(instance);
     memset(instance, 0, sizeof(*instance));
 
-    instance->base.protocol = &kia_protocol_v0;
+    instance->base.protocol = &subghz_protocol_kia_v0;
     instance->generic.protocol_name = instance->base.protocol->name;
     return instance;
 }
@@ -1239,8 +1246,8 @@ const SubGhzProtocolEncoder subghz_protocol_kia_encoder = {
     .yield = subghz_protocol_encoder_kia_yield,
 };
 
-const SubGhzProtocol kia_protocol_v0 = {
-    .name = KIA_PROTOCOL_V0_NAME,
+const SubGhzProtocol subghz_protocol_kia_v0 = {
+    .name = SUBGHZ_PROTOCOL_KIA_V0_NAME,
     .type = SubGhzProtocolTypeDynamic,
     .flag = SubGhzProtocolFlag_433 | SubGhzProtocolFlag_FM | SubGhzProtocolFlag_Decodable |
             SubGhzProtocolFlag_Load | SubGhzProtocolFlag_Save | SubGhzProtocolFlag_Send,

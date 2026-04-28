@@ -1,4 +1,12 @@
 #include "psa.h"
+#include "../blocks/const.h"
+#include "../blocks/decoder.h"
+#include "../blocks/encoder.h"
+#include "../blocks/generic.h"
+#include "../blocks/math.h"
+#include "../blocks/custom_btn_i.h"
+#include <lib/toolbox/manchester_decoder.h>
+#include <string.h>
 
 #define TAG "PSAProtocol"
 
@@ -27,6 +35,37 @@ static const SubGhzBlockConst subghz_protocol_psa_const = {
 
 #define TEA_DELTA  0x9E3779B9U
 #define TEA_ROUNDS 32
+
+typedef enum {
+    PSA_BF_STATUS_IDLE = 0,
+    PSA_BF_STATUS_RUNNING,
+    PSA_BF_STATUS_FOUND,
+    PSA_BF_STATUS_NOT_FOUND,
+    PSA_BF_STATUS_CANCELLED,
+} PsaBfStatus;
+
+typedef void (*PsaBfDoneCallback)(void* context);
+
+typedef struct {
+    uint32_t key1_low;
+    uint32_t key1_high;
+    uint16_t key2_low;
+
+    volatile uint8_t cancel;
+    uint32_t progress_current;
+    uint32_t progress_total;
+    PsaBfStatus status;
+
+    uint8_t decrypted_button;
+    uint32_t decrypted_serial;
+    uint32_t decrypted_counter;
+    uint16_t decrypted_crc;
+    uint32_t decrypted_seed;
+    uint8_t decrypted_type;
+
+    PsaBfDoneCallback on_done;
+    void* on_done_ctx;
+} PsaBfState;
 
 typedef struct {
     uint32_t s0[TEA_ROUNDS];
@@ -111,15 +150,6 @@ struct SubGhzProtocolDecoderPSA {
     uint16_t decrypted_crc;
     uint32_t decrypted_seed;
     uint8_t decrypted_type;
-<<<<<<< Updated upstream
-
-    uint16_t pattern_counter;
-    ManchesterState manchester_state;
-
-    uint32_t last_key1_low;
-    uint32_t last_key1_high;
-=======
->>>>>>> Stashed changes
 };
 
 struct SubGhzProtocolEncoderPSA {
@@ -160,8 +190,8 @@ const SubGhzProtocolEncoder subghz_protocol_psa_encoder = {
     .yield = subghz_protocol_encoder_psa_yield,
 };
 
-const SubGhzProtocol psa_protocol = {
-    .name = PSA_PROTOCOL_NAME,
+const SubGhzProtocol subghz_protocol_psa = {
+    .name = SUBGHZ_PROTOCOL_PSA_NAME,
     .type = SubGhzProtocolTypeDynamic,
     .flag = SubGhzProtocolFlag_433 | SubGhzProtocolFlag_AM | SubGhzProtocolFlag_FM |
             SubGhzProtocolFlag_Decodable | SubGhzProtocolFlag_Save | SubGhzProtocolFlag_Load,
@@ -565,7 +595,7 @@ void* subghz_protocol_encoder_psa_alloc(SubGhzEnvironment* environment) {
 
     if(instance) {
         memset(instance, 0, sizeof(SubGhzProtocolEncoderPSA));
-        instance->base.protocol = &psa_protocol;
+        instance->base.protocol = &subghz_protocol_psa;
         instance->generic.protocol_name = instance->base.protocol->name;
 
         instance->encoder.size_upload = 600;
@@ -1341,7 +1371,7 @@ void* subghz_protocol_decoder_psa_alloc(SubGhzEnvironment* environment) {
     SubGhzProtocolDecoderPSA* instance = malloc(sizeof(SubGhzProtocolDecoderPSA));
     if(instance) {
         memset(instance, 0, sizeof(SubGhzProtocolDecoderPSA));
-        instance->base.protocol = &psa_protocol;
+        instance->base.protocol = &subghz_protocol_psa;
         instance->manchester_state = ManchesterStateMid1;
     }
     return instance;
@@ -1509,34 +1539,6 @@ void subghz_protocol_decoder_psa_feed(void* context, bool level, uint32_t durati
                     end_diff = duration - PSA_TE_END_1000;
                 }
                 if(end_diff <= 199) {
-<<<<<<< Updated upstream
-                    instance->validation_field = (uint16_t)(instance->decode_data_low & 0xFFFF);
-                    instance->key2_low = instance->decode_data_low;
-                    instance->key2_high = instance->decode_data_high;
-                    instance->mode_serialize = 1;
-                    instance->status_flag = 0x80;
-
-                    uint8_t buffer[48] = {0};
-                    psa_setup_byte_buffer(buffer, instance->key1_low, instance->key1_high, instance->key2_low);
-                    if(psa_direct_xor_decrypt(instance, buffer)) {
-                        instance->mode_serialize = 0x23;
-                        instance->decrypted = 0x50;
-                    } else {
-                        instance->decrypted = 0x00;
-                        instance->mode_serialize = 0x36;
-                    }
-
-                    instance->generic.data = ((uint64_t)instance->key1_high << 32) | instance->key1_low;
-                    instance->generic.data_count_bit = 64;
-                    instance->decoder.decode_data = instance->generic.data;
-                    instance->decoder.decode_count_bit = 64;
-
-                    PSA_FIRE_CALLBACK_IF_NEW(instance);
-
-                    instance->decode_data_low = 0;
-                    instance->decode_data_high = 0;
-                    instance->decode_count_bit = 0;
-=======
                     if(((instance->key1_high >> 16) & 0xF) != 0xA) {
                         instance->decode_data_low = 0;
                         instance->decode_data_high = 0;
@@ -1546,7 +1548,6 @@ void subghz_protocol_decoder_psa_feed(void* context, bool level, uint32_t durati
                         return;
                     }
                     psa_handle_decoded_frame(instance, 1);
->>>>>>> Stashed changes
                     new_state = PSADecoderState0;
                     instance->state = new_state;
                     return;
@@ -1706,43 +1707,6 @@ void subghz_protocol_decoder_psa_feed(void* context, bool level, uint32_t durati
 
         if(duration < PSA_TE_SHORT_125) {
             tolerance = PSA_TE_SHORT_125 - duration;
-<<<<<<< Updated upstream
-            if(tolerance < PSA_TOLERANCE_50) {
-                uint32_t prev_diff = psa_abs_diff(prev_dur, PSA_TE_SHORT_125);
-                if(prev_diff <= PSA_TOLERANCE_49) {
-                    instance->pattern_counter++;
-                } else {
-                    instance->pattern_counter = 0;
-                }
-                instance->prev_duration = duration;
-                return;
-            }
-        } else {
-            tolerance = duration - PSA_TE_SHORT_125;
-            if(tolerance < PSA_TOLERANCE_50) {
-                uint32_t prev_diff = psa_abs_diff(prev_dur, PSA_TE_SHORT_125);
-                if(prev_diff <= PSA_TOLERANCE_49) {
-                    instance->pattern_counter++;
-                } else {
-                    instance->pattern_counter = 0;
-                }
-                instance->prev_duration = duration;
-                return;
-            } else if(duration >= PSA_TE_LONG_250 && duration < 0x12c) {
-                if(instance->pattern_counter > PSA_PATTERN_THRESHOLD_2) {
-                    new_state = PSADecoderState4;
-                    instance->decode_data_low = 0;
-                    instance->decode_data_high = 0;
-                    instance->decode_count_bit = 0;
-                    manchester_advance(instance->manchester_state, ManchesterEventReset,
-                                     &instance->manchester_state, NULL);
-                    instance->state = new_state;
-                }
-                instance->pattern_counter = 0;
-                instance->prev_duration = duration;
-                return;
-            }
-=======
         } else {
             tolerance = duration - PSA_TE_SHORT_125;
         }
@@ -1756,7 +1720,6 @@ void subghz_protocol_decoder_psa_feed(void* context, bool level, uint32_t durati
             }
             instance->prev_duration = duration;
             return;
->>>>>>> Stashed changes
         }
 
         new_state = PSADecoderState0;
@@ -1771,84 +1734,6 @@ void subghz_protocol_decoder_psa_feed(void* context, bool level, uint32_t durati
         if(!level) {
             uint8_t manchester_input;
             bool decoded_bit = false;
-<<<<<<< Updated upstream
-
-            if(duration < PSA_TE_SHORT_125) {
-                tolerance = PSA_TE_SHORT_125 - duration;
-                if(tolerance > PSA_TOLERANCE_49) {
-                    return;
-                }
-                manchester_input = ((level ^ 1) & 0x7f) << 1;
-            } else {
-                tolerance = duration - PSA_TE_SHORT_125;
-                if(tolerance < PSA_TOLERANCE_50) {
-                    manchester_input = ((level ^ 1) & 0x7f) << 1;
-                } else if(duration >= PSA_TE_LONG_250 && duration < 0x12c) {
-                    if(level == 0) {
-                        manchester_input = 6;
-                    } else {
-                        manchester_input = 4;
-                    }
-                } else {
-                    return;
-                }
-            }
-
-            if(manchester_advance(instance->manchester_state,
-                                 (ManchesterEvent)manchester_input,
-                                 &instance->manchester_state,
-                                 &decoded_bit)) {
-                uint32_t carry = (instance->decode_data_low >> 31) & 1;
-                instance->decode_data_low = (instance->decode_data_low << 1) | (decoded_bit ? 1 : 0);
-                instance->decode_data_high = (instance->decode_data_high << 1) | carry;
-                instance->decode_count_bit++;
-
-                if(instance->decode_count_bit == PSA_KEY1_BITS) {
-                    instance->key1_low = instance->decode_data_low;
-                    instance->key1_high = instance->decode_data_high;
-                    instance->decode_data_low = 0;
-                    instance->decode_data_high = 0;
-                }
-            }
-        } else if(level) {
-            uint32_t end_diff;
-            if(duration < PSA_TE_END_500) {
-                end_diff = PSA_TE_END_500 - duration;
-            } else {
-                end_diff = duration - PSA_TE_END_500;
-            }
-            if(end_diff <= 99) {
-                if(instance->decode_count_bit != PSA_KEY2_BITS) {
-                    return;
-                }
-
-                instance->validation_field = (uint16_t)(instance->decode_data_low & 0xFFFF);
-                instance->key2_low = instance->decode_data_low;
-                instance->key2_high = instance->decode_data_high;
-                instance->mode_serialize = 2;
-                instance->status_flag = 0x80;
-
-                uint8_t buffer[48] = {0};
-                psa_setup_byte_buffer(buffer, instance->key1_low, instance->key1_high, instance->key2_low);
-                if(psa_direct_xor_decrypt(instance, buffer)) {
-                    instance->mode_serialize = 0x23;
-                    instance->decrypted = 0x50;
-                } else {
-                    instance->decrypted = 0x00;
-                    instance->mode_serialize = 0x36;
-                }
-
-                instance->generic.data = ((uint64_t)instance->key1_high << 32) | instance->key1_low;
-                instance->generic.data_count_bit = 64;
-                instance->decoder.decode_data = instance->generic.data;
-                instance->decoder.decode_count_bit = 64;
-
-                PSA_FIRE_CALLBACK_IF_NEW(instance);
-
-                instance->decode_data_low = 0;
-                instance->decode_data_high = 0;
-                instance->decode_count_bit = 0;
-=======
 
             if(duration < PSA_TE_SHORT_125) {
                 tolerance = PSA_TE_SHORT_125 - duration;
@@ -1910,7 +1795,6 @@ void subghz_protocol_decoder_psa_feed(void* context, bool level, uint32_t durati
                     return;
                 }
                 psa_handle_decoded_frame(instance, 2);
->>>>>>> Stashed changes
                 new_state = PSADecoderState0;
                 instance->state = new_state;
                 return;
@@ -2112,4 +1996,239 @@ void subghz_protocol_decoder_psa_get_string(void* context, FuriString* output) {
             instance->key1_low,
             key2_value);
     }
+}
+
+bool subghz_protocol_psa_decrypt_file(
+    FlipperFormat* flipper_format,
+    FuriString* result_str,
+    PsaDecryptProgressCallback progress_cb,
+    void* progress_ctx) {
+    SubGhzProtocolDecoderPSA instance = {0};
+
+    uint8_t key1_bytes[8] = {0};
+    flipper_format_rewind(flipper_format);
+    if(!flipper_format_read_hex(flipper_format, "Key", key1_bytes, 8)) return false;
+    instance.key1_high = ((uint32_t)key1_bytes[0] << 24) | ((uint32_t)key1_bytes[1] << 16) |
+                         ((uint32_t)key1_bytes[2] << 8) | key1_bytes[3];
+    instance.key1_low = ((uint32_t)key1_bytes[4] << 24) | ((uint32_t)key1_bytes[5] << 16) |
+                        ((uint32_t)key1_bytes[6] << 8) | key1_bytes[7];
+
+    FuriString* temp = furi_string_alloc();
+    flipper_format_rewind(flipper_format);
+    if(!flipper_format_read_string(flipper_format, "Key_2", temp)) {
+        furi_string_free(temp);
+        return false;
+    }
+
+    const char* k2 = furi_string_get_cstr(temp);
+    uint64_t key2 = 0;
+    for(size_t i = 0; i < strlen(k2); i++) {
+        char c = k2[i];
+        if(c == ' ') continue;
+        uint8_t n = (c >= '0' && c <= '9')      ? (uint8_t)(c - '0') :
+                    (c >= 'A' && c <= 'F')      ? (uint8_t)(c - 'A' + 10) :
+                    (c >= 'a' && c <= 'f')      ? (uint8_t)(c - 'a' + 10) :
+                                                   0U;
+        key2 = (key2 << 4) | n;
+    }
+    furi_string_free(temp);
+
+    instance.key2_low = (uint32_t)(key2 & 0xFFFFFFFF);
+    instance.key2_high = (uint32_t)(key2 >> 32);
+    instance.status_flag = 0x80;
+    instance.mode_serialize = 0;
+
+    UNUSED(progress_cb);
+    UNUSED(progress_ctx);
+    psa_decrypt_router(&instance);
+    if(instance.decrypted != 0x50 || instance.decrypted_type == 0) return false;
+
+    flipper_format_rewind(flipper_format);
+    char serial_str[16];
+    snprintf(
+        serial_str,
+        sizeof(serial_str),
+        "%02X %02X %02X",
+        (unsigned int)((instance.decrypted_serial >> 16) & 0xFF),
+        (unsigned int)((instance.decrypted_serial >> 8) & 0xFF),
+        (unsigned int)(instance.decrypted_serial & 0xFF));
+    flipper_format_insert_or_update_string_cstr(flipper_format, "Serial", serial_str);
+
+    flipper_format_rewind(flipper_format);
+    char cnt_str[24];
+    if(instance.decrypted_type == 0x23) {
+        snprintf(
+            cnt_str,
+            sizeof(cnt_str),
+            "%02X %02X",
+            (unsigned int)((instance.decrypted_counter >> 8) & 0xFF),
+            (unsigned int)(instance.decrypted_counter & 0xFF));
+    } else {
+        snprintf(
+            cnt_str,
+            sizeof(cnt_str),
+            "%02X %02X %02X %02X",
+            (unsigned int)((instance.decrypted_counter >> 24) & 0x0F),
+            (unsigned int)((instance.decrypted_counter >> 16) & 0xFF),
+            (unsigned int)((instance.decrypted_counter >> 8) & 0xFF),
+            (unsigned int)(instance.decrypted_counter & 0xFF));
+    }
+    flipper_format_insert_or_update_string_cstr(flipper_format, "Cnt", cnt_str);
+
+    flipper_format_rewind(flipper_format);
+    char btn_str[8];
+    snprintf(btn_str, sizeof(btn_str), "%02X", (unsigned int)instance.decrypted_button);
+    flipper_format_insert_or_update_string_cstr(flipper_format, "Btn", btn_str);
+
+    flipper_format_rewind(flipper_format);
+    char type_str[8];
+    snprintf(type_str, sizeof(type_str), "%02X", (unsigned int)instance.decrypted_type);
+    flipper_format_insert_or_update_string_cstr(flipper_format, "Type", type_str);
+
+    flipper_format_rewind(flipper_format);
+    char crc_str[12];
+    if(instance.decrypted_type == 0x23) {
+        snprintf(crc_str, sizeof(crc_str), "%02X", (unsigned int)(instance.decrypted_crc & 0xFF));
+    } else {
+        snprintf(
+            crc_str,
+            sizeof(crc_str),
+            "%02X %02X",
+            (unsigned int)((instance.decrypted_crc >> 8) & 0xFF),
+            (unsigned int)(instance.decrypted_crc & 0xFF));
+    }
+    flipper_format_insert_or_update_string_cstr(flipper_format, "CRC", crc_str);
+
+    flipper_format_rewind(flipper_format);
+    char seed_str[16];
+    snprintf(
+        seed_str,
+        sizeof(seed_str),
+        "%02X %02X %02X",
+        (unsigned int)((instance.decrypted_serial >> 16) & 0xFF),
+        (unsigned int)((instance.decrypted_serial >> 8) & 0xFF),
+        (unsigned int)(instance.decrypted_serial & 0xFF));
+    flipper_format_insert_or_update_string_cstr(flipper_format, "Seed", seed_str);
+
+    if(result_str != NULL) {
+        furi_string_printf(
+            result_str,
+            "Type: %02X\nSeed: %08lX",
+            instance.decrypted_type,
+            instance.decrypted_seed);
+    }
+    return true;
+}
+
+bool subghz_protocol_psa_get_bf_params(FlipperFormat* flipper_format, uint32_t* w0, uint32_t* w1) {
+    SubGhzProtocolDecoderPSA instance = {0};
+    uint8_t key1_bytes[8] = {0};
+    flipper_format_rewind(flipper_format);
+    if(!flipper_format_read_hex(flipper_format, "Key", key1_bytes, 8)) return false;
+    instance.key1_high = ((uint32_t)key1_bytes[0] << 24) | ((uint32_t)key1_bytes[1] << 16) |
+                         ((uint32_t)key1_bytes[2] << 8) | key1_bytes[3];
+    instance.key1_low = ((uint32_t)key1_bytes[4] << 24) | ((uint32_t)key1_bytes[5] << 16) |
+                        ((uint32_t)key1_bytes[6] << 8) | key1_bytes[7];
+
+    FuriString* temp = furi_string_alloc();
+    flipper_format_rewind(flipper_format);
+    if(!flipper_format_read_string(flipper_format, "Key_2", temp)) {
+        furi_string_free(temp);
+        return false;
+    }
+
+    const char* k2 = furi_string_get_cstr(temp);
+    uint64_t key2 = 0;
+    for(size_t i = 0; i < strlen(k2); i++) {
+        char c = k2[i];
+        if(c == ' ') continue;
+        uint8_t n = (c >= '0' && c <= '9')      ? (uint8_t)(c - '0') :
+                    (c >= 'A' && c <= 'F')      ? (uint8_t)(c - 'A' + 10) :
+                    (c >= 'a' && c <= 'f')      ? (uint8_t)(c - 'a' + 10) :
+                                                   0U;
+        key2 = (key2 << 4) | n;
+    }
+    furi_string_free(temp);
+    instance.key2_low = (uint32_t)(key2 & 0xFFFFFFFF);
+
+    uint8_t buffer[48] = {0};
+    psa_setup_byte_buffer(buffer, instance.key1_low, instance.key1_high, instance.key2_low);
+    if(psa_direct_xor_decrypt(&instance, buffer)) return false;
+
+    psa_prepare_tea_data(buffer, w0, w1);
+    return true;
+}
+
+bool subghz_protocol_psa_apply_bf_result(
+    FlipperFormat* flipper_format,
+    FuriString* result_str,
+    uint32_t counter,
+    uint32_t dec_v0,
+    uint32_t dec_v1,
+    int bf_type) {
+    UNUSED(bf_type);
+    SubGhzProtocolDecoderPSA instance = {0};
+
+    uint8_t buffer[48] = {0};
+    psa_unpack_tea_result_to_buffer(buffer, dec_v0, dec_v1);
+    psa_extract_fields_mode36(buffer, &instance);
+    instance.decrypted_seed = counter;
+    instance.decrypted_type = 0x36;
+
+    flipper_format_rewind(flipper_format);
+    char serial_str[16];
+    snprintf(
+        serial_str,
+        sizeof(serial_str),
+        "%02X %02X %02X",
+        (unsigned int)((instance.decrypted_serial >> 16) & 0xFF),
+        (unsigned int)((instance.decrypted_serial >> 8) & 0xFF),
+        (unsigned int)(instance.decrypted_serial & 0xFF));
+    flipper_format_insert_or_update_string_cstr(flipper_format, "Serial", serial_str);
+
+    flipper_format_rewind(flipper_format);
+    char cnt_str[24];
+    snprintf(
+        cnt_str,
+        sizeof(cnt_str),
+        "%02X %02X %02X %02X",
+        (unsigned int)((instance.decrypted_counter >> 24) & 0x0F),
+        (unsigned int)((instance.decrypted_counter >> 16) & 0xFF),
+        (unsigned int)((instance.decrypted_counter >> 8) & 0xFF),
+        (unsigned int)(instance.decrypted_counter & 0xFF));
+    flipper_format_insert_or_update_string_cstr(flipper_format, "Cnt", cnt_str);
+
+    flipper_format_rewind(flipper_format);
+    char btn_str[8];
+    snprintf(btn_str, sizeof(btn_str), "%02X", (unsigned int)instance.decrypted_button);
+    flipper_format_insert_or_update_string_cstr(flipper_format, "Btn", btn_str);
+
+    flipper_format_rewind(flipper_format);
+    flipper_format_insert_or_update_string_cstr(flipper_format, "Type", "36");
+
+    flipper_format_rewind(flipper_format);
+    char crc_str[12];
+    snprintf(
+        crc_str,
+        sizeof(crc_str),
+        "%02X %02X",
+        (unsigned int)((instance.decrypted_crc >> 8) & 0xFF),
+        (unsigned int)(instance.decrypted_crc & 0xFF));
+    flipper_format_insert_or_update_string_cstr(flipper_format, "CRC", crc_str);
+
+    flipper_format_rewind(flipper_format);
+    char seed_str[16];
+    snprintf(
+        seed_str,
+        sizeof(seed_str),
+        "%02X %02X %02X",
+        (unsigned int)((instance.decrypted_serial >> 16) & 0xFF),
+        (unsigned int)((instance.decrypted_serial >> 8) & 0xFF),
+        (unsigned int)(instance.decrypted_serial & 0xFF));
+    flipper_format_insert_or_update_string_cstr(flipper_format, "Seed", seed_str);
+
+    if(result_str != NULL) {
+        furi_string_printf(result_str, "Decrypted (ext)!\nType: 36\nKey: %08lX", counter);
+    }
+    return true;
 }

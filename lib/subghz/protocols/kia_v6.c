@@ -1,5 +1,13 @@
 #include "kia_v6.h"
-#include "keys.h"
+#include "../blocks/const.h"
+#include "../blocks/decoder.h"
+#include "../blocks/encoder.h"
+#include "../blocks/generic.h"
+#include "../blocks/math.h"
+#include "../blocks/custom_btn_i.h"
+#include <lib/toolbox/manchester_decoder.h>
+#include <flipper_format/flipper_format.h>
+#include <furi_hal_crypto.h>
 #include <furi.h>
 #include <string.h>
 
@@ -101,32 +109,32 @@ typedef enum {
     KiaV6DecoderStepData,
 } KiaV6DecoderStep;
 
-const SubGhzProtocolDecoder kia_protocol_v6_decoder = {
-    .alloc = kia_protocol_decoder_v6_alloc,
-    .free = kia_protocol_decoder_v6_free,
-    .feed = kia_protocol_decoder_v6_feed,
-    .reset = kia_protocol_decoder_v6_reset,
-    .get_hash_data = kia_protocol_decoder_v6_get_hash_data,
-    .serialize = kia_protocol_decoder_v6_serialize,
-    .deserialize = kia_protocol_decoder_v6_deserialize,
-    .get_string = kia_protocol_decoder_v6_get_string,
+const SubGhzProtocolDecoder subghz_protocol_kia_v6_decoder = {
+    .alloc = subghz_protocol_decoder_kia_v6_alloc,
+    .free = subghz_protocol_decoder_kia_v6_free,
+    .feed = subghz_protocol_decoder_kia_v6_feed,
+    .reset = subghz_protocol_decoder_kia_v6_reset,
+    .get_hash_data = subghz_protocol_decoder_kia_v6_get_hash_data,
+    .serialize = subghz_protocol_decoder_kia_v6_serialize,
+    .deserialize = subghz_protocol_decoder_kia_v6_deserialize,
+    .get_string = subghz_protocol_decoder_kia_v6_get_string,
 };
 
-const SubGhzProtocolEncoder kia_protocol_v6_encoder = {
-    .alloc = kia_protocol_encoder_v6_alloc,
-    .free = kia_protocol_encoder_v6_free,
-    .deserialize = kia_protocol_encoder_v6_deserialize,
-    .stop = kia_protocol_encoder_v6_stop,
-    .yield = kia_protocol_encoder_v6_yield,
+const SubGhzProtocolEncoder subghz_protocol_kia_v6_encoder = {
+    .alloc = subghz_protocol_encoder_kia_v6_alloc,
+    .free = subghz_protocol_encoder_kia_v6_free,
+    .deserialize = subghz_protocol_encoder_kia_v6_deserialize,
+    .stop = subghz_protocol_encoder_kia_v6_stop,
+    .yield = subghz_protocol_encoder_kia_v6_yield,
 };
 
-const SubGhzProtocol kia_protocol_v6 = {
-    .name = KIA_PROTOCOL_V6_NAME,
+const SubGhzProtocol subghz_protocol_kia_v6 = {
+    .name = SUBGHZ_PROTOCOL_KIA_V6_NAME,
     .type = SubGhzProtocolTypeDynamic,
     .flag = SubGhzProtocolFlag_433 | SubGhzProtocolFlag_FM | SubGhzProtocolFlag_Decodable |
             SubGhzProtocolFlag_Save | SubGhzProtocolFlag_Load,
-    .decoder = &kia_protocol_v6_decoder,
-    .encoder = &kia_protocol_v6_encoder,
+    .decoder = &subghz_protocol_kia_v6_decoder,
+    .encoder = &subghz_protocol_kia_v6_encoder,
 };
 
 static uint8_t kia_v6_crc8(uint8_t* data, int len, uint8_t init, uint8_t polynomial) {
@@ -334,7 +342,7 @@ static void aes128_decrypt(const uint8_t* expanded_key, uint8_t* data) {
 }
 
 static void get_kia_v6_aes_key(uint8_t* aes_key) {
-    uint64_t keystore_a = get_kia_v6_keystore_a();
+    uint64_t keystore_a = 0x37CE21F8C9F862A8ULL ^ 0x5448455049524154ULL;
     uint32_t keystore_a_hi = (keystore_a >> 32) & 0xFFFFFFFF;
     uint32_t keystore_a_lo = keystore_a & 0xFFFFFFFF;
 
@@ -346,7 +354,7 @@ static void get_kia_v6_aes_key(uint8_t* aes_key) {
         aes_key[i] = (val64_a >> (56 - i * 8)) & 0xFF;
     }
 
-    uint64_t keystore_b = get_kia_v6_keystore_b();
+    uint64_t keystore_b = 0x3FC629F0C1F06AA0ULL ^ 0x5448455049524154ULL;
     uint32_t keystore_b_hi = (keystore_b >> 32) & 0xFFFFFFFF;
     uint32_t keystore_b_lo = keystore_b & 0xFFFFFFFF;
 
@@ -459,22 +467,22 @@ static bool kia_v6_decrypt(SubGhzProtocolDecoderKiaV6* instance) {
     return (calculated_crc ^ stored_crc) < 2;
 }
 
-void* kia_protocol_decoder_v6_alloc(SubGhzEnvironment* environment) {
+void* subghz_protocol_decoder_kia_v6_alloc(SubGhzEnvironment* environment) {
     UNUSED(environment);
     SubGhzProtocolDecoderKiaV6* instance = malloc(sizeof(SubGhzProtocolDecoderKiaV6));
     memset(instance, 0, sizeof(SubGhzProtocolDecoderKiaV6));
-    instance->base.protocol = &kia_protocol_v6;
+    instance->base.protocol = &subghz_protocol_kia_v6;
     instance->generic.protocol_name = instance->base.protocol->name;
     return instance;
 }
 
-void kia_protocol_decoder_v6_free(void* context) {
+void subghz_protocol_decoder_kia_v6_free(void* context) {
     furi_check(context);
     SubGhzProtocolDecoderKiaV6* instance = context;
     free(instance);
 }
 
-void kia_protocol_decoder_v6_reset(void* context) {
+void subghz_protocol_decoder_kia_v6_reset(void* context) {
     furi_check(context);
     SubGhzProtocolDecoderKiaV6* instance = context;
     instance->decoder.parser_step = KiaV6DecoderStepReset;
@@ -482,7 +490,7 @@ void kia_protocol_decoder_v6_reset(void* context) {
         instance->manchester_state, ManchesterEventReset, &instance->manchester_state, NULL);
 }
 
-void kia_protocol_decoder_v6_feed(void* context, bool level, uint32_t duration) {
+void subghz_protocol_decoder_kia_v6_feed(void* context, bool level, uint32_t duration) {
     furi_check(context);
     SubGhzProtocolDecoderKiaV6* instance = context;
 
@@ -651,7 +659,7 @@ LAB_reset:
     return;
 }
 
-uint8_t kia_protocol_decoder_v6_get_hash_data(void* context) {
+uint8_t subghz_protocol_decoder_kia_v6_get_hash_data(void* context) {
     furi_check(context);
     SubGhzProtocolDecoderKiaV6* instance = context;
 
@@ -670,7 +678,7 @@ uint8_t kia_protocol_decoder_v6_get_hash_data(void* context) {
     return hash;
 }
 
-SubGhzProtocolStatus kia_protocol_decoder_v6_serialize(
+SubGhzProtocolStatus subghz_protocol_decoder_kia_v6_serialize(
     void* context,
     FlipperFormat* flipper_format,
     SubGhzRadioPreset* preset) {
@@ -726,7 +734,7 @@ SubGhzProtocolStatus kia_protocol_decoder_v6_serialize(
 }
 
 SubGhzProtocolStatus
-    kia_protocol_decoder_v6_deserialize(void* context, FlipperFormat* flipper_format) {
+    subghz_protocol_decoder_kia_v6_deserialize(void* context, FlipperFormat* flipper_format) {
     furi_check(context);
     SubGhzProtocolDecoderKiaV6* instance = context;
 
@@ -803,7 +811,7 @@ SubGhzProtocolStatus
     return ret;
 }
 
-void kia_protocol_decoder_v6_get_string(void* context, FuriString* output) {
+void subghz_protocol_decoder_kia_v6_get_string(void* context, FuriString* output) {
     furi_check(context);
     SubGhzProtocolDecoderKiaV6* instance = context;
 
@@ -902,7 +910,7 @@ static void kia_v6_encode_message(
     }
 }
 
-static void kia_protocol_encoder_v6_build_upload(SubGhzProtocolEncoderKiaV6* instance) {
+static void subghz_protocol_encoder_kia_v6_build_upload(SubGhzProtocolEncoderKiaV6* instance) {
     furi_check(instance);
 
     kia_v6_encrypt_payload(
@@ -956,12 +964,12 @@ static void kia_protocol_encoder_v6_build_upload(SubGhzProtocolEncoderKiaV6* ins
     instance->encoder.front = 0;
 }
 
-void* kia_protocol_encoder_v6_alloc(SubGhzEnvironment* environment) {
+void* subghz_protocol_encoder_kia_v6_alloc(SubGhzEnvironment* environment) {
     UNUSED(environment);
     SubGhzProtocolEncoderKiaV6* instance = malloc(sizeof(SubGhzProtocolEncoderKiaV6));
     if(!instance) return NULL;
     memset(instance, 0, sizeof(SubGhzProtocolEncoderKiaV6));
-    instance->base.protocol = &kia_protocol_v6;
+    instance->base.protocol = &subghz_protocol_kia_v6;
     instance->generic.protocol_name = instance->base.protocol->name;
     instance->encoder.size_upload = 2000;
     instance->encoder.upload = malloc(instance->encoder.size_upload * sizeof(LevelDuration));
@@ -975,7 +983,7 @@ void* kia_protocol_encoder_v6_alloc(SubGhzEnvironment* environment) {
     return instance;
 }
 
-void kia_protocol_encoder_v6_free(void* context) {
+void subghz_protocol_encoder_kia_v6_free(void* context) {
     furi_check(context);
     SubGhzProtocolEncoderKiaV6* instance = context;
     if(instance->encoder.upload) {
@@ -985,7 +993,7 @@ void kia_protocol_encoder_v6_free(void* context) {
 }
 
 SubGhzProtocolStatus
-    kia_protocol_encoder_v6_deserialize(void* context, FlipperFormat* flipper_format) {
+    subghz_protocol_encoder_kia_v6_deserialize(void* context, FlipperFormat* flipper_format) {
     furi_check(context);
     SubGhzProtocolEncoderKiaV6* instance = context;
     SubGhzProtocolStatus ret = SubGhzProtocolStatusError;
@@ -1050,7 +1058,7 @@ SubGhzProtocolStatus
             (unsigned long)instance->generic.cnt,
             (long)instance->encoder.repeat);
 
-        kia_protocol_encoder_v6_build_upload(instance);
+        subghz_protocol_encoder_kia_v6_build_upload(instance);
         instance->encoder.is_running = true;
         ret = SubGhzProtocolStatusOk;
     } while(false);
@@ -1059,13 +1067,13 @@ SubGhzProtocolStatus
     return ret;
 }
 
-void kia_protocol_encoder_v6_stop(void* context) {
+void subghz_protocol_encoder_kia_v6_stop(void* context) {
     furi_check(context);
     SubGhzProtocolEncoderKiaV6* instance = context;
     instance->encoder.is_running = false;
 }
 
-LevelDuration kia_protocol_encoder_v6_yield(void* context) {
+LevelDuration subghz_protocol_encoder_kia_v6_yield(void* context) {
     furi_check(context);
     SubGhzProtocolEncoderKiaV6* instance = context;
 

@@ -1,5 +1,12 @@
 #include "kia_v3_v4.h"
-#include "keys.h"
+#include "../blocks/const.h"
+#include "../blocks/decoder.h"
+#include "../blocks/encoder.h"
+#include "../blocks/generic.h"
+#include "../blocks/math.h"
+#include "../blocks/custom_btn_i.h"
+
+#define KIA_MF_KEY 0xA8F5DFFC8DAA5CDBULL
 
 #define TAG "KiaV3V4"
 
@@ -139,7 +146,7 @@ static bool kia_v3_v4_process_buffer(SubGhzProtocolDecoderKiaV3V4* instance) {
     uint8_t btn = (reverse8(b[7]) & 0xF0) >> 4;
     uint8_t our_serial_lsb = serial & 0xFF;
 
-    uint32_t decrypted = keeloq_common_decrypt(encrypted, get_kia_mf_key());
+    uint32_t decrypted = keeloq_common_decrypt(encrypted, KIA_MF_KEY);
     uint8_t dec_btn = (decrypted >> 28) & 0x0F;
     uint8_t dec_serial_lsb = (decrypted >> 16) & 0xFF;
 
@@ -164,44 +171,44 @@ static bool kia_v3_v4_process_buffer(SubGhzProtocolDecoderKiaV3V4* instance) {
     return true;
 }
 
-const SubGhzProtocolDecoder kia_protocol_v3_v4_decoder = {
-    .alloc = kia_protocol_decoder_v3_v4_alloc,
-    .free = kia_protocol_decoder_v3_v4_free,
-    .feed = kia_protocol_decoder_v3_v4_feed,
-    .reset = kia_protocol_decoder_v3_v4_reset,
-    .get_hash_data = kia_protocol_decoder_v3_v4_get_hash_data,
-    .serialize = kia_protocol_decoder_v3_v4_serialize,
-    .deserialize = kia_protocol_decoder_v3_v4_deserialize,
-    .get_string = kia_protocol_decoder_v3_v4_get_string,
+const SubGhzProtocolDecoder subghz_protocol_kia_v3_v4_decoder = {
+    .alloc = subghz_protocol_decoder_kia_v3_v4_alloc,
+    .free = subghz_protocol_decoder_kia_v3_v4_free,
+    .feed = subghz_protocol_decoder_kia_v3_v4_feed,
+    .reset = subghz_protocol_decoder_kia_v3_v4_reset,
+    .get_hash_data = subghz_protocol_decoder_kia_v3_v4_get_hash_data,
+    .serialize = subghz_protocol_decoder_kia_v3_v4_serialize,
+    .deserialize = subghz_protocol_decoder_kia_v3_v4_deserialize,
+    .get_string = subghz_protocol_decoder_kia_v3_v4_get_string,
 };
 
-const SubGhzProtocolEncoder kia_protocol_v3_v4_encoder = {
-    .alloc = kia_protocol_encoder_v3_v4_alloc,
-    .free = kia_protocol_encoder_v3_v4_free,
-    .deserialize = kia_protocol_encoder_v3_v4_deserialize,
-    .stop = kia_protocol_encoder_v3_v4_stop,
-    .yield = kia_protocol_encoder_v3_v4_yield,
+const SubGhzProtocolEncoder subghz_protocol_kia_v3_v4_encoder = {
+    .alloc = subghz_protocol_encoder_kia_v3_v4_alloc,
+    .free = subghz_protocol_encoder_kia_v3_v4_free,
+    .deserialize = subghz_protocol_encoder_kia_v3_v4_deserialize,
+    .stop = subghz_protocol_encoder_kia_v3_v4_stop,
+    .yield = subghz_protocol_encoder_kia_v3_v4_yield,
 };
 
-const SubGhzProtocol kia_protocol_v3_v4 = {
-    .name = KIA_PROTOCOL_V3_V4_NAME,
+const SubGhzProtocol subghz_protocol_kia_v3_v4 = {
+    .name = SUBGHZ_PROTOCOL_KIA_V3_V4_NAME,
     .type = SubGhzProtocolTypeDynamic,
     .flag = SubGhzProtocolFlag_315 | SubGhzProtocolFlag_433 | SubGhzProtocolFlag_FM |
             SubGhzProtocolFlag_Decodable | SubGhzProtocolFlag_Load | SubGhzProtocolFlag_Save |
             SubGhzProtocolFlag_Send,
-    .decoder = &kia_protocol_v3_v4_decoder,
-    .encoder = &kia_protocol_v3_v4_encoder,
+    .decoder = &subghz_protocol_kia_v3_v4_decoder,
+    .encoder = &subghz_protocol_kia_v3_v4_encoder,
 };
 
 // ============================================================================
 // ENCODER IMPLEMENTATION
 // ============================================================================
 
-void* kia_protocol_encoder_v3_v4_alloc(SubGhzEnvironment* environment) {
+void* subghz_protocol_encoder_kia_v3_v4_alloc(SubGhzEnvironment* environment) {
     UNUSED(environment);
     SubGhzProtocolEncoderKiaV3V4* instance = malloc(sizeof(SubGhzProtocolEncoderKiaV3V4));
 
-    instance->base.protocol = &kia_protocol_v3_v4;
+    instance->base.protocol = &subghz_protocol_kia_v3_v4;
     instance->generic.protocol_name = instance->base.protocol->name;
 
     instance->serial = 0;
@@ -219,7 +226,7 @@ void* kia_protocol_encoder_v3_v4_alloc(SubGhzEnvironment* environment) {
     return instance;
 }
 
-void kia_protocol_encoder_v3_v4_free(void* context) {
+void subghz_protocol_encoder_kia_v3_v4_free(void* context) {
     furi_check(context);
     SubGhzProtocolEncoderKiaV3V4* instance = context;
     if(instance->encoder.upload) {
@@ -228,7 +235,7 @@ void kia_protocol_encoder_v3_v4_free(void* context) {
     free(instance);
 }
 
-static void kia_protocol_encoder_v3_v4_build_packet(
+static void subghz_protocol_encoder_kia_v3_v4_build_packet(
     SubGhzProtocolEncoderKiaV3V4* instance,
     uint8_t* raw_bytes) {
     // Build plaintext for encryption:
@@ -237,7 +244,7 @@ static void kia_protocol_encoder_v3_v4_build_packet(
 
     instance->decrypted = plaintext;
 
-    uint32_t encrypted = keeloq_common_encrypt(plaintext, get_kia_mf_key());
+    uint32_t encrypted = keeloq_common_encrypt(plaintext, KIA_MF_KEY);
     instance->encrypted = encrypted;
 
     FURI_LOG_I(
@@ -295,11 +302,11 @@ static void kia_protocol_encoder_v3_v4_build_packet(
         crc);
 }
 
-static void kia_protocol_encoder_v3_v4_get_upload(SubGhzProtocolEncoderKiaV3V4* instance) {
+static void subghz_protocol_encoder_kia_v3_v4_get_upload(SubGhzProtocolEncoderKiaV3V4* instance) {
     furi_check(instance);
 
     uint8_t raw_bytes[9];
-    kia_protocol_encoder_v3_v4_build_packet(instance, raw_bytes);
+    subghz_protocol_encoder_kia_v3_v4_build_packet(instance, raw_bytes);
 
     if(instance->version == 1) {
         for(int i = 0; i < 9; i++) {
@@ -375,7 +382,7 @@ static void kia_protocol_encoder_v3_v4_get_upload(SubGhzProtocolEncoderKiaV3V4* 
 }
 
 SubGhzProtocolStatus
-    kia_protocol_encoder_v3_v4_deserialize(void* context, FlipperFormat* flipper_format) {
+    subghz_protocol_encoder_kia_v3_v4_deserialize(void* context, FlipperFormat* flipper_format) {
     furi_check(context);
     SubGhzProtocolEncoderKiaV3V4* instance = context;
 
@@ -553,7 +560,7 @@ SubGhzProtocolStatus
         }
 
         // Build the upload
-        kia_protocol_encoder_v3_v4_get_upload(instance);
+        subghz_protocol_encoder_kia_v3_v4_get_upload(instance);
 
         instance->encoder.is_running = true;
         instance->encoder.front = 0;
@@ -572,14 +579,14 @@ SubGhzProtocolStatus
     return ret;
 }
 
-void kia_protocol_encoder_v3_v4_stop(void* context) {
+void subghz_protocol_encoder_kia_v3_v4_stop(void* context) {
     if(!context) return;
     SubGhzProtocolEncoderKiaV3V4* instance = context;
     instance->encoder.is_running = false;
     instance->encoder.front = 0;
 }
 
-LevelDuration kia_protocol_encoder_v3_v4_yield(void* context) {
+LevelDuration subghz_protocol_encoder_kia_v3_v4_yield(void* context) {
     SubGhzProtocolEncoderKiaV3V4* instance = context;
 
     if(!instance || !instance->encoder.upload || instance->encoder.repeat == 0 ||
@@ -628,40 +635,40 @@ LevelDuration kia_protocol_encoder_v3_v4_yield(void* context) {
     return ret;
 }
 
-void kia_protocol_encoder_v3_v4_set_button(void* context, uint8_t button) {
+void subghz_protocol_encoder_kia_v3_v4_set_button(void* context, uint8_t button) {
     furi_check(context);
     SubGhzProtocolEncoderKiaV3V4* instance = context;
     instance->btn = button & 0x0F;
     instance->generic.btn = instance->btn;
-    kia_protocol_encoder_v3_v4_get_upload(instance);
+    subghz_protocol_encoder_kia_v3_v4_get_upload(instance);
     FURI_LOG_I(TAG, "Button set to 0x%X", instance->btn);
 }
 
-void kia_protocol_encoder_v3_v4_set_counter(void* context, uint16_t counter) {
+void subghz_protocol_encoder_kia_v3_v4_set_counter(void* context, uint16_t counter) {
     furi_check(context);
     SubGhzProtocolEncoderKiaV3V4* instance = context;
     instance->cnt = counter;
     instance->generic.cnt = instance->cnt;
-    kia_protocol_encoder_v3_v4_get_upload(instance);
+    subghz_protocol_encoder_kia_v3_v4_get_upload(instance);
     FURI_LOG_I(TAG, "Counter set to 0x%04X", instance->cnt);
 }
 
-void kia_protocol_encoder_v3_v4_increment_counter(void* context) {
+void subghz_protocol_encoder_kia_v3_v4_increment_counter(void* context) {
     furi_check(context);
     SubGhzProtocolEncoderKiaV3V4* instance = context;
     instance->cnt++;
     instance->generic.cnt = instance->cnt;
-    kia_protocol_encoder_v3_v4_get_upload(instance);
+    subghz_protocol_encoder_kia_v3_v4_get_upload(instance);
     FURI_LOG_I(TAG, "Counter incremented to 0x%04X", instance->cnt);
 }
 
-uint16_t kia_protocol_encoder_v3_v4_get_counter(void* context) {
+uint16_t subghz_protocol_encoder_kia_v3_v4_get_counter(void* context) {
     furi_check(context);
     SubGhzProtocolEncoderKiaV3V4* instance = context;
     return instance->cnt;
 }
 
-uint8_t kia_protocol_encoder_v3_v4_get_button(void* context) {
+uint8_t subghz_protocol_encoder_kia_v3_v4_get_button(void* context) {
     furi_check(context);
     SubGhzProtocolEncoderKiaV3V4* instance = context;
     return instance->btn;
@@ -671,21 +678,21 @@ uint8_t kia_protocol_encoder_v3_v4_get_button(void* context) {
 // DECODER IMPLEMENTATION
 // ============================================================================
 
-void* kia_protocol_decoder_v3_v4_alloc(SubGhzEnvironment* environment) {
+void* subghz_protocol_decoder_kia_v3_v4_alloc(SubGhzEnvironment* environment) {
     UNUSED(environment);
     SubGhzProtocolDecoderKiaV3V4* instance = malloc(sizeof(SubGhzProtocolDecoderKiaV3V4));
-    instance->base.protocol = &kia_protocol_v3_v4;
+    instance->base.protocol = &subghz_protocol_kia_v3_v4;
     instance->generic.protocol_name = instance->base.protocol->name;
     return instance;
 }
 
-void kia_protocol_decoder_v3_v4_free(void* context) {
+void subghz_protocol_decoder_kia_v3_v4_free(void* context) {
     furi_check(context);
     SubGhzProtocolDecoderKiaV3V4* instance = context;
     free(instance);
 }
 
-void kia_protocol_decoder_v3_v4_reset(void* context) {
+void subghz_protocol_decoder_kia_v3_v4_reset(void* context) {
     furi_check(context);
     SubGhzProtocolDecoderKiaV3V4* instance = context;
     instance->decoder.parser_step = KiaV3V4DecoderStepReset;
@@ -695,7 +702,7 @@ void kia_protocol_decoder_v3_v4_reset(void* context) {
     memset(instance->raw_bits, 0, sizeof(instance->raw_bits));
 }
 
-void kia_protocol_decoder_v3_v4_feed(void* context, bool level, uint32_t duration) {
+void subghz_protocol_decoder_kia_v3_v4_feed(void* context, bool level, uint32_t duration) {
     furi_check(context);
     SubGhzProtocolDecoderKiaV3V4* instance = context;
 
@@ -786,14 +793,14 @@ void kia_protocol_decoder_v3_v4_feed(void* context, bool level, uint32_t duratio
     }
 }
 
-uint8_t kia_protocol_decoder_v3_v4_get_hash_data(void* context) {
+uint8_t subghz_protocol_decoder_kia_v3_v4_get_hash_data(void* context) {
     furi_check(context);
     SubGhzProtocolDecoderKiaV3V4* instance = context;
     return subghz_protocol_blocks_get_hash_data(
         &instance->decoder, (instance->decoder.decode_count_bit / 8) + 1);
 }
 
-SubGhzProtocolStatus kia_protocol_decoder_v3_v4_serialize(
+SubGhzProtocolStatus subghz_protocol_decoder_kia_v3_v4_serialize(
     void* context,
     FlipperFormat* flipper_format,
     SubGhzRadioPreset* preset) {
@@ -874,7 +881,7 @@ SubGhzProtocolStatus kia_protocol_decoder_v3_v4_serialize(
 }
 
 SubGhzProtocolStatus
-    kia_protocol_decoder_v3_v4_deserialize(void* context, FlipperFormat* flipper_format) {
+    subghz_protocol_decoder_kia_v3_v4_deserialize(void* context, FlipperFormat* flipper_format) {
     furi_check(context);
     SubGhzProtocolDecoderKiaV3V4* instance = context;
 
@@ -909,7 +916,7 @@ static uint64_t compute_yek(uint64_t key) {
     return yek;
 }
 
-void kia_protocol_decoder_v3_v4_get_string(void* context, FuriString* output) {
+void subghz_protocol_decoder_kia_v3_v4_get_string(void* context, FuriString* output) {
     furi_check(context);
     SubGhzProtocolDecoderKiaV3V4* instance = context;
 

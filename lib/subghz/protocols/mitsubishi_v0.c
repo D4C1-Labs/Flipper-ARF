@@ -19,6 +19,8 @@ typedef enum {
     MitsubishiDecoderStepDataCheck,
 } MitsubishiDecoderStep;
 
+typedef struct SubGhzProtocolDecoderMitsubishi SubGhzProtocolDecoderMitsubishi;
+
 struct SubGhzProtocolDecoderMitsubishi {
     SubGhzProtocolDecoderBase base;
     SubGhzBlockDecoder decoder;
@@ -104,18 +106,18 @@ static void mitsubishi_publish_frame(SubGhzProtocolDecoderMitsubishi* instance) 
     }
 }
 
-const SubGhzProtocolDecoder subghz_protocol_mitsubishi_decoder = {
-    .alloc = subghz_protocol_decoder_mitsubishi_alloc,
-    .free = subghz_protocol_decoder_mitsubishi_free,
-    .feed = subghz_protocol_decoder_mitsubishi_feed,
-    .reset = subghz_protocol_decoder_mitsubishi_reset,
-    .get_hash_data = subghz_protocol_decoder_mitsubishi_get_hash_data,
-    .serialize = subghz_protocol_decoder_mitsubishi_serialize,
-    .deserialize = subghz_protocol_decoder_mitsubishi_deserialize,
-    .get_string = subghz_protocol_decoder_mitsubishi_get_string,
+const SubGhzProtocolDecoder subghz_protocol_mitsubishi_v0_decoder = {
+    .alloc = subghz_protocol_decoder_mitsubishi_v0_alloc,
+    .free = subghz_protocol_decoder_mitsubishi_v0_free,
+    .feed = subghz_protocol_decoder_mitsubishi_v0_feed,
+    .reset = subghz_protocol_decoder_mitsubishi_v0_reset,
+    .get_hash_data = subghz_protocol_decoder_mitsubishi_v0_get_hash_data,
+    .serialize = subghz_protocol_decoder_mitsubishi_v0_serialize,
+    .deserialize = subghz_protocol_decoder_mitsubishi_v0_deserialize,
+    .get_string = subghz_protocol_decoder_mitsubishi_v0_get_string,
 };
 
-const SubGhzProtocolEncoder subghz_protocol_mitsubishi_encoder = {
+const SubGhzProtocolEncoder subghz_protocol_mitsubishi_v0_encoder = {
     .alloc = NULL,
     .free = NULL,
     .deserialize = NULL,
@@ -123,31 +125,31 @@ const SubGhzProtocolEncoder subghz_protocol_mitsubishi_encoder = {
     .yield = NULL,
 };
 
-const SubGhzProtocol mitsubishi_v0_protocol = {
-    .name = MITSUBISHI_PROTOCOL_NAME,
+const SubGhzProtocol subghz_protocol_mitsubishi_v0 = {
+    .name = MITSUBISHI_PROTOCOL_V0_NAME,
     .type = SubGhzProtocolTypeDynamic,
     .flag = SubGhzProtocolFlag_868 | SubGhzProtocolFlag_FM | SubGhzProtocolFlag_Decodable |
             SubGhzProtocolFlag_Load | SubGhzProtocolFlag_Save,
-    .decoder = &subghz_protocol_mitsubishi_decoder,
-    .encoder = &subghz_protocol_mitsubishi_encoder,
+    .decoder = &subghz_protocol_mitsubishi_v0_decoder,
+    .encoder = &subghz_protocol_mitsubishi_v0_encoder,
 };
 
-void* subghz_protocol_decoder_mitsubishi_alloc(SubGhzEnvironment* environment) {
+void* subghz_protocol_decoder_mitsubishi_v0_alloc(SubGhzEnvironment* environment) {
     UNUSED(environment);
     SubGhzProtocolDecoderMitsubishi* instance = calloc(1, sizeof(SubGhzProtocolDecoderMitsubishi));
     furi_check(instance);
-    instance->base.protocol = &mitsubishi_v0_protocol;
+    instance->base.protocol = &subghz_protocol_mitsubishi_v0;
     instance->generic.protocol_name = instance->base.protocol->name;
     return instance;
 }
 
-void subghz_protocol_decoder_mitsubishi_free(void* context) {
+void subghz_protocol_decoder_mitsubishi_v0_free(void* context) {
     furi_check(context);
     SubGhzProtocolDecoderMitsubishi* instance = context;
     free(instance);
 }
 
-void subghz_protocol_decoder_mitsubishi_reset(void* context) {
+void subghz_protocol_decoder_mitsubishi_v0_reset(void* context) {
     furi_check(context);
     SubGhzProtocolDecoderMitsubishi* instance = context;
     instance->decoder_state = MitsubishiDecoderStepReset;
@@ -156,7 +158,7 @@ void subghz_protocol_decoder_mitsubishi_reset(void* context) {
     mitsubishi_reset_payload(instance);
 }
 
-void subghz_protocol_decoder_mitsubishi_feed(void* context, bool level, uint32_t duration) {
+void subghz_protocol_decoder_mitsubishi_v0_feed(void* context, bool level, uint32_t duration) {
     furi_check(context);
     SubGhzProtocolDecoderMitsubishi* instance = context;
 
@@ -199,7 +201,7 @@ void subghz_protocol_decoder_mitsubishi_feed(void* context, bool level, uint32_t
     }
 }
 
-uint8_t subghz_protocol_decoder_mitsubishi_get_hash_data(void* context) {
+uint8_t subghz_protocol_decoder_mitsubishi_v0_get_hash_data(void* context) {
     furi_check(context);
     SubGhzProtocolDecoderMitsubishi* instance = context;
     uint8_t hash = 0;
@@ -209,7 +211,7 @@ uint8_t subghz_protocol_decoder_mitsubishi_get_hash_data(void* context) {
     return hash;
 }
 
-SubGhzProtocolStatus subghz_protocol_decoder_mitsubishi_serialize(
+SubGhzProtocolStatus subghz_protocol_decoder_mitsubishi_v0_serialize(
     void* context,
     FlipperFormat* flipper_format,
     SubGhzRadioPreset* preset) {
@@ -227,7 +229,7 @@ SubGhzProtocolStatus subghz_protocol_decoder_mitsubishi_serialize(
 }
 
 SubGhzProtocolStatus
-    subghz_protocol_decoder_mitsubishi_deserialize(void* context, FlipperFormat* flipper_format) {
+    subghz_protocol_decoder_mitsubishi_v0_deserialize(void* context, FlipperFormat* flipper_format) {
     furi_check(context);
     SubGhzProtocolDecoderMitsubishi* instance = context;
     SubGhzProtocolStatus ret = subghz_block_generic_deserialize_check_count_bit(
@@ -246,7 +248,7 @@ SubGhzProtocolStatus
     return ret;
 }
 
-void subghz_protocol_decoder_mitsubishi_get_string(void* context, FuriString* output) {
+void subghz_protocol_decoder_mitsubishi_v0_get_string(void* context, FuriString* output) {
     furi_check(context);
     SubGhzProtocolDecoderMitsubishi* instance = context;
 
