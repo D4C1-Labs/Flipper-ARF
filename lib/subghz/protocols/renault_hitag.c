@@ -16,7 +16,7 @@
 #define HITAG_TE_LONG   400
 #define HITAG_TE_DELTA  120
 #define HITAG_MIN_BITS  40
-#define HITAG_MAX_BITS  63
+#define HITAG_MAX_BITS  80
 #define HITAG_GAP_MIN   (HITAG_TE_LONG * 3)
 
 typedef enum {
@@ -42,6 +42,34 @@ static inline uint32_t hitag_abs_diff(uint32_t a, uint32_t b) {
     return (a > b) ? (a - b) : (b - a);
 }
 
+static bool renault_hitag_button_is_valid(uint8_t btn) {
+    // Keep permissive set for newer variants but reject obvious garbage values.
+    return (btn <= 0x0B) || (btn == 0x0D);
+}
+
+static bool renault_hitag_frame_is_plausible(RenaultHitagDecoder* inst) {
+    if(inst->bit_count < HITAG_MIN_BITS || inst->bit_count > HITAG_MAX_BITS) {
+        return false;
+    }
+
+    // Typical packet sizes observed in the field.
+    if(inst->bit_count < 48U) {
+        if(inst->bit_count != 40U) return false;
+    } else if((inst->bit_count % 4U) != 0U) {
+        return false;
+    }
+
+    const uint8_t btn = (uint8_t)((inst->data >> (inst->bit_count - 4U)) & 0x0FU);
+    if(!renault_hitag_button_is_valid(btn)) {
+        return false;
+    }
+
+    const uint32_t serial = (inst->bit_count >= 48U) ?
+                                (uint32_t)((inst->data >> 16U) & 0x0FFFFFFFU) :
+                                (uint32_t)((inst->data >> 12U) & 0x00FFFFFFU);
+    return serial != 0U;
+}
+
 static void renault_hitag_extract_fields(RenaultHitagDecoder* inst) {
     uint8_t total = inst->generic.data_count_bit;
     if(total >= 48) {
@@ -60,7 +88,7 @@ static void renault_hitag_extract_fields(RenaultHitagDecoder* inst) {
 }
 
 static void renault_hitag_try_accept(RenaultHitagDecoder* inst) {
-    if(inst->bit_count >= HITAG_MIN_BITS && inst->bit_count <= HITAG_MAX_BITS) {
+    if(renault_hitag_frame_is_plausible(inst)) {
         inst->generic.data = inst->data;
         inst->generic.data_count_bit = inst->bit_count;
         renault_hitag_extract_fields(inst);

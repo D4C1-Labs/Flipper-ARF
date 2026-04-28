@@ -83,6 +83,29 @@ typedef enum {
     RenMarelliDecoderStepRetxSync = 4,
 } RenMarelliDecoderStep;
 
+static bool renault_marelli_button_is_renault(uint8_t btn) {
+    // Renault Marelli: button codes usually seen as 0x1/0x2/0x4.
+    // Fiat Marelli commonly uses 0x7/0xB/0xD.
+    return (btn == 0x1) || (btn == 0x2) || (btn == 0x4);
+}
+
+static bool renault_marelli_frame_is_renault(const SubGhzProtocolDecoderRenaultMarelli* instance) {
+    const uint8_t btn = (instance->raw_data[6] >> 4) & 0xF;
+    const uint8_t fixed = instance->raw_data[7] & 0x1;
+    const uint8_t scramble = (instance->raw_data[7] >> 1) & 0x3;
+
+    if(!renault_marelli_button_is_renault(btn)) {
+        return false;
+    }
+
+    // Keep structural guards to reduce false positives from noise.
+    if(fixed > 1U || scramble > 3U) {
+        return false;
+    }
+
+    return true;
+}
+
 const SubGhzProtocolDecoder subghz_protocol_renault_marelli_decoder = {
     .alloc = subghz_protocol_decoder_renault_marelli_alloc,
     .free = subghz_protocol_decoder_renault_marelli_free,
@@ -537,7 +560,7 @@ void subghz_protocol_decoder_renault_marelli_feed(void* context, bool level, uin
             instance->generic.btn = (instance->raw_data[6] >> 4) & 0xF;
             instance->generic.cnt = (instance->raw_data[7] >> 3) & 0x1F;
 
-            if(instance->base.callback) {
+            if(renault_marelli_frame_is_renault(instance) && instance->base.callback) {
                 instance->base.callback(&instance->base, instance->base.context);
             }
 

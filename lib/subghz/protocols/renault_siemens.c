@@ -16,7 +16,7 @@
 #define SIEMENS_TE_LONG   500
 #define SIEMENS_TE_DELTA  120
 #define SIEMENS_MIN_BITS  64
-#define SIEMENS_MAX_BITS  80
+#define SIEMENS_MAX_BITS  96
 #define SIEMENS_GAP_MIN   (SIEMENS_TE_LONG * 3)
 
 typedef enum {
@@ -42,6 +42,28 @@ static inline uint32_t siemens_abs_diff(uint32_t a, uint32_t b) {
     return (a > b) ? (a - b) : (b - a);
 }
 
+static bool renault_siemens_button_is_valid(uint8_t btn) {
+    // Conservative acceptance window for common Renault button nibbles.
+    return (btn <= 0x0D) && (btn != 0x0C);
+}
+
+static bool renault_siemens_frame_is_plausible(RenaultSiemensDecoder* inst) {
+    if(inst->bit_count < SIEMENS_MIN_BITS || inst->bit_count > SIEMENS_MAX_BITS) {
+        return false;
+    }
+    if((inst->bit_count % 4U) != 0U) {
+        return false;
+    }
+
+    const uint8_t btn = (uint8_t)((inst->data >> 28U) & 0x0FU);
+    if(!renault_siemens_button_is_valid(btn)) {
+        return false;
+    }
+
+    const uint32_t serial = (uint32_t)(inst->data >> 32U);
+    return serial != 0U;
+}
+
 static void renault_siemens_extract_fields(RenaultSiemensDecoder* inst) {
     inst->generic.serial = (uint32_t)(inst->generic.data >> 32);
     inst->generic.btn = (uint8_t)((inst->generic.data >> 28) & 0xF);
@@ -49,7 +71,7 @@ static void renault_siemens_extract_fields(RenaultSiemensDecoder* inst) {
 }
 
 static void renault_siemens_try_accept(RenaultSiemensDecoder* inst) {
-    if(inst->bit_count >= SIEMENS_MIN_BITS && inst->bit_count <= SIEMENS_MAX_BITS) {
+    if(renault_siemens_frame_is_plausible(inst)) {
         inst->generic.data = inst->data;
         inst->generic.data_count_bit = inst->bit_count;
         renault_siemens_extract_fields(inst);

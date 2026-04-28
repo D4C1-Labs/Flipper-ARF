@@ -21,6 +21,9 @@
 #define VALEO_FSK_TE_SHORT   500
 #define VALEO_FSK_TE_LONG    1000
 #define VALEO_FSK_TE_DELTA   200
+#define VALEO_FSK_TE_SHORT_ALT 400
+#define VALEO_FSK_TE_LONG_ALT  800
+#define VALEO_FSK_TE_DELTA_ALT 180
 #define VALEO_FSK_MIN_BITS   64
 #define VALEO_FSK_MAX_BITS   96
 #define VALEO_FSK_PREAMBLE_MIN 8
@@ -49,6 +52,19 @@ typedef struct {
     SubGhzKeystore* keystore;
     const char* manufacture_name;
 } RenaultValeoFSKDecoder;
+
+static bool renault_valeo_fsk_frame_is_plausible(RenaultValeoFSKDecoder* inst) {
+    if(inst->bit_count < VALEO_FSK_MIN_BITS || inst->bit_count > VALEO_FSK_MAX_BITS) {
+        return false;
+    }
+    if((inst->bit_count % 2U) != 0U) {
+        return false;
+    }
+    const uint32_t fix = (uint32_t)(inst->data >> 32U);
+    const uint8_t btn = (uint8_t)((fix >> 28U) & 0x0FU);
+    const uint32_t serial = fix & 0x0FFFFFFFU;
+    return (serial != 0U) && (btn <= 0x0DU);
+}
 
 // ─── KeeLoq decode ───────────────────────────────────────────────────────────
 
@@ -94,8 +110,7 @@ static void renault_valeo_fsk_decode_keeloq(RenaultValeoFSKDecoder* inst) {
 // ─── Accept helper ───────────────────────────────────────────────────────────
 
 static void renault_valeo_fsk_try_accept(RenaultValeoFSKDecoder* inst) {
-    if(inst->bit_count >= VALEO_FSK_MIN_BITS &&
-       inst->bit_count <= VALEO_FSK_MAX_BITS) {
+    if(renault_valeo_fsk_frame_is_plausible(inst)) {
         inst->generic.data = inst->data;
         inst->generic.data_count_bit = inst->bit_count;
         renault_valeo_fsk_decode_keeloq(inst);
@@ -143,9 +158,11 @@ static void renault_valeo_fsk_feed(void* ctx, bool level, uint32_t duration) {
     // Classify duration
     ManchesterEvent event = ManchesterEventReset;
 
-    if(DURATION_DIFF(duration, VALEO_FSK_TE_SHORT) < VALEO_FSK_TE_DELTA) {
+    if((DURATION_DIFF(duration, VALEO_FSK_TE_SHORT) < VALEO_FSK_TE_DELTA) ||
+       (DURATION_DIFF(duration, VALEO_FSK_TE_SHORT_ALT) < VALEO_FSK_TE_DELTA_ALT)) {
         event = level ? ManchesterEventShortHigh : ManchesterEventShortLow;
-    } else if(DURATION_DIFF(duration, VALEO_FSK_TE_LONG) < VALEO_FSK_TE_DELTA) {
+    } else if((DURATION_DIFF(duration, VALEO_FSK_TE_LONG) < VALEO_FSK_TE_DELTA) ||
+              (DURATION_DIFF(duration, VALEO_FSK_TE_LONG_ALT) < VALEO_FSK_TE_DELTA_ALT)) {
         event = level ? ManchesterEventLongHigh : ManchesterEventLongLow;
     } else {
         // Out of range — gap or noise

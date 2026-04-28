@@ -24,6 +24,9 @@
 #define VALEO_TE_SHORT  66
 #define VALEO_TE_LONG   264
 #define VALEO_TE_DELTA  60
+#define VALEO_TE_SHORT_ALT 100
+#define VALEO_TE_LONG_ALT  400
+#define VALEO_TE_DELTA_ALT 80
 #define VALEO_MIN_BITS  64
 #define VALEO_MAX_BITS  96
 #define VALEO_GAP_MIN   500
@@ -52,6 +55,31 @@ typedef struct {
 
 static inline uint32_t valeo_abs_diff(uint32_t a, uint32_t b) {
     return (a > b) ? (a - b) : (b - a);
+}
+
+static bool renault_valeo_is_short(uint32_t duration) {
+    return (valeo_abs_diff(duration, VALEO_TE_SHORT) < VALEO_TE_DELTA) ||
+           (valeo_abs_diff(duration, VALEO_TE_SHORT_ALT) < VALEO_TE_DELTA_ALT);
+}
+
+static bool renault_valeo_is_long(uint32_t duration) {
+    return (valeo_abs_diff(duration, VALEO_TE_LONG) < VALEO_TE_DELTA) ||
+           (valeo_abs_diff(duration, VALEO_TE_LONG_ALT) < VALEO_TE_DELTA_ALT);
+}
+
+static bool renault_valeo_frame_is_plausible(RenaultValeoDecoder* inst) {
+    if(inst->bit_count < VALEO_MIN_BITS || inst->bit_count > VALEO_MAX_BITS) {
+        return false;
+    }
+    if((inst->bit_count % 2U) != 0U) {
+        return false;
+    }
+
+    const uint32_t fix = (uint32_t)(inst->data >> 32U);
+    const uint8_t btn = (uint8_t)((fix >> 28U) & 0x0FU);
+    const uint32_t serial = fix & 0x0FFFFFFFU;
+
+    return (serial != 0U) && (btn <= 0x0DU);
 }
 
 // ─── KeeLoq decode ───────────────────────────────────────────────────────────
@@ -125,7 +153,7 @@ static void renault_valeo_reset(void* ctx) {
 // ─── Feed — OOK PWM ─────────────────────────────────────────────────────────
 
 static void renault_valeo_try_accept(RenaultValeoDecoder* inst) {
-    if(inst->bit_count >= VALEO_MIN_BITS && inst->bit_count <= VALEO_MAX_BITS) {
+    if(renault_valeo_frame_is_plausible(inst)) {
         inst->generic.data = inst->data;
         inst->generic.data_count_bit = inst->bit_count;
         renault_valeo_decode_keeloq(inst);
@@ -143,11 +171,11 @@ static void renault_valeo_feed(void* ctx, bool level, uint32_t duration) {
 
     case ValeoStepReset:
         if(level) {
-            if(valeo_abs_diff(duration, VALEO_TE_SHORT) < VALEO_TE_DELTA) {
+            if(renault_valeo_is_short(duration)) {
                 inst->data = (inst->data << 1);
                 inst->bit_count++;
                 inst->parser_step = ValeoStepWaitSpace;
-            } else if(valeo_abs_diff(duration, VALEO_TE_LONG) < VALEO_TE_DELTA) {
+            } else if(renault_valeo_is_long(duration)) {
                 inst->data = (inst->data << 1) | 1;
                 inst->bit_count++;
                 inst->parser_step = ValeoStepWaitSpace;
@@ -157,7 +185,7 @@ static void renault_valeo_feed(void* ctx, bool level, uint32_t duration) {
 
     case ValeoStepWaitSpace:
         if(!level) {
-            if(valeo_abs_diff(duration, VALEO_TE_SHORT) < VALEO_TE_DELTA) {
+            if(renault_valeo_is_short(duration)) {
                 inst->parser_step = ValeoStepWaitMark;
             } else if(duration >= VALEO_GAP_MIN) {
                 renault_valeo_try_accept(inst);
@@ -180,11 +208,11 @@ static void renault_valeo_feed(void* ctx, bool level, uint32_t duration) {
 
     case ValeoStepWaitMark:
         if(level) {
-            if(valeo_abs_diff(duration, VALEO_TE_SHORT) < VALEO_TE_DELTA) {
+            if(renault_valeo_is_short(duration)) {
                 inst->data = (inst->data << 1);
                 inst->bit_count++;
                 inst->parser_step = ValeoStepWaitSpace;
-            } else if(valeo_abs_diff(duration, VALEO_TE_LONG) < VALEO_TE_DELTA) {
+            } else if(renault_valeo_is_long(duration)) {
                 inst->data = (inst->data << 1) | 1;
                 inst->bit_count++;
                 inst->parser_step = ValeoStepWaitSpace;
