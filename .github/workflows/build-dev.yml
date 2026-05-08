@@ -28,7 +28,7 @@ jobs:
         run: |
           git fetch --tags
 
-          LAST_TAG=$(git tag --sort=-v:refname | grep -E '^[0-9]+\.[0-9]+\.[0-9]+$' | head -n 1)
+          LAST_TAG=$(git tag --sort=-v:refname | grep -E '^[0-9]+\.[0-9]+\.[0-9]+$' | head -n 1 || true)
 
           if [ -z "$LAST_TAG" ]; then
             NEW_TAG="1.0.0"
@@ -44,6 +44,15 @@ jobs:
           echo "New tag: $NEW_TAG"
 
           echo "NEW_TAG=$NEW_TAG" >> $GITHUB_OUTPUT
+
+      - name: Create Git tag
+        shell: bash
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+          git tag ${{ steps.version.outputs.NEW_TAG }}
+          git push origin ${{ steps.version.outputs.NEW_TAG }}
 
       - name: Build firmware
         shell: bash
