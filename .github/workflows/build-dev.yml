@@ -13,17 +13,40 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Get latest tag
+        id: version
+        run: |
+          git fetch --tags
+
+          LAST_TAG=$(git tag --sort=-v:refname | head -n 1)
+
+          if [ -z "$LAST_TAG" ]; then
+            NEW_TAG="1.0.0"
+          else
+            IFS='.' read -r MAJOR MINOR PATCH <<< "$LAST_TAG"
+
+            PATCH=$((PATCH + 1))
+
+            NEW_TAG="$MAJOR.$MINOR.$PATCH"
+          fi
+
+          echo "NEW_TAG=$NEW_TAG" >> $GITHUB_OUTPUT
+
+      - name: Create tag
+        run: |
+          git tag ${{ steps.version.outputs.NEW_TAG }}
+          git push origin ${{ steps.version.outputs.NEW_TAG }}
 
       - name: Build firmware
         run: |
           export DIST_SUFFIX=Flipper-ARF
           chmod +x fbt
           ./fbt COMPACT=1 DEBUG=0 updater_package
-
-      - name: Generate tag name
-        id: tag
-        run: echo "TAG=dev-$(git rev-parse --short HEAD)" >> $GITHUB_OUTPUT
 
       - name: Detect firmware updater
         id: firmware
@@ -41,8 +64,9 @@ jobs:
       - name: Create Release
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: ${{ steps.tag.outputs.TAG }}
-          name: Dev Build ${{ steps.tag.outputs.TAG }}
+          tag_name: ${{ steps.version.outputs.NEW_TAG }}
+          name: Release ${{ steps.version.outputs.NEW_TAG }}
+          generate_release_notes: true
           files: ${{ steps.firmware.outputs.FILE }}
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
