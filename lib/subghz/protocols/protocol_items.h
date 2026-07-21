@@ -79,8 +79,6 @@
 #include "scher_khan.h"
 #include "sheriff_cfm.h"
 #include "chrysler.h"
-//#include "honda_static.h"
-//#include "honda_v1.h"
 #include "mazda_v0.h"
 #include "kia_v7.h"
 #include "ford_v1.h"

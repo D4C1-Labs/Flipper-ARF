@@ -27,32 +27,7 @@ static const InputKey EMULATE_TOGGLE_COMBO[] = {
 static const char* credits[] = {
     "",
     "-=> App Development by",
-    "RocketGod",
-    "MMX",
-    "Leeroy",
-    "gullradriel",
-    "Skorp's Weather App",
-    "Vadim's Radio Driver",
-    "-=> Protocol Magic by",
-    "L0rdDiakon",
-    "Leeroy",
-    "Li0ard",
-    "MMX",
-    "YougZ",
-    "DoobTheGoober",
-    "RocketGod",
-    "Skorp",
-    "Slackware",
-    "Trikk",
-    "Wootini",
-    "-=> RE Support",
-    "DoobTheGoober",
-    "Li0ard",
-    "MMX",
-    "NeedNotApply",
-    "RocketGod",
-    "Slackware",
-    "Trikk",
+    "The community with <3",
     // can add more
 };
 
@@ -93,7 +68,7 @@ static void about_draw_callback(Canvas* canvas, void* context) {
             canvas, 64, 18, AlignCenter, AlignBottom, ">>>=================<<<");
     } else {
         canvas_draw_str_aligned(
-            canvas, 64, 18, AlignCenter, AlignBottom, ">>>======[TPP]======<<<");
+            canvas, 64, 18, AlignCenter, AlignBottom, ">>>=================<<<");
     }
 
     // Draw credits region (clip area)
@@ -136,7 +111,7 @@ static void about_draw_callback(Canvas* canvas, void* context) {
             canvas, 64, 18, AlignCenter, AlignBottom, ">>>=================<<<");
     } else {
         canvas_draw_str_aligned(
-            canvas, 64, 18, AlignCenter, AlignBottom, ">>>======[TPP]======<<<");
+            canvas, 64, 18, AlignCenter, AlignBottom, ">>>=================<<<");
     }
 
     // Redraw static in header area
@@ -147,7 +122,7 @@ static void about_draw_callback(Canvas* canvas, void* context) {
 
     // Footer: The Pirate's Plunder Discord
     canvas_set_font(canvas, FontKeyboard);
-    canvas_draw_str_aligned(canvas, 127, 62, AlignRight, AlignBottom, "discord.gg/thepirates");
+    canvas_draw_str_aligned(canvas, 127, 62, AlignRight, AlignBottom, "");
 
     // Rare subtle glitch bar
     if(rand() % 30 == 0) {

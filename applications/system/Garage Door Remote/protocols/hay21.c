@@ -255,7 +255,7 @@ static void subghz_protocol_hay21_remote_controller(SubGhzBlockGeneric* instance
     //1877BD = 000 11000011 10111101 1110 1
     //0B57BF = 000 01011010 10111101 1111 1
 }
-
+}
 SubGhzProtocolStatus
     subghz_protocol_encoder_hay21_deserialize(void* context, FlipperFormat* flipper_format) {
     furi_assert(context);
