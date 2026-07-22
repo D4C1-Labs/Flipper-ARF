@@ -1,13 +1,10 @@
 #include "kia_v5.h"
-
 #include "../blocks/const.h"
 #include "../blocks/decoder.h"
 #include "../blocks/encoder.h"
 #include "../blocks/generic.h"
 #include "../blocks/math.h"
-#include "../blocks/custom_btn_i.h"
 #include <lib/toolbox/manchester_decoder.h>
-#include <lib/toolbox/manchester_encoder.h>
 
 #define TAG "SubGhzProtocolKiaV5"
 
@@ -20,7 +17,7 @@ static const SubGhzBlockConst subghz_protocol_kia_v5_const = {
 
 static const uint8_t keystore_bytes[] = {0x53, 0x54, 0x46, 0x52, 0x4b, 0x45, 0x30, 0x30};
 
-static uint8_t reverse_byte(uint8_t b) {
+static uint8_t kia_v5_reverse_byte(uint8_t b) {
     uint8_t r = 0;
     for(int i = 0; i < 8; i++) {
         if(b & (1 << i)) r |= (1 << (7 - i));
@@ -28,27 +25,14 @@ static uint8_t reverse_byte(uint8_t b) {
     return r;
 }
 
-static uint64_t bit_reverse_64(uint64_t input) {
+static uint64_t kia_v5_bit_reverse_64(uint64_t input) {
     uint64_t output = 0;
     for(int i = 0; i < 8; i++) {
         uint8_t byte = (input >> (i * 8)) & 0xFF;
-        uint8_t reversed = reverse_byte(byte);
+        uint8_t reversed = kia_v5_reverse_byte(byte);
         output |= ((uint64_t)reversed << ((7 - i) * 8));
     }
     return output;
-}
-
-static uint8_t kia_v5_calculate_crc(uint64_t data) {
-    uint8_t crc = 0;
-    for(int i = 63; i >= 0; i--) {
-        const uint8_t bit = (data >> i) & 1U;
-        const uint8_t shifted_out = (crc >> 1U) & 1U;
-        crc = (uint8_t)(((crc & 1U) << 1U) | bit);
-        if(shifted_out) {
-            crc ^= 3U;
-        }
-    }
-    return (uint8_t)(crc & 3U);
 }
 
 static uint16_t mixer_decode(uint32_t encrypted) {
@@ -68,6 +52,7 @@ static uint16_t mixer_decode(uint32_t encrypted) {
             } else {
                 base = (s3 & 0x02) == 0 ? 0x3A : 0x5C;
             }
+
             if(s2 & 0x08) {
                 base = (((base >> 4) & 0x0F) | ((base & 0x0F) << 4)) & 0xFF;
             }
@@ -77,16 +62,26 @@ static uint16_t mixer_decode(uint32_t encrypted) {
             if(s0 & 0x01) {
                 base = (base << 1) & 0xFF;
             }
+
             uint8_t temp = (s3 ^ s1) & 0xFF;
             s3 = ((s3 & 0x7F) << 1) & 0xFF;
-            if(s2 & 0x80) s3 |= 0x01;
+            if(s2 & 0x80) {
+                s3 |= 0x01;
+            }
             s2 = ((s2 & 0x7F) << 1) & 0xFF;
-            if(s1 & 0x80) s2 |= 0x01;
+            if(s1 & 0x80) {
+                s2 |= 0x01;
+            }
             s1 = ((s1 & 0x7F) << 1) & 0xFF;
-            if(s0 & 0x80) s1 |= 0x01;
+            if(s0 & 0x80) {
+                s1 |= 0x01;
+            }
             s0 = ((s0 & 0x7F) << 1) & 0xFF;
+
             uint8_t chk = (base ^ (r ^ temp)) & 0xFF;
-            if(chk & 0x80) s0 |= 0x01;
+            if(chk & 0x80) {
+                s0 |= 0x01;
+            }
             r = ((r & 0x7F) << 1) & 0xFF;
             steps--;
         }
@@ -95,102 +90,12 @@ static uint16_t mixer_decode(uint32_t encrypted) {
     return (s0 + (s1 << 8)) & 0xFFFF;
 }
 
-static uint32_t mixer_encode(uint32_t serial, uint16_t counter, uint8_t button) {
-    uint8_t s0 = (uint8_t)(((serial >> 8) & 0x0FU) | ((button & 0x0FU) << 4));
-    uint8_t s1 = (uint8_t)((counter >> 8) & 0xFFU);
-    uint8_t s2 = (uint8_t)(serial & 0xFFU);
-    uint8_t s3 = (uint8_t)(counter & 0xFFU);
-
-    int ks_idx = 0;
-    for(int round_i = 0; round_i < 18; round_i++) {
-        uint8_t r = keystore_bytes[ks_idx] & 0xFFU;
-        ks_idx = (ks_idx + 1) & 0x07;
-
-        uint8_t running_d = s3;
-        for(int step = 0; step < 8; step++) {
-            uint8_t base;
-            if((s0 & 0x80U) == 0) {
-                base = (s0 & 0x04U) == 0 ? 0x74U : 0x2EU;
-            } else {
-                base = (s0 & 0x04U) == 0 ? 0x3AU : 0x5CU;
-            }
-
-            if(s2 & 0x10U) {
-                base = (uint8_t)(((base >> 4) & 0x0FU) | ((base & 0x0FU) << 4));
-            }
-            if(s1 & 0x02U) {
-                base = (uint8_t)((base & 0x3FU) << 2);
-            }
-
-            uint8_t base_final = base;
-            if(running_d & 0x02U) {
-                base_final = (uint8_t)((base & 0x7FU) << 1);
-            }
-
-            const bool carry_b = (s1 & 0x01U) != 0;
-            const bool carry_c = (s2 & 0x01U) != 0;
-            const bool carry_a = (s0 & 0x01U) != 0;
-
-            uint8_t new_d = (uint8_t)(running_d >> 1);
-            if(carry_b) new_d |= 0x80U;
-
-            running_d ^= s2;
-
-            s1 = (uint8_t)(s1 >> 1);
-            if(carry_c) s1 |= 0x80U;
-
-            s2 = (uint8_t)(s2 >> 1);
-            if(carry_a) s2 |= 0x80U;
-
-            const uint8_t feedback = (uint8_t)(((running_d ^ r) << 7) ^ base_final);
-            s0 = (uint8_t)(s0 >> 1);
-            if(feedback & 0x80U) s0 |= 0x80U;
-
-            r = (uint8_t)(r >> 1);
-            running_d = new_d;
-        }
-        s3 = running_d;
-    }
-
-    return ((uint32_t)s0 << 24) | ((uint32_t)s2 << 16) | ((uint32_t)s1 << 8) | (uint32_t)s3;
-}
-
-static uint64_t kia_v5_encode_data(uint32_t serial, uint16_t counter, uint8_t button) {
-    serial &= 0x0FFFFFFFU;
-    button &= 0x0FU;
-
-    const uint32_t encrypted = mixer_encode(serial, counter, button);
-    const uint64_t yek =
-        ((uint64_t)button << 60) | ((uint64_t)serial << 32) | (uint64_t)encrypted;
-
-    return bit_reverse_64(yek);
-}
-
-static uint8_t kia_v5_custom_to_btn(uint8_t custom_btn) {
-    switch(custom_btn) {
-    case 1: return 0x01; // Unlock
-    case 2: return 0x02; // Lock
-    case 3: return 0x04; // Trunk
-    case 4: return 0x08; // Horn
-    default: return 0x01;
-    }
-}
-
-static uint8_t kia_v5_btn_to_custom(uint8_t btn) {
-    switch(btn) {
-    case 0x01: return 1; // Unlock
-    case 0x02: return 2; // Lock
-    case 0x04: return 3; // Trunk
-    case 0x08: return 4; // Horn
-    default: return 1;
-    }
-}
-
 struct SubGhzProtocolDecoderKiaV5 {
     SubGhzProtocolDecoderBase base;
     SubGhzBlockDecoder decoder;
     SubGhzBlockGeneric generic;
     uint16_t header_count;
+
     ManchesterState manchester_state;
     uint64_t decoded_data;
     uint64_t saved_key;
@@ -205,14 +110,36 @@ struct SubGhzProtocolEncoderKiaV5 {
     SubGhzBlockGeneric generic;
 
     uint64_t replay_data;
-    uint8_t  replay_crc;
+    uint8_t replay_crc;
 };
+
+#define KIA_V5_PREAMBLE_PAIRS 200U
+#define KIA_V5_SYNC_ENTRIES   4U
+#define KIA_V5_DATA_BITS      64U
+#define KIA_V5_CRC_BITS       3U
+#define KIA_V5_END_ENTRIES    2U
+#define KIA_V5_UPLOAD_CAPACITY                          \
+    (KIA_V5_PREAMBLE_PAIRS * 2U + KIA_V5_SYNC_ENTRIES + \
+     (KIA_V5_DATA_BITS + KIA_V5_CRC_BITS) * 2U + KIA_V5_END_ENTRIES)
 
 typedef enum {
     KiaV5DecoderStepReset = 0,
     KiaV5DecoderStepCheckPreamble,
     KiaV5DecoderStepData,
 } KiaV5DecoderStep;
+
+static uint8_t kia_v5_calculate_crc(uint64_t data) {
+    uint8_t crc = 0;
+    for(int i = 63; i >= 0; i--) {
+        const uint8_t bit = (data >> i) & 1U;
+        const uint8_t shifted_out = (crc >> 1U) & 1U;
+        crc = (uint8_t)(((crc & 1U) << 1U) | bit);
+        if(shifted_out) {
+            crc ^= 3U;
+        }
+    }
+    return (uint8_t)(crc & 3U);
+}
 
 const SubGhzProtocolDecoder subghz_protocol_kia_v5_decoder = {
     .alloc = subghz_protocol_decoder_kia_v5_alloc,
@@ -244,69 +171,81 @@ const SubGhzProtocol subghz_protocol_kia_v5 = {
 
 void* subghz_protocol_encoder_kia_v5_alloc(SubGhzEnvironment* environment) {
     UNUSED(environment);
-    SubGhzProtocolEncoderKiaV5* instance = malloc(sizeof(SubGhzProtocolEncoderKiaV5));
+
+    SubGhzProtocolEncoderKiaV5* instance = calloc(1, sizeof(SubGhzProtocolEncoderKiaV5));
+    furi_check(instance);
+
     instance->base.protocol = &subghz_protocol_kia_v5;
     instance->generic.protocol_name = instance->base.protocol->name;
     instance->encoder.size_upload = 400;
     instance->encoder.upload = malloc(instance->encoder.size_upload * sizeof(LevelDuration));
-    instance->encoder.repeat = 10;
+    furi_check(instance->encoder.upload);
+    instance->encoder.repeat = 6;
+    instance->encoder.front = 0;
     instance->encoder.is_running = false;
-    instance->replay_data = 0;
-    instance->replay_crc  = 0;
     return instance;
+}
+
+void subghz_protocol_encoder_kia_v5_free(void* context) {
+    furi_assert(context);
+    SubGhzProtocolEncoderKiaV5* instance = context;
+    if(instance->encoder.upload) {
+        free(instance->encoder.upload);
+    }
+    free(instance);
 }
 
 static bool subghz_protocol_encoder_kia_v5_get_upload(SubGhzProtocolEncoderKiaV5* instance) {
     furi_assert(instance);
 
     const uint32_t te_short = (uint32_t)subghz_protocol_kia_v5_const.te_short;
-    const uint32_t te_long  = (uint32_t)subghz_protocol_kia_v5_const.te_long;
+    const uint32_t te_long = (uint32_t)subghz_protocol_kia_v5_const.te_long;
     size_t index = 0;
 
-    for(size_t i = 0; i < 80; i++) {
-        instance->encoder.upload[index++] = level_duration_make(true,  (int32_t)te_short);
+    for(size_t i = 0; i < KIA_V5_PREAMBLE_PAIRS; i++) {
+        instance->encoder.upload[index++] = level_duration_make(true, (int32_t)te_short);
         instance->encoder.upload[index++] = level_duration_make(false, (int32_t)te_short);
     }
 
     instance->encoder.upload[index++] = level_duration_make(false, (int32_t)te_short);
-    instance->encoder.upload[index++] = level_duration_make(true,  (int32_t)te_long);
+    instance->encoder.upload[index++] = level_duration_make(true, (int32_t)te_long);
     instance->encoder.upload[index++] = level_duration_make(false, (int32_t)te_short);
-    instance->encoder.upload[index++] = level_duration_make(true,  (int32_t)te_short);
+    instance->encoder.upload[index++] = level_duration_make(true, (int32_t)te_short);
 
     for(int b = 63; b >= 0; b--) {
         const bool bv = ((instance->replay_data >> b) & 1ULL) != 0ULL;
         if(bv) {
             instance->encoder.upload[index++] = level_duration_make(false, (int32_t)te_short);
-            instance->encoder.upload[index++] = level_duration_make(true,  (int32_t)te_short);
+            instance->encoder.upload[index++] = level_duration_make(true, (int32_t)te_short);
         } else {
-            instance->encoder.upload[index++] = level_duration_make(true,  (int32_t)te_short);
+            instance->encoder.upload[index++] = level_duration_make(true, (int32_t)te_short);
             instance->encoder.upload[index++] = level_duration_make(false, (int32_t)te_short);
         }
     }
 
-    instance->encoder.upload[index++] = level_duration_make(true,  (int32_t)te_short);
+    instance->encoder.upload[index++] = level_duration_make(true, (int32_t)te_short);
     instance->encoder.upload[index++] = level_duration_make(false, (int32_t)te_short);
 
     const bool crc_b1 = ((instance->replay_crc >> 1U) & 1U) != 0U;
     if(crc_b1) {
         instance->encoder.upload[index++] = level_duration_make(false, (int32_t)te_short);
-        instance->encoder.upload[index++] = level_duration_make(true,  (int32_t)te_short);
+        instance->encoder.upload[index++] = level_duration_make(true, (int32_t)te_short);
     } else {
-        instance->encoder.upload[index++] = level_duration_make(true,  (int32_t)te_short);
+        instance->encoder.upload[index++] = level_duration_make(true, (int32_t)te_short);
         instance->encoder.upload[index++] = level_duration_make(false, (int32_t)te_short);
     }
 
     const bool crc_b0 = (instance->replay_crc & 1U) != 0U;
     if(crc_b0) {
         instance->encoder.upload[index++] = level_duration_make(false, (int32_t)te_short);
-        instance->encoder.upload[index++] = level_duration_make(true,  (int32_t)te_short);
+        instance->encoder.upload[index++] = level_duration_make(true, (int32_t)te_short);
     } else {
-        instance->encoder.upload[index++] = level_duration_make(true,  (int32_t)te_short);
+        instance->encoder.upload[index++] = level_duration_make(true, (int32_t)te_short);
         instance->encoder.upload[index++] = level_duration_make(false, (int32_t)te_short);
     }
 
     instance->encoder.upload[index++] = level_duration_make(false, (int32_t)te_short);
-    instance->encoder.upload[index++] = level_duration_make(true,  (int32_t)te_short);
+    instance->encoder.upload[index++] = level_duration_make(true, (int32_t)te_short);
 
     instance->encoder.size_upload = index;
     instance->encoder.front = 0;
@@ -319,10 +258,6 @@ SubGhzProtocolStatus
     SubGhzProtocolEncoderKiaV5* instance = context;
     SubGhzProtocolStatus ret = SubGhzProtocolStatusError;
 
-    static uint32_t call_count = 0;
-    call_count++;
-    FURI_LOG_I(TAG, "deserialize #%lu, cnt before=%04lX", call_count, (uint32_t)instance->generic.cnt);
-
     do {
         ret = subghz_block_generic_deserialize(&instance->generic, flipper_format);
         if(ret != SubGhzProtocolStatusOk) break;
@@ -334,11 +269,12 @@ SubGhzProtocolStatus
 
         uint32_t yek_high = 0, yek_low = 0;
         uint64_t yek = 0;
+        flipper_format_rewind(flipper_format);
         if(flipper_format_read_uint32(flipper_format, "YekHi", &yek_high, 1) &&
            flipper_format_read_uint32(flipper_format, "YekLo", &yek_low, 1)) {
             yek = ((uint64_t)yek_high << 32) | yek_low;
         } else {
-            yek = bit_reverse_64(instance->generic.data);
+            yek = kia_v5_bit_reverse_64(instance->generic.data);
         }
 
         instance->generic.serial = (uint32_t)((yek >> 32) & 0x0FFFFFFF);
@@ -347,86 +283,44 @@ SubGhzProtocolStatus
         uint32_t encrypted = (uint32_t)(yek & 0xFFFFFFFF);
         instance->generic.cnt = mixer_decode(encrypted);
 
-        if(subghz_custom_btn_get_original() == 0) {
-            subghz_custom_btn_set_original(kia_v5_btn_to_custom(instance->generic.btn));
-        }
-        subghz_custom_btn_set_max(4);
-
-        uint32_t override_cnt = 0;
-        if(subghz_block_generic_global_counter_override_get(&override_cnt)) {
-            instance->generic.cnt = override_cnt & 0xFFFF;
-        } else {
-            uint32_t mult = furi_hal_subghz_get_rolling_counter_mult();
-            instance->generic.cnt = (instance->generic.cnt + mult) & 0xFFFF;
-        }
-        FURI_LOG_I(
-            TAG, "deserialize #%lu, cnt after=%04lX", call_count, (uint32_t)instance->generic.cnt);
-
-        uint8_t btn = kia_v5_custom_to_btn(
-            subghz_custom_btn_get() == SUBGHZ_CUSTOM_BTN_OK ? subghz_custom_btn_get_original() :
-                                                              subghz_custom_btn_get());
-        if(subghz_block_generic_global_button_override_get(&btn)) {
-            FURI_LOG_D(TAG, "Button changed to 0x%X", btn);
-        }
-        instance->generic.btn = btn & 0x0F;
-
-        instance->generic.data = kia_v5_encode_data(
-            instance->generic.serial, instance->generic.cnt, instance->generic.btn);
         instance->replay_data = instance->generic.data;
-        instance->replay_crc  = kia_v5_calculate_crc(instance->replay_data);
+        instance->replay_crc = kia_v5_calculate_crc(instance->replay_data);
 
         if(!subghz_protocol_encoder_kia_v5_get_upload(instance)) {
             ret = SubGhzProtocolStatusErrorEncoderGetUpload;
             break;
         }
 
-        if(!flipper_format_rewind(flipper_format)) {
-            ret = SubGhzProtocolStatusErrorParserOthers;
-            break;
-        }
-
-        uint8_t key_data[sizeof(uint64_t)] = {0};
-        for(size_t i = 0; i < sizeof(uint64_t); i++) {
-            key_data[sizeof(uint64_t) - i - 1] = (instance->generic.data >> i * 8) & 0xFF;
-        }
-        if(!flipper_format_update_hex(flipper_format, "Key", key_data, sizeof(uint64_t))) {
-            ret = SubGhzProtocolStatusErrorParserKey;
-            break;
-        }
-
-        uint32_t temp_btn = instance->generic.btn;
-        if(!flipper_format_insert_or_update_uint32(flipper_format, "Btn", &temp_btn, 1)) {
-            ret = SubGhzProtocolStatusErrorParserOthers;
-            break;
-        }
-
-        if(!flipper_format_insert_or_update_uint32(flipper_format, "Cnt", &instance->generic.cnt, 1)) {
-            ret = SubGhzProtocolStatusErrorParserOthers;
-            break;
-        }
-
-        yek = bit_reverse_64(instance->generic.data);
-        yek_high = (uint32_t)(yek >> 32);
-        yek_low = (uint32_t)(yek & 0xFFFFFFFF);
-        if(!flipper_format_insert_or_update_uint32(flipper_format, "YekHi", &yek_high, 1)) {
-            ret = SubGhzProtocolStatusErrorParserOthers;
-            break;
-        }
-        if(!flipper_format_insert_or_update_uint32(flipper_format, "YekLo", &yek_low, 1)) {
-            ret = SubGhzProtocolStatusErrorParserOthers;
-            break;
-        }
-
-        uint8_t crc = kia_v5_calculate_crc(yek);
-        uint32_t crc_temp = crc;
-        if(!flipper_format_insert_or_update_uint32(flipper_format, "CRC", &crc_temp, 1)) {
-            ret = SubGhzProtocolStatusErrorParserOthers;
-            break;
-        }
-
         instance->encoder.is_running = true;
-
+        ret = SubGhzProtocolStatusOk;
     } while(false);
+
+    return ret;
+}
+
+void subghz_protocol_encoder_kia_v5_stop(void* context) {
+    furi_assert(context);
+    SubGhzProtocolEncoderKiaV5* instance = context;
+    instance->encoder.is_running = false;
+    instance->encoder.front = 0;
+}
+
+LevelDuration subghz_protocol_encoder_kia_v5_yield(void* context) {
+    furi_assert(context);
+    SubGhzProtocolEncoderKiaV5* instance = context;
+
+    if(!instance->encoder.is_running || instance->encoder.repeat == 0 ||
+       instance->encoder.size_upload == 0) {
+        instance->encoder.is_running = false;
+        return level_duration_reset();
+    }
+
+    LevelDuration ret = instance->encoder.upload[instance->encoder.front];
+
+    if(++instance->encoder.front == instance->encoder.size_upload) {
+        instance->encoder.repeat--;
+        instance->encoder.front = 0;
+    }
 
     return ret;
 }
@@ -470,43 +364,10 @@ static void kia_v5_add_bit(SubGhzProtocolDecoderKiaV5* instance, bool bit) {
     instance->bit_count++;
 }
 
-void subghz_protocol_encoder_kia_v5_stop(void* context) {
-    furi_assert(context);
-    SubGhzProtocolEncoderKiaV5* instance = context;
-    instance->encoder.is_running = false;
-    instance->encoder.front = 0;
-}
-
-LevelDuration subghz_protocol_encoder_kia_v5_yield(void* context) {
-    furi_assert(context);
-    SubGhzProtocolEncoderKiaV5* instance = context;
-
-    if(!instance->encoder.is_running || instance->encoder.repeat == 0 ||
-       instance->encoder.size_upload == 0) {
-        instance->encoder.is_running = false;
-        return level_duration_reset();
-    }
-
-    LevelDuration ret = instance->encoder.upload[instance->encoder.front];
-
-    if(++instance->encoder.front == instance->encoder.size_upload) {
-        if(!subghz_block_generic_global.endless_tx) instance->encoder.repeat--;
-        instance->encoder.front = 0;
-    }
-
-    return ret;
-}
-
-void subghz_protocol_encoder_kia_v5_free(void* context) {
-    furi_assert(context);
-    SubGhzProtocolEncoderKiaV5* instance = context;
-    free(instance->encoder.upload);
-    free(instance);
-}
-
 void* subghz_protocol_decoder_kia_v5_alloc(SubGhzEnvironment* environment) {
     UNUSED(environment);
     SubGhzProtocolDecoderKiaV5* instance = malloc(sizeof(SubGhzProtocolDecoderKiaV5));
+    furi_assert(instance);
     instance->base.protocol = &subghz_protocol_kia_v5;
     instance->generic.protocol_name = instance->base.protocol->name;
     return instance;
@@ -544,7 +405,11 @@ void subghz_protocol_decoder_kia_v5_feed(void* context, bool level, uint32_t dur
             instance->header_count = 1;
             instance->bit_count = 0;
             instance->decoded_data = 0;
-            manchester_advance(instance->manchester_state, ManchesterEventReset, &instance->manchester_state, NULL);
+            manchester_advance(
+                instance->manchester_state,
+                ManchesterEventReset,
+                &instance->manchester_state,
+                NULL);
         }
         break;
 
@@ -614,8 +479,7 @@ void subghz_protocol_decoder_kia_v5_feed(void* context, bool level, uint32_t dur
                     uint8_t byte = (instance->generic.data >> (i * 8)) & 0xFF;
                     uint8_t reversed = 0;
                     for(int b = 0; b < 8; b++) {
-                        if(byte & (1 << b))
-                            reversed |= (1 << (7 - b));
+                        if(byte & (1 << b)) reversed |= (1 << (7 - b));
                     }
                     instance->yek |= ((uint64_t)reversed << ((7 - i) * 8));
                 }
@@ -628,11 +492,6 @@ void subghz_protocol_decoder_kia_v5_feed(void* context, bool level, uint32_t dur
 
                 instance->decoder.decode_data = instance->generic.data;
                 instance->decoder.decode_count_bit = instance->generic.data_count_bit;
-
-                if(subghz_custom_btn_get_original() == 0) {
-                    subghz_custom_btn_set_original(kia_v5_btn_to_custom(instance->generic.btn));
-                }
-                subghz_custom_btn_set_max(4);
 
                 if(instance->base.callback)
                     instance->base.callback(&instance->base, instance->base.context);
@@ -677,20 +536,20 @@ SubGhzProtocolStatus subghz_protocol_decoder_kia_v5_serialize(
         subghz_block_generic_serialize(&instance->generic, flipper_format, preset);
 
     if(ret == SubGhzProtocolStatusOk) {
-        if(!flipper_format_write_uint32(
-               flipper_format, "Serial", &instance->generic.serial, 1)) {
+        uint32_t serial_tmp = instance->generic.serial;
+        if(!flipper_format_write_uint32(flipper_format, "Serial", &serial_tmp, 1)) {
             ret = SubGhzProtocolStatusErrorParserOthers;
         }
     }
     if(ret == SubGhzProtocolStatusOk) {
-        uint32_t temp = instance->generic.btn;
-        if(!flipper_format_write_uint32(flipper_format, "Btn", &temp, 1)) {
+        uint32_t btn_tmp = instance->generic.btn;
+        if(!flipper_format_write_uint32(flipper_format, "Btn", &btn_tmp, 1)) {
             ret = SubGhzProtocolStatusErrorParserOthers;
         }
     }
     if(ret == SubGhzProtocolStatusOk) {
-        if(!flipper_format_write_uint32(
-               flipper_format, "Cnt", &instance->generic.cnt, 1)) {
+        uint32_t cnt_tmp = instance->generic.cnt;
+        if(!flipper_format_write_uint32(flipper_format, "Cnt", &cnt_tmp, 1)) {
             ret = SubGhzProtocolStatusErrorParserOthers;
         }
     }
@@ -702,7 +561,7 @@ SubGhzProtocolStatus subghz_protocol_decoder_kia_v5_serialize(
     }
     if(ret == SubGhzProtocolStatusOk) {
         uint32_t yek_high = (uint32_t)(instance->yek >> 32);
-        uint32_t yek_low  = (uint32_t)(instance->yek & 0xFFFFFFFF);
+        uint32_t yek_low = (uint32_t)(instance->yek & 0xFFFFFFFF);
         if(!flipper_format_write_uint32(flipper_format, "YekHi", &yek_high, 1)) {
             ret = SubGhzProtocolStatusErrorParserOthers;
         }
@@ -721,13 +580,10 @@ SubGhzProtocolStatus
     furi_assert(context);
     SubGhzProtocolDecoderKiaV5* instance = context;
 
-    SubGhzProtocolStatus ret = subghz_block_generic_deserialize(&instance->generic, flipper_format);
-
-    if((ret == SubGhzProtocolStatusOk) &&
-       (instance->generic.data_count_bit <
-        subghz_protocol_kia_v5_const.min_count_bit_for_found)) {
-        ret = SubGhzProtocolStatusErrorParserBitCount;
-    }
+    SubGhzProtocolStatus ret = subghz_block_generic_deserialize_check_count_bit(
+        &instance->generic,
+        flipper_format,
+        subghz_protocol_kia_v5_const.min_count_bit_for_found);
 
     if(ret == SubGhzProtocolStatusOk) {
         flipper_format_rewind(flipper_format);
@@ -758,15 +614,10 @@ SubGhzProtocolStatus
         }
 
         instance->generic.serial = (uint32_t)((instance->yek >> 32) & 0x0FFFFFFF);
-        instance->generic.btn    = (uint8_t)((instance->yek >> 60) & 0x0F);
+        instance->generic.btn = (uint8_t)((instance->yek >> 60) & 0x0F);
 
         uint32_t encrypted = (uint32_t)(instance->yek & 0xFFFFFFFF);
         instance->generic.cnt = mixer_decode(encrypted);
-
-        if(subghz_custom_btn_get_original() == 0) {
-            subghz_custom_btn_set_original(kia_v5_btn_to_custom(instance->generic.btn));
-        }
-        subghz_custom_btn_set_max(4);
     }
 
     return ret;
@@ -774,11 +625,16 @@ SubGhzProtocolStatus
 
 static const char* subghz_protocol_kia_v5_get_name_button(uint8_t btn) {
     switch(btn) {
-    case 0x01: return "Unlock";
-    case 0x02: return "Lock";
-    case 0x04: return "Trunk";
-    case 0x08: return "Horn";
-    default:   return "Unknown";
+    case 0x01:
+        return "Unlock";
+    case 0x02:
+        return "Lock";
+    case 0x04:
+        return "Trunk";
+    case 0x08:
+        return "Horn";
+    default:
+        return "Unknown";
     }
 }
 

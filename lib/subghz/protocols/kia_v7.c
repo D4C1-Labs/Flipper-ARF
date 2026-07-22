@@ -1,7 +1,14 @@
 #include "kia_v7.h"
+#include "../blocks/const.h"
+#include "../blocks/decoder.h"
+#include "../blocks/encoder.h"
+#include "../blocks/generic.h"
+#include "../blocks/math.h"
+#include <lib/toolbox/manchester_decoder.h>
 #include <string.h>
 
-#define KIA_V7_UPLOAD_CAPACITY    0x3A4
+#define KIA_V7_UPLOAD_CAPACITY \
+    (1U + (KIA_V7_PREAMBLE_PAIRS * 2U) + 1U + (KIA_V7_KEY_BITS * 2U) + 2U)
 #define KIA_V7_PREAMBLE_PAIRS     0x13F
 #define KIA_V7_PREAMBLE_MIN_PAIRS 16
 #define KIA_V7_HEADER             0x4C
@@ -53,7 +60,6 @@ struct SubGhzProtocolEncoderKiaV7 {
 
 static uint8_t kia_v7_crc8(const uint8_t* data, size_t len) {
     uint8_t crc = 0x4CU;
-
     for(size_t index = 0; index < len; index++) {
         crc ^= data[index];
         for(uint8_t bit = 0; bit < 8; bit++) {
@@ -64,7 +70,6 @@ static uint8_t kia_v7_crc8(const uint8_t* data, size_t len) {
             }
         }
     }
-
     return crc;
 }
 
@@ -76,11 +81,9 @@ static void kia_v7_u64_to_bytes_be(uint64_t data, uint8_t bytes[8]) {
 
 static uint64_t kia_v7_bytes_to_u64_be(const uint8_t bytes[8]) {
     uint64_t data = 0;
-
     for(size_t index = 0; index < 8; index++) {
         data = (data << 8U) | bytes[index];
     }
-
     return data;
 }
 
@@ -97,12 +100,12 @@ static bool kia_v7_is_long(uint32_t duration) {
 static const char* kia_v7_get_button_name(uint8_t button) {
     switch(button) {
     case 0x01:
-        return "LOCK";
+        return "Lock";
     case 0x02:
-        return "UNLOCK";
+        return "Unlock";
     case 0x03:
     case 0x08:
-        return "BOOT";
+        return "Trunk";
     default:
         return "??";
     }
@@ -431,7 +434,7 @@ LevelDuration kia_protocol_encoder_v7_yield(void* context) {
     LevelDuration duration = instance->encoder.upload[instance->encoder.front];
 
     if(++instance->encoder.front == instance->encoder.size_upload) {
-        if(!subghz_block_generic_global.endless_tx) instance->encoder.repeat--;
+        instance->encoder.repeat--;
         instance->encoder.front = 0;
     }
 

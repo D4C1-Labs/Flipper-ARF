@@ -2,6 +2,7 @@
 
 #include "assets_icons.h"
 #include "subghz/types.h"
+#include <lib/subghz/protocols/protocol_items.h>
 #include <furi.h>
 #include <notification/notification.h>
 #include <notification/notification_messages.h>
@@ -155,6 +156,13 @@ bool subghz_key_load(SubGhz* subghz, const char* file_path, bool show_dialog) {
         if(!flipper_format_read_string(fff_data_file, "Protocol", temp_str)) {
             FURI_LOG_E(TAG, "Missing Protocol");
             break;
+        }
+
+        const char* protocol_display =
+            subghz_protocol_catalog_display_name(
+                furi_string_get_cstr(temp_str), temp_data32);
+        if(protocol_display) {
+            FURI_LOG_D(TAG, "Protocol display name: %s", protocol_display);
         }
 
         FlipperFormat* fff_data = subghz_txrx_get_fff_data(subghz->txrx);

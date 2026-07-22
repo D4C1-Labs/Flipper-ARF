@@ -154,7 +154,7 @@ LevelDuration subghz_protocol_encoder_kia_yield(void* context) {
 
     LevelDuration ret = instance->encoder.upload[instance->encoder.front];
     if(++instance->encoder.front == instance->encoder.size_upload) {
-        if(!subghz_block_generic_global.endless_tx) instance->encoder.repeat--;
+        instance->encoder.repeat--;
         instance->encoder.front = 0;
     }
 
@@ -193,10 +193,8 @@ static bool subghz_protocol_encoder_kia_get_upload(SubGhzProtocolEncoderKIA* ins
         instance->encoder.size_upload = size_upload;
     }
 
-    uint32_t override_cnt = 0;
-    if(subghz_block_generic_global_counter_override_get(&override_cnt)) {
-        instance->generic.cnt = override_cnt & 0xFFFF;
-    } else if(instance->generic.cnt < 0xFFFF) {
+    // Counter increment logic
+    if(instance->generic.cnt < 0xFFFF) {
         if((instance->generic.cnt + furi_hal_subghz_get_rolling_counter_mult()) > 0xFFFF) {
             instance->generic.cnt = 0;
         } else {
@@ -211,7 +209,6 @@ static bool subghz_protocol_encoder_kia_get_upload(SubGhzProtocolEncoderKIA* ins
     uint8_t btn = subghz_custom_btn_get() == SUBGHZ_CUSTOM_BTN_OK ?
                       subghz_custom_btn_get_original() :
                       subghz_custom_btn_get();
-    subghz_block_generic_global_button_override_get(&btn);
     
     // Update the generic button value for potential button changes
     instance->generic.btn = btn;
@@ -327,13 +324,6 @@ SubGhzProtocolStatus subghz_protocol_encoder_kia_deserialize(void* context, Flip
             ret = SubGhzProtocolStatusErrorParserKey;
             break;
         }
-
-        uint32_t temp_btn = instance->generic.btn;
-        flipper_format_rewind(flipper_format);
-        flipper_format_insert_or_update_uint32(flipper_format, "Btn", &temp_btn, 1);
-
-        flipper_format_rewind(flipper_format);
-        flipper_format_insert_or_update_uint32(flipper_format, "Cnt", &instance->generic.cnt, 1);
 
         instance->encoder.is_running = true;
     } while(false);
@@ -604,3 +594,4 @@ void subghz_protocol_decoder_kia_get_string(void* context, FuriString* output) {
         received_crc,
         crc_valid ? "(OK)" : "(FAIL)");
 }
+

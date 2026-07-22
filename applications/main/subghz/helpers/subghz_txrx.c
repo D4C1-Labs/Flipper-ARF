@@ -311,9 +311,32 @@ SubGhzTxRxStartTxState subghz_txrx_tx_start(SubGhzTxRx* instance, FlipperFormat*
         }
         ret = SubGhzTxRxStartTxStateOk;
 
+        const char* protocol_name = furi_string_get_cstr(temp_str);
+        const SubGhzProtocolCatalogEntry* catalog_entry =
+            subghz_protocol_catalog_find(protocol_name);
+        if(catalog_entry && catalog_entry->route_policy != SubGhzProtocolCatalogRoutePolicyByModulation) {
+            const char* expected_preset =
+                subghz_protocol_catalog_route_to_preset_name(
+                    subghz_protocol_catalog_get_route(
+                        furi_string_get_cstr(instance->preset->name),
+                        instance->preset->frequency,
+                        instance->preset->data,
+                        instance->preset->data_size,
+                        protocol_name));
+            if(strcmp(furi_string_get_cstr(instance->preset->name), expected_preset) != 0) {
+                furi_string_set_str(instance->preset->name, expected_preset);
+                size_t preset_idx = subghz_setting_get_inx_preset_by_name(
+                    instance->setting, expected_preset);
+                instance->preset->data =
+                    subghz_setting_get_preset_data(instance->setting, preset_idx);
+                instance->preset->data_size =
+                    subghz_setting_get_preset_data_size(instance->setting, preset_idx);
+            }
+        }
+
         SubGhzRadioPreset* preset = instance->preset;
         instance->transmitter =
-            subghz_transmitter_alloc_init(instance->environment, furi_string_get_cstr(temp_str));
+            subghz_transmitter_alloc_init(instance->environment, protocol_name);
 
         if(instance->transmitter) {
             if(subghz_transmitter_deserialize(instance->transmitter, flipper_format) ==
@@ -567,7 +590,15 @@ static void subghz_txrx_apply_preset_fast(
         const PresetDeltaEntry* e = &preset_delta_table[from_idx][to_idx];
         furi_hal_subghz_apply_preset_delta(e->delta, e->delta_len, e->needs_scal, e->pa_table);
     } else {
-        // Fallback: original behavior (full reload)
+        // Fallback: full reload. If the modulation itself changed (AM<->FM), reset the
+        // radio first so the new preset isn't applied on top of stale modulation state.
+        bool old_is_am = (strstr(old_preset_name, "AM") != NULL);
+        bool new_is_am = (strstr(preset_name, "AM") != NULL);
+        bool modulation_changed = (old_is_am != new_is_am);
+
+        if(modulation_changed) {
+            subghz_devices_reset(instance->radio_device);
+        }
         subghz_devices_load_preset(
             instance->radio_device, FuriHalSubGhzPresetCustom, instance->preset->data);
     }

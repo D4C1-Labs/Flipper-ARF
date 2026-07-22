@@ -63,6 +63,10 @@
 #include "psa.h"
 #include "fiat_spa.h"
 #include "fiat_marelli.h"
+#include "fiat_v0.h"
+#include "fiat_v1.h"
+#include "fiat_v2.h"
+#include "renault_v0.h"
 #include "bmw_cas4.h"
 #include "subaru.h"
 #include "kia_generic.h"
@@ -86,3 +90,49 @@
 #include "ford_v3.h"
 #include "land_rover_v0.h"
 #include "toyota.h"
+#include "honda_static.h"
+#include "honda_v1.h"
+#include "honda_v2.h"
+
+#include <stdbool.h>
+#include <stddef.h>
+#include <stdint.h>
+
+typedef enum {
+    SubGhzProtocolCatalogRouteAMDefault = 0,
+    SubGhzProtocolCatalogRouteAMVag,
+    SubGhzProtocolCatalogRouteFMDefault,
+    SubGhzProtocolCatalogRouteFMF4,
+    SubGhzProtocolCatalogRouteFMHonda1,
+} SubGhzProtocolCatalogRoute;
+
+typedef enum {
+    SubGhzProtocolCatalogRoutePolicyAMDefault = 0,
+    SubGhzProtocolCatalogRoutePolicyAMVag,
+    SubGhzProtocolCatalogRoutePolicyFMDefault,
+    SubGhzProtocolCatalogRoutePolicyFMF4,
+    SubGhzProtocolCatalogRoutePolicyFMHonda1,
+    SubGhzProtocolCatalogRoutePolicyByModulation,
+} SubGhzProtocolCatalogRoutePolicy;
+
+typedef struct {
+    const char* canonical_name;
+    SubGhzProtocolCatalogRoutePolicy route_policy;
+    const char* tx_key;
+} SubGhzProtocolCatalogEntry;
+
+const SubGhzProtocolCatalogEntry*
+    subghz_protocol_catalog_find(const char* protocol_name);
+const char* subghz_protocol_catalog_canonical_name(const char* protocol_name);
+bool subghz_protocol_catalog_can_tx(const char* protocol_name);
+const char* subghz_protocol_catalog_tx_key(const char* protocol_name);
+const char* subghz_protocol_catalog_display_name(const char* protocol_name, uint32_t protocol_type);
+SubGhzProtocolCatalogRoute subghz_protocol_catalog_get_route(
+    const char* preset_name,
+    uint32_t frequency,
+    const uint8_t* preset_data,
+    size_t preset_data_size,
+    const char* protocol_name);
+const char* subghz_protocol_catalog_get_route_name(SubGhzProtocolCatalogRoute route);
+const char* subghz_protocol_catalog_route_to_preset_name(SubGhzProtocolCatalogRoute route);
+
