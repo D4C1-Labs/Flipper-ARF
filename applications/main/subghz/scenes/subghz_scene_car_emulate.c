@@ -9,13 +9,11 @@
  */
 #include "../subghz_i.h"
 #include "../views/subghz_car_emulate.h"
-#include "../helpers/subghz_button_labels.h"
 #include "../helpers/subghz_custom_event.h"
 #include <lib/subghz/blocks/generic.h>
 #include <notification/notification_messages.h>
 #include "../helpers/subghz_txrx_i.h"
 #include <lib/subghz/blocks/custom_btn_i.h>
-#include <string.h>
 
 #define TAG           "SubGhzSceneCarEmulate"
 #define MIN_TX_TICKS  66U   /* ~666 ms at 100 ms tick */
@@ -31,17 +29,13 @@ typedef struct {
     uint32_t freq;
     char     preset_short[12];  /* "AM650", "FM476", … */
 
-    bool     has_serial;
-    bool     has_counter;
-
     /* TX state */
     bool     is_transmitting;
     bool     stop_pending;      /* stop requested before MIN_TX_TICKS elapsed */
     uint32_t tx_start_tick;
 
-    /* Resolved custom button repeated while the physical key is held */
+    /* Pending button key (InputKey) decoded from the packed custom event */
     uint8_t  pending_button;
-    uint8_t  max_custom_button;
 } CarEmulateState;
 
 static CarEmulateState* s_state = NULL;
@@ -207,101 +201,8 @@ static void car_emulate_read_freq_preset(SubGhz* subghz, CarEmulateState* st) {
     furi_string_free(preset_str);
 }
 
-static bool car_emulate_hex_digit(char c, uint8_t* value) {
-    if(c >= '0' && c <= '9') {
-        *value = c - '0';
-        return true;
-    } else if(c >= 'a' && c <= 'f') {
-        *value = c - 'a' + 10;
-        return true;
-    } else if(c >= 'A' && c <= 'F') {
-        *value = c - 'A' + 10;
-        return true;
-    }
-    return false;
-}
-
-static bool car_emulate_parse_hex_after(
-    const char* text,
-    const char* marker,
-    uint32_t* value) {
-    const char* field = strstr(text, marker);
-    if(!field) return false;
-
-    field += strlen(marker);
-    while(*field == ' ' || *field == '\t' || *field == '[') {
-        field++;
-    }
-    if(field[0] == '0' && (field[1] == 'x' || field[1] == 'X')) {
-        field += 2;
-    }
-
-    uint32_t parsed = 0;
-    uint8_t digits = 0;
-    uint8_t digit_value = 0;
-    while((digits < 8) && car_emulate_hex_digit(*field, &digit_value)) {
-        parsed = (parsed << 4) | digit_value;
-        digits++;
-        field++;
-    }
-
-    if(digits == 0) return false;
-    *value = parsed;
-    return true;
-}
-
-static bool car_emulate_serial_is_placeholder(void) {
-    return !s_state->has_serial || (s_state->serial <= 1);
-}
-
-static bool car_emulate_counter_is_placeholder(void) {
-    return !s_state->has_counter || (s_state->current_counter == 0);
-}
-
-static void car_emulate_set_counter(uint32_t value) {
-    s_state->original_counter = value;
-    s_state->current_counter = value;
-    s_state->has_counter = true;
-}
-
-static void car_emulate_apply_global_metadata(void) {
-    furi_assert(s_state);
-
-    if(subghz_block_generic_global.cnt_is_available) {
-        car_emulate_set_counter(subghz_block_generic_global.current_cnt);
-    }
-}
-
-static void car_emulate_apply_decoded_metadata(FuriString* decoded_text) {
-    furi_assert(s_state);
-    if(!decoded_text) return;
-
-    const char* text = furi_string_get_cstr(decoded_text);
-    uint32_t value = 0;
-
-    if((car_emulate_parse_hex_after(text, "Sn:", &value) ||
-        car_emulate_parse_hex_after(text, "SN:", &value) ||
-        car_emulate_parse_hex_after(text, "Ser:", &value) ||
-        car_emulate_parse_hex_after(text, "Serial:", &value)) &&
-       (value != 0)) {
-        s_state->serial = value;
-        s_state->has_serial = true;
-    } else if(
-        car_emulate_serial_is_placeholder() &&
-        car_emulate_parse_hex_after(text, "Fix:", &value) &&
-        (value != 0)) {
-        s_state->serial = value;
-        s_state->has_serial = true;
-    }
-
-    if(car_emulate_parse_hex_after(text, "Cnt:", &value) &&
-       ((value != 0) || car_emulate_counter_is_placeholder())) {
-        car_emulate_set_counter(value);
-    }
-}
-
 /** Update Btn and Cnt fields in fff_data so the transmitter re-serialises them. */
-static bool car_emulate_apply_button(SubGhz* subghz, InputKey key) {
+static void car_emulate_apply_button(SubGhz* subghz, InputKey key) {
     UNUSED(subghz);
 
     uint8_t custom_btn_id;
@@ -314,11 +215,7 @@ static bool car_emulate_apply_button(SubGhz* subghz, InputKey key) {
     default:            custom_btn_id = SUBGHZ_CUSTOM_BTN_OK;    break;
     }
 
-    if(custom_btn_id > s_state->max_custom_button) {
-        return false;
-    }
-
-    return subghz_custom_btn_set(custom_btn_id);
+    subghz_custom_btn_set(custom_btn_id);
 }
 
 
@@ -355,32 +252,10 @@ static bool car_emulate_start_tx(SubGhz* subghz, uint8_t custom_btn_id) {
 
 /** Stop an active transmission. */
 static void car_emulate_stop_tx(SubGhz* subghz) {
-    subghz_block_generic_global.endless_tx = false;
     subghz_txrx_stop(subghz->txrx);
     subghz->state_notifications = SubGhzNotificationStateIDLE;
     notification_message(subghz->notifications, &sequence_blink_stop);
     FURI_LOG_I(TAG, "TX stopped");
-}
-
-static bool car_emulate_restart_tx(SubGhz* subghz) {
-    furi_assert(s_state);
-
-    car_emulate_update_fff(subghz, s_state->current_counter);
-    subghz_block_generic_global.endless_tx = true;
-
-    if(car_emulate_start_tx(subghz, s_state->pending_button)) {
-        s_state->is_transmitting = true;
-        subghz->state_notifications = SubGhzNotificationStateTx;
-        notification_message(subghz->notifications, &sequence_blink_magenta_10);
-        FURI_LOG_D(TAG, "TX restarted while button is held");
-        return true;
-    }
-
-    subghz_block_generic_global.endless_tx = false;
-    s_state->is_transmitting = false;
-    s_state->stop_pending = false;
-    notification_message(subghz->notifications, &sequence_error);
-    return false;
 }
 
 /* ═══════════════════════════════════════════════════════════════════════════
@@ -418,7 +293,6 @@ void subghz_scene_car_emulate_on_enter(void* context) {
     s_state = malloc(sizeof(CarEmulateState));
     furi_check(s_state);
     memset(s_state, 0, sizeof(CarEmulateState));
-    subghz_block_generic_global.endless_tx = false;
 
     /* ── Read metadata from the loaded fff_data ── */
     FlipperFormat* fff = subghz_txrx_get_fff_data(subghz->txrx);
@@ -434,8 +308,7 @@ void subghz_scene_car_emulate_on_enter(void* context) {
         }
 
         flipper_format_rewind(fff);
-        s_state->has_serial =
-            flipper_format_read_uint32(fff, "Serial", &s_state->serial, 1);
+        flipper_format_read_uint32(fff, "Serial", &s_state->serial, 1);
 
         flipper_format_rewind(fff);
         uint32_t btn_tmp = 0;
@@ -444,8 +317,7 @@ void subghz_scene_car_emulate_on_enter(void* context) {
         }
 
         flipper_format_rewind(fff);
-        s_state->has_counter =
-            flipper_format_read_uint32(fff, "Cnt", &s_state->original_counter, 1);
+        flipper_format_read_uint32(fff, "Cnt", &s_state->original_counter, 1);
         s_state->current_counter = s_state->original_counter;
 
         furi_string_free(tmp);
@@ -461,58 +333,24 @@ void subghz_scene_car_emulate_on_enter(void* context) {
      *   - subghz_custom_btn_get_original() → the button that was in the file
      *   - subghz_custom_btn_is_allowed()   → true if protocol supports it
      *   - subghz_custom_btn_get_max()      → number of buttons available     */
-    subghz_block_generic_global_reset(NULL);
     subghz_custom_btns_reset();
 
     SubGhzProtocolDecoderBase* decoder = subghz_txrx_get_decoder(subghz->txrx);
     if(decoder && fff) {
         flipper_format_rewind(fff);
-        if(subghz_protocol_decoder_base_deserialize(decoder, fff) == SubGhzProtocolStatusOk) {
-            FuriString* decoded_text = furi_string_alloc();
-            subghz_protocol_decoder_base_get_string(decoder, decoded_text);
-            car_emulate_apply_global_metadata();
-            car_emulate_apply_decoded_metadata(decoded_text);
-            furi_string_free(decoded_text);
-        }
+        subghz_protocol_decoder_base_deserialize(decoder, fff);
         /* Rewind again so subsequent reads in car_emulate_read_freq_preset()
          * start from the beginning of the file. */
         flipper_format_rewind(fff);
     }
 
-    s_state->max_custom_button =
-        subghz_custom_btn_is_allowed() ? subghz_custom_btn_get_max() : SUBGHZ_CUSTOM_BTN_OK;
-    if(s_state->max_custom_button == SUBGHZ_CUSTOM_BTN_OK) {
-        s_state->max_custom_button =
-            subghz_button_labels_get_max_custom_btn(s_state->protocol_name);
-        if(s_state->max_custom_button != SUBGHZ_CUSTOM_BTN_OK) {
-            subghz_custom_btn_set_max(s_state->max_custom_button);
-        }
-    }
-
-    const char* button_labels[SUBGHZ_BUTTON_LABEL_COUNT];
-    subghz_button_labels_reset(button_labels);
-    subghz_button_labels_apply_protocol(s_state->protocol_name, button_labels);
-
-    subghz_car_emulate_view_set_labels(
+        subghz_car_emulate_view_set_labels(
         subghz->car_emulate_view,
-        subghz_button_labels_get(
-            button_labels, SUBGHZ_CUSTOM_BTN_OK, subghz_custom_btn_get_original()),
-        s_state->max_custom_button >= SUBGHZ_CUSTOM_BTN_UP ?
-            subghz_button_labels_get(
-                button_labels, SUBGHZ_CUSTOM_BTN_UP, subghz_custom_btn_get_original()) :
-            "",
-        s_state->max_custom_button >= SUBGHZ_CUSTOM_BTN_DOWN ?
-            subghz_button_labels_get(
-                button_labels, SUBGHZ_CUSTOM_BTN_DOWN, subghz_custom_btn_get_original()) :
-            "",
-        s_state->max_custom_button >= SUBGHZ_CUSTOM_BTN_LEFT ?
-            subghz_button_labels_get(
-                button_labels, SUBGHZ_CUSTOM_BTN_LEFT, subghz_custom_btn_get_original()) :
-            "",
-        s_state->max_custom_button >= SUBGHZ_CUSTOM_BTN_RIGHT ?
-            subghz_button_labels_get(
-                button_labels, SUBGHZ_CUSTOM_BTN_RIGHT, subghz_custom_btn_get_original()) :
-            ""
+        "UNLOCK",       /* OK    */
+        "LOCK",         /* Up    */
+        "TRUNK",        /* Down  */
+        "PANIC",        /* Left  */
+        "START"         /* Right */
     );
 
     car_emulate_read_freq_preset(subghz, s_state);
@@ -546,18 +384,14 @@ bool subghz_scene_car_emulate_on_event(void* context, SceneManagerEvent event) {
                 car_emulate_stop_tx(subghz);
             }
 
+            /* Bump counter */
+            s_state->current_counter++;
+
             /* Set the custom button BEFORE deserialize() is called inside
              * subghz_tx_start() → subghz_txrx_tx_start().
              * The protocol's deserialize() will call subghz_custom_btn_get()
              * to pick the right button code. */
-            if(!car_emulate_apply_button(subghz, key)) {
-                notification_message(subghz->notifications, &sequence_error);
-                car_emulate_refresh_view(subghz);
-                return true;
-            }
-
-            /* Bump counter */
-            s_state->current_counter++;
+            car_emulate_apply_button(subghz, key);
 
             /* Only update the counter in fff_data; the protocol handles Btn. */
             car_emulate_update_fff(subghz, s_state->current_counter);
@@ -566,9 +400,9 @@ bool subghz_scene_car_emulate_on_event(void* context, SceneManagerEvent event) {
             s_state->stop_pending    = false;
             s_state->tx_start_tick   = (uint32_t)furi_get_tick();
 
-            uint8_t cur_btn = subghz_custom_btn_get();
-            s_state->pending_button = cur_btn;
             subghz_block_generic_global.endless_tx = true;
+
+            uint8_t cur_btn = subghz_custom_btn_get();
             if(!car_emulate_start_tx(subghz, cur_btn)) {
                 s_state->is_transmitting = false;
                 subghz_block_generic_global.endless_tx = false;
@@ -580,13 +414,13 @@ bool subghz_scene_car_emulate_on_event(void* context, SceneManagerEvent event) {
 
         /* ── Stop ── */
         } else if(event.event == SubGhzCustomEventCarEmulateStop) {
-            if(s_state->is_transmitting) {
-                subghz_block_generic_global.endless_tx = false;
+            subghz_block_generic_global.endless_tx = false;
+
+            if(s_state->is_transmitting &&
+               subghz->state_notifications == SubGhzNotificationStateTx) {
 
                 uint32_t elapsed = (uint32_t)furi_get_tick() - s_state->tx_start_tick;
-                if(
-                    elapsed >= MIN_TX_TICKS &&
-                    subghz->state_notifications == SubGhzNotificationStateTx) {
+                if(elapsed >= MIN_TX_TICKS) {
                     car_emulate_stop_tx(subghz);
                     s_state->is_transmitting = false;
                     s_state->stop_pending    = false;
@@ -602,7 +436,6 @@ bool subghz_scene_car_emulate_on_event(void* context, SceneManagerEvent event) {
             if(subghz->state_notifications == SubGhzNotificationStateTx) {
                 car_emulate_stop_tx(subghz);
             }
-            subghz_block_generic_global.endless_tx = false;
             scene_manager_search_and_switch_to_previous_scene(
                 subghz->scene_manager, SubGhzSceneSavedMenu);
             consumed = true;
@@ -622,8 +455,6 @@ bool subghz_scene_car_emulate_on_event(void* context, SceneManagerEvent event) {
                     s_state->is_transmitting = false;
                     s_state->stop_pending    = false;
                     notification_message(subghz->notifications, &sequence_blink_stop);
-                } else {
-                    car_emulate_restart_tx(subghz);
                 }
             } else {
                 /* Still transmitting – blink LED */
@@ -659,7 +490,6 @@ void subghz_scene_car_emulate_on_exit(void* context) {
         car_emulate_stop_tx(subghz);
     }
 
-    subghz_block_generic_global.endless_tx = false;
     subghz->state_notifications = SubGhzNotificationStateIDLE;
     notification_message(subghz->notifications, &sequence_blink_stop);
 

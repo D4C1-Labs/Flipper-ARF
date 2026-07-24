@@ -103,8 +103,8 @@ static uint8_t vag_custom_to_btn(uint8_t custom, uint8_t original_btn) {
     switch(custom) {
         case 1: return 0x20;
         case 2: return 0x10;
-        case 3: return 0x40;
-        case 4: return 0x80;
+        case 3:
+        case 4: return 0x40;
         default: return original_btn;
     }
 }
@@ -113,8 +113,8 @@ static uint8_t vag_btn_to_custom(uint8_t btn) {
     switch(btn) {
         case 0x10: return 2;
         case 0x20: return 1;
-        case 0x40: return 3;
-        case 0x80: return 4;
+        case 0x40:
+        case 0x80: return 3;
         default: return 1;
     }
 }
@@ -1211,7 +1211,7 @@ void subghz_protocol_decoder_vag_get_string(void* context, FuriString* output) {
     if(instance->decrypted) {
         furi_string_cat_printf(
             output,
-            "%s %dbit\r\n"
+            "%s %db\r\n"
             "Key1:%08lX%08lX\r\n"
             "Key2:%04X KeyIdx:%d\r\n"
             "Ser:%08lX Cnt:%06lX\r\n"
@@ -1297,7 +1297,7 @@ LevelDuration subghz_protocol_encoder_vag_yield(void* context) {
 
     if(instance->front >= instance->size_upload) {
         instance->front = 0;
-        instance->repeat--;
+        if(!subghz_block_generic_global.endless_tx) instance->repeat--;
     }
 
     return ret;
