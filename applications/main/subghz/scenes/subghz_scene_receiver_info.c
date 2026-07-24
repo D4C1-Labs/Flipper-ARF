@@ -189,7 +189,7 @@ bool subghz_scene_receiver_info_on_event(void* context, SceneManagerEvent event)
             stream_copy_full(src, dst);
             stream_seek(dst, 0, StreamOffsetFromStart);
 
-            scene_manager_next_scene(subghz->scene_manager, SubGhzSceneTransmitter);
+            scene_manager_next_scene(subghz->scene_manager, SubGhzSceneCarEmulate);
             return true;
         }
 
