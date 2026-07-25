@@ -1,5 +1,5 @@
 entry,status,name,type,params
-Version,+,89.2,,
+Version,+,89.3,,
 Header,+,applications/drivers/subghz/cc1101_ext/cc1101_ext_interconnect.h,,
 Header,+,applications/services/applications.h,,
 Header,+,applications/services/bt/bt_service/bt.h,,
@@ -50,6 +50,8 @@ Header,+,applications/services/power/power_service/power.h,,
 Header,+,applications/services/rpc/rpc_app.h,,
 Header,+,applications/services/storage/storage.h,,
 Header,+,lib/bit_lib/bit_lib.h,,
+Header,+,lib/ble_central/aci_decls.h,,
+Header,+,lib/ble_central/ble_central.h,,
 Header,+,lib/ble_profile/extra_profiles/hid_profile.h,,
 Header,+,lib/ble_profile/extra_services/hid_service.h,,
 Header,+,lib/datetime/datetime.h,,
@@ -625,6 +627,12 @@ Function,-,_wctomb_r,int,"_reent*, char*, wchar_t, _mbstate_t*"
 Function,-,a64l,long,const char*
 Function,+,abort,void,
 Function,-,abs,int,int
+Function,+,aci_gap_create_connection,uint8_t,"uint16_t, uint16_t, uint8_t, const uint8_t*, uint8_t, uint16_t, uint16_t, uint16_t, uint16_t, uint16_t, uint16_t"
+Function,+,aci_gap_start_general_discovery_proc,uint8_t,"uint16_t, uint16_t, uint8_t, uint8_t"
+Function,+,aci_gap_terminate_gap_proc,uint8_t,uint8_t
+Function,+,aci_gatt_disc_all_primary_services,uint8_t,uint16_t
+Function,+,aci_gatt_write_char_value,uint8_t,"uint16_t, uint16_t, uint8_t, const uint8_t*"
+Function,+,aci_gatt_write_without_resp,uint8_t,"uint16_t, uint16_t, uint8_t, const uint8_t*"
 Function,-,acos,double,double
 Function,-,acosf,float,float
 Function,-,acosh,double,double
@@ -734,6 +742,15 @@ Function,+,bit_lib_test_parity_32,_Bool,"uint32_t, BitLibParity"
 Function,-,ble_app_deinit,void,
 Function,-,ble_app_get_key_storage_buff,void,"uint8_t**, uint16_t*"
 Function,-,ble_app_init,_Bool,
+Function,-,ble_central_connect,_Bool,"const uint8_t*, uint8_t"
+Function,-,ble_central_disconnect,_Bool,
+Function,-,ble_central_discover_services,_Bool,
+Function,-,ble_central_get_connection_handle,uint16_t,
+Function,-,ble_central_is_connected,_Bool,
+Function,-,ble_central_scan_start,_Bool,"BleCentralEventCallback, void*"
+Function,-,ble_central_scan_stop,_Bool,
+Function,-,ble_central_write_command,_Bool,"uint16_t, const uint8_t*, uint16_t"
+Function,-,ble_central_write_request,_Bool,"uint16_t, const uint8_t*, uint16_t"
 Function,-,ble_event_app_notification,BleEventFlowStatus,void*
 Function,-,ble_event_dispatcher_init,void,
 Function,-,ble_event_dispatcher_process_event,BleEventFlowStatus,void*
@@ -2088,7 +2105,8 @@ Function,+,gui_set_lockdown,void,"Gui*, _Bool"
 Function,+,gui_set_lockdown_inhibit,void,"Gui*, _Bool"
 Function,-,gui_view_port_send_to_back,void,"Gui*, ViewPort*"
 Function,+,gui_view_port_send_to_front,void,"Gui*, ViewPort*"
-Function,-,hci_send_req,int,"hci_request*, uint8_t"
+Function,+,hci_disconnect,uint8_t,"uint16_t, uint8_t"
+Function,+,hci_send_req,int,"hci_request*, uint8_t"
 Function,+,hex_char_to_hex_nibble,_Bool,"char, uint8_t*"
 Function,+,hex_char_to_uint8,_Bool,"char, char, uint8_t*"
 Function,+,hex_chars_to_uint64,_Bool,"const char*, uint64_t*"

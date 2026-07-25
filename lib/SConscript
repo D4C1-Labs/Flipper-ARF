@@ -41,6 +41,7 @@ libs = env.BuildModules(
         "update_util",
         "heatshrink",
         "ble_profile",
+        "ble_central",
         "bit_lib",
         "datetime",
         "ieee754_parse_wrap",

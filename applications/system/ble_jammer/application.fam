@@ -1,0 +1,13 @@
+App(
+    appid="ble_jammer",
+    name="BLE Jammer",
+    apptype=FlipperAppType.EXTERNAL,
+    entry_point="ble_jammer_app",
+    stack_size=1024,
+    fap_icon="icon.png",
+    fap_category="Bluetooth",
+    fap_icon_assets="images",
+    fap_author="W0rthlessS0ul (ported by d4rks1d3)",
+    fap_weburl="https://github.com/W0rthlessS0ul/FZ_nRF24_jammer",
+    fap_version="1.4.0",
+)

@@ -1,0 +1,17 @@
+App(
+    appid="ble_scanner",
+    name="BLE Scanner",
+    apptype=FlipperAppType.EXTERNAL,
+    entry_point="ble_scanner_app",
+    stack_size=4 * 1024,
+    fap_category="Bluetooth",
+    fap_libs=["ble_central"],
+    requires=["gui"],
+    sources=[
+        "ble_scanner.c",
+    ],
+    fap_author="d4rks1d3",
+    fap_weburl="https://github.com/d4rks1d3",
+    fap_version="0.1",
+    fap_description="Scan and display nearby BLE devices (phones, headphones, etc.)",
+)
