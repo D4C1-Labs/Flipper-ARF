@@ -49,11 +49,15 @@
  * Physical constants — Variant A
  * ---------------------------------------------------------------- */
 
+// [FALSE_POSITIVE_FIX] te_delta reduced from 175 (43.8%) to 100 (25% of te_short)
+// to eliminate huge overlap with other 250/500us OOK automotive protocols (KIA,
+// PSA, Honda v2). min_count_bit_for_found raised from 60 to TOYOTA_A_BITS (68)
+// so truncated frames of other protocols cannot fire the callback prematurely.
 static const SubGhzBlockConst toyota_const_a = {
     .te_short                = 400,
     .te_long                 = 800,
-    .te_delta                = 175,
-    .min_count_bit_for_found = 60,
+    .te_delta                = 100,
+    .min_count_bit_for_found = 68,
 };
 
 /* ----------------------------------------------------------------
@@ -61,11 +65,16 @@ static const SubGhzBlockConst toyota_const_a = {
  * Data phase uses midpoint, not these tolerances.
  * ---------------------------------------------------------------- */
 
+// [FALSE_POSITIVE_FIX] te_delta reduced from 120 (60%!) to 60 (30% of te_short).
+// The old 120us delta caused short/long windows to overlap in 270-320us and let
+// most OOK automotive protocols (KIA 250/500, PSA 250/500, Renault 125/250,
+// Honda v2 250/500) trigger the Variant B state machine and produce garbage
+// 67-bit frames. min_count_bit_for_found raised from 60 to TOYOTA_B_BITS (67).
 static const SubGhzBlockConst toyota_const_b = {
     .te_short                = 200,
     .te_long                 = 390,
-    .te_delta                = 120,
-    .min_count_bit_for_found = 60,
+    .te_delta                = 60,
+    .min_count_bit_for_found = 67,
 };
 
 /*
@@ -78,15 +87,27 @@ static const SubGhzBlockConst toyota_const_b = {
 #define TOYOTA_B_NRZ_MIDPOINT   287u
 
 /* Sync gap: LOW pulse separating preamble from data */
-#define TOYOTA_B_SYNC_GAP_MIN   1500u
-#define TOYOTA_B_SYNC_GAP_MAX   2600u
+// [FALSE_POSITIVE_FIX] window narrowed from 1100us (1500-2600) to 500us
+// (1700-2200) centered on the real ~1938us gap of Tundra fobs. The old window
+// happily accepted long silences from any other protocol.
+#define TOYOTA_B_SYNC_GAP_MIN   1700u
+#define TOYOTA_B_SYNC_GAP_MAX   2200u
 
 /* Any pulse above this is an inter-frame gap */
 #define TOYOTA_INTER_FRAME_GAP  5000u
 
-/* Minimum preamble pairs before accepting sync gap */
-#define TOYOTA_B_PREAMBLE_MIN   6u
-#define TOYOTA_A_PREAMBLE_MIN   6u
+// [FALSE_POSITIVE_FIX] Minimum preamble pairs raised from 6 to 10.
+// Real Toyota fobs transmit ~15-20+ preamble pairs; other automotive
+// protocols rarely have 10+ consecutive matching short-pulse pairs.
+#define TOYOTA_B_PREAMBLE_MIN   10u
+#define TOYOTA_A_PREAMBLE_MIN   10u
+
+// [FALSE_POSITIVE_FIX] Bounds for individual pulses accepted during Variant B
+// data phase (NRZ). Real Tundra pulses are ~200us (bit 0) or ~390us (bit 1).
+// Anything outside a generous 100-500us window is almost certainly a foreign
+// protocol pulse; reject and reset instead of silently coercing to a bit.
+#define TOYOTA_B_DATA_PULSE_MIN 100u
+#define TOYOTA_B_DATA_PULSE_MAX 500u
 
 /* Frame lengths in bits */
 #define TOYOTA_A_BITS  68u
@@ -238,6 +259,30 @@ static const char* toyota_model_name(uint8_t variant) {
     return (variant == 1) ? "Tundra" : "Corolla";
 }
 
+// [FALSE_POSITIVE_FIX] Plausibility check for decoded fields. Rejects frames
+// with impossible serial/button values that are almost certainly the byproduct
+// of another protocol's stream mis-parsed as Toyota.
+static bool toyota_frame_plausible(uint32_t serial, uint8_t button, uint32_t hop, uint8_t variant) {
+    // Serial: reject all-zeros and all-ones (28-bit field, mask 0x0FFFFFFF).
+    if(serial == 0U || serial == 0x0FFFFFFFU) return false;
+
+    // Hop: reject all-zeros and all-ones (obvious RF idle / noise).
+    if(hop == 0U || hop == 0xFFFFFFFFU) return false;
+
+    // Button must belong to the closed set of Toyota-observed codes.
+    const uint8_t b = button & 0x0FU;
+    if(variant == 1U) {
+        // Tundra variant B: Lock=0x0A, Unlock=0x05, L+U=0x0F, Trunk=0x04
+        if(b != TOYOTA_B_BTN_LOCK && b != TOYOTA_B_BTN_UNLOCK &&
+           b != 0x0FU && b != 0x04U) return false;
+    } else {
+        // Corolla variant A: Lock=0x08, Unlock=0x01, L+U=0x09, Trunk=0x02, Aux=0x04
+        if(b != TOYOTA_A_BTN_LOCK && b != TOYOTA_A_BTN_UNLOCK &&
+           b != 0x09U && b != 0x02U && b != 0x04U) return false;
+    }
+    return true;
+}
+
 /* ----------------------------------------------------------------
  * Decode and fire callback
  * ---------------------------------------------------------------- */
@@ -251,6 +296,16 @@ static void toyota_decode_and_fire(SubGhzProtocolDecoderToyota* inst) {
     inst->hop    = toyota_extract(inst,  0, 32);
     inst->serial = toyota_extract(inst, 32, 28);
     inst->button = (uint8_t)toyota_extract(inst, 60, 4);
+
+    // [FALSE_POSITIVE_FIX] Reject frames with implausible fields BEFORE firing.
+    // This is the last line of defence against foreign-protocol garbage that
+    // happened to survive the timing checks.
+    if(!toyota_frame_plausible(inst->serial, inst->button, inst->hop, inst->variant)) {
+        FURI_LOG_D(TAG, "REJECT: implausible serial=%08lX btn=%X hop=%08lX var=%d",
+            (unsigned long)inst->serial, (unsigned int)inst->button,
+            (unsigned long)inst->hop, (int)inst->variant);
+        return;
+    }
 
     inst->generic.data =
         ((uint64_t)inst->hop    << 32) |
@@ -489,6 +544,16 @@ static void toyota_feed_variant_b(
             if(inst->bit_count >= (uint8_t)c->min_count_bit_for_found) {
                 toyota_decode_and_fire(inst);
             }
+            subghz_protocol_decoder_toyota_reset(inst);
+            return;
+        }
+
+        // [FALSE_POSITIVE_FIX] Reject pulses clearly outside Tundra range.
+        // Real Tundra data pulses are ~200us (bit 0) or ~390us (bit 1); anything
+        // shorter than 100us or longer than 500us is almost certainly a foreign
+        // protocol (Honda v1 1000us, VAG 1000us, etc.). Silently coercing them
+        // to a bit was the root cause of most false positives.
+        if(duration < TOYOTA_B_DATA_PULSE_MIN || duration > TOYOTA_B_DATA_PULSE_MAX) {
             subghz_protocol_decoder_toyota_reset(inst);
             return;
         }
