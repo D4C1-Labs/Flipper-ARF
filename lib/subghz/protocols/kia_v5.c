@@ -8,11 +8,20 @@
 
 #define TAG "SubGhzProtocolKiaV5"
 
+// [BUGFIX] min_count_bit_for_found MUST match the exact bit count that the
+// decoder writes to generic.data_count_bit (see line ~618-619, which stores
+// min(bit_count, 67)). The framework helper
+// subghz_block_generic_deserialize_check_count_bit() performs an EQUAL check
+// (`data_count_bit != count_bit`), not a "greater-or-equal" check. With the
+// old value 64, any capture that produced 65/66/67 bits would fail to
+// re-deserialize (root cause of the "Protocol not found!" error when entering
+// Full Dpad via the receiver_info scene, which calls the decoder's
+// deserialize on the fff_history data).
 static const SubGhzBlockConst subghz_protocol_kia_v5_const = {
     .te_short = 400,
     .te_long = 800,
     .te_delta = 150,
-    .min_count_bit_for_found = 64,
+    .min_count_bit_for_found = 67,
 };
 
 static const uint8_t keystore_bytes[] = {0x53, 0x54, 0x46, 0x52, 0x4b, 0x45, 0x30, 0x30};
@@ -613,10 +622,13 @@ void subghz_protocol_decoder_kia_v5_feed(void* context, bool level, uint32_t dur
             subghz_protocol_kia_v5_const.te_delta) {
             event = level ? ManchesterEventLongHigh : ManchesterEventLongLow;
         } else {
+            // [BUGFIX] Trigger only on exact 67-bit frames. The framework's
+            // deserialize helper requires data_count_bit == min_count_bit_for_found,
+            // so we must never store any other value here.
             if(instance->bit_count >= subghz_protocol_kia_v5_const.min_count_bit_for_found) {
                 instance->generic.data = instance->saved_key;
                 instance->generic.data_count_bit =
-                    (instance->bit_count > 67) ? 67 : instance->bit_count;
+                    subghz_protocol_kia_v5_const.min_count_bit_for_found;
 
                 instance->crc = (uint8_t)(instance->decoded_data & 0x07);
 
