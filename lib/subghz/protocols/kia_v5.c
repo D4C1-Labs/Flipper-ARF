@@ -90,6 +90,70 @@ static uint16_t mixer_decode(uint32_t encrypted) {
     return (s0 + (s1 << 8)) & 0xFFFF;
 }
 
+// [PROTOPIRATE_PORT] Inverse of mixer_decode: regenerates 32-bit "encrypted"
+// word from (serial, counter, button). Ported from ProtoPirate kia_v5.c
+// (mixer_encode, lines 83-144). Uses the same keystore_bytes as mixer_decode.
+static uint32_t kia_v5_mixer_encode(uint32_t serial, uint16_t counter, uint8_t button) {
+    uint8_t state_a = (uint8_t)(((serial >> 8) & 0x0FU) | ((button & 0x0FU) << 4));
+    uint8_t state_b = (uint8_t)((counter >> 8) & 0xFFU);
+    uint8_t state_c = (uint8_t)(serial & 0xFFU);
+    uint8_t state_d = (uint8_t)(counter & 0xFFU);
+
+    int ks_idx = 0;
+    for(int round_i = 0; round_i < 18; round_i++) {
+        uint8_t r = keystore_bytes[ks_idx] & 0xFFU;
+        ks_idx = (ks_idx + 1) & 0x07;
+
+        uint8_t running_d = state_d;
+        for(int step = 0; step < 8; step++) {
+            uint8_t base;
+            if((state_a & 0x80U) == 0) {
+                base = (state_a & 0x04U) == 0 ? 0x74U : 0x2EU;
+            } else {
+                base = (state_a & 0x04U) == 0 ? 0x3AU : 0x5CU;
+            }
+
+            if(state_c & 0x10U) {
+                base = (uint8_t)(((base >> 4) & 0x0FU) | ((base & 0x0FU) << 4));
+            }
+            if(state_b & 0x02U) {
+                base = (uint8_t)((base & 0x3FU) << 2);
+            }
+
+            uint8_t base_final = base;
+            if(running_d & 0x02U) {
+                base_final = (uint8_t)((base & 0x7FU) << 1);
+            }
+
+            const bool carry_b = (state_b & 0x01U) != 0;
+            const bool carry_c = (state_c & 0x01U) != 0;
+            const bool carry_a = (state_a & 0x01U) != 0;
+
+            uint8_t new_d = (uint8_t)(running_d >> 1);
+            if(carry_b) new_d |= 0x80U;
+
+            running_d ^= state_c;
+
+            state_b = (uint8_t)(state_b >> 1);
+            if(carry_c) state_b |= 0x80U;
+
+            state_c = (uint8_t)(state_c >> 1);
+            if(carry_a) state_c |= 0x80U;
+
+            const uint8_t feedback = (uint8_t)(((running_d ^ r) << 7) ^ base_final);
+            state_a = (uint8_t)(state_a >> 1);
+            if(feedback & 0x80U) state_a |= 0x80U;
+
+            r = (uint8_t)(r >> 1);
+            running_d = new_d;
+        }
+        state_d = running_d;
+    }
+
+    return ((uint32_t)state_a << 24) | ((uint32_t)state_c << 16) | ((uint32_t)state_b << 8) |
+           (uint32_t)state_d;
+}
+
 struct SubGhzProtocolDecoderKiaV5 {
     SubGhzProtocolDecoderBase base;
     SubGhzBlockDecoder decoder;
@@ -111,6 +175,11 @@ struct SubGhzProtocolEncoderKiaV5 {
 
     uint64_t replay_data;
     uint8_t replay_crc;
+    // [PROTOPIRATE_PORT] true when Serial/Btn/Cnt were explicitly provided by
+    // the .sub and replay_data was re-encrypted via kia_v5_mixer_encode().
+    // In that case UI helpers (set_button/set_counter/increment_counter)
+    // can safely regenerate the bitstream from live serial/btn/cnt.
+    bool reencrypt_mode;
 };
 
 #define KIA_V5_PREAMBLE_PAIRS 200U
@@ -252,6 +321,38 @@ static bool subghz_protocol_encoder_kia_v5_get_upload(SubGhzProtocolEncoderKiaV5
     return true;
 }
 
+// [PROTOPIRATE_PORT] Rebuild replay_data (and CRC) from live serial/btn/cnt
+// using the ported mixer_encode + per-byte bit reversal. Also refreshes
+// generic.data to keep display/serializer consistent. Returns the new 64-bit
+// "data" word (already bit-reversed per-byte, as expected by get_upload()).
+static uint64_t kia_v5_rebuild_data(uint32_t serial, uint8_t btn, uint16_t cnt) {
+    const uint32_t s = serial & 0x0FFFFFFFU;
+    const uint8_t b = (uint8_t)(btn & 0x0FU);
+    const uint32_t mixer = kia_v5_mixer_encode(s, cnt, b);
+    const uint64_t yek_new = ((uint64_t)b << 60) | ((uint64_t)s << 32) | (uint64_t)mixer;
+
+    uint64_t data_new = 0;
+    for(int i = 0; i < 8; i++) {
+        const uint8_t byte = (uint8_t)((yek_new >> (i * 8)) & 0xFFU);
+        data_new |= ((uint64_t)kia_v5_reverse_byte(byte) << ((7 - i) * 8));
+    }
+    return data_new;
+}
+
+// [PROTOPIRATE_PORT] Re-encrypt path used by both deserialize (when the .sub
+// carries Serial/Btn/Cnt) and the UI helpers when reencrypt_mode is active.
+// Regenerates replay_data, replay_crc and the RF upload buffer.
+static bool kia_v5_reencrypt_and_upload(SubGhzProtocolEncoderKiaV5* instance) {
+    const uint64_t data_new = kia_v5_rebuild_data(
+        instance->generic.serial, instance->generic.btn, instance->generic.cnt);
+
+    instance->replay_data = data_new;
+    instance->generic.data = data_new;
+    instance->replay_crc = kia_v5_calculate_crc(instance->replay_data);
+
+    return subghz_protocol_encoder_kia_v5_get_upload(instance);
+}
+
 SubGhzProtocolStatus
     subghz_protocol_encoder_kia_v5_deserialize(void* context, FlipperFormat* flipper_format) {
     furi_assert(context);
@@ -283,12 +384,43 @@ SubGhzProtocolStatus
         uint32_t encrypted = (uint32_t)(yek & 0xFFFFFFFF);
         instance->generic.cnt = mixer_decode(encrypted);
 
-        instance->replay_data = instance->generic.data;
-        instance->replay_crc = kia_v5_calculate_crc(instance->replay_data);
+        // [PROTOPIRATE_PORT] Optional re-encrypt path: if the .sub carries
+        // explicit Serial + Btn + Cnt fields, regenerate the RF bitstream
+        // from them using kia_v5_mixer_encode() instead of pure replay.
+        // Guard: all three must be present, otherwise fall back to replay.
+        instance->reencrypt_mode = false;
+        uint32_t sub_serial = UINT32_MAX;
+        uint32_t sub_btn = UINT32_MAX;
+        uint32_t sub_cnt = UINT32_MAX;
+        flipper_format_rewind(flipper_format);
+        const bool have_serial =
+            flipper_format_read_uint32(flipper_format, "Serial", &sub_serial, 1);
+        flipper_format_rewind(flipper_format);
+        const bool have_btn = flipper_format_read_uint32(flipper_format, "Btn", &sub_btn, 1);
+        flipper_format_rewind(flipper_format);
+        const bool have_cnt = flipper_format_read_uint32(flipper_format, "Cnt", &sub_cnt, 1);
 
-        if(!subghz_protocol_encoder_kia_v5_get_upload(instance)) {
-            ret = SubGhzProtocolStatusErrorEncoderGetUpload;
-            break;
+        if(have_serial && have_btn && have_cnt && sub_serial != UINT32_MAX &&
+           sub_btn != UINT32_MAX && sub_cnt != UINT32_MAX) {
+            // Adopt user-provided values (masked to their protocol widths).
+            instance->generic.serial = sub_serial & 0x0FFFFFFFU;
+            instance->generic.btn = (uint8_t)(sub_btn & 0x0FU);
+            instance->generic.cnt = (uint16_t)(sub_cnt & 0xFFFFU);
+            instance->reencrypt_mode = true;
+
+            if(!kia_v5_reencrypt_and_upload(instance)) {
+                ret = SubGhzProtocolStatusErrorEncoderGetUpload;
+                break;
+            }
+        } else {
+            // Pure replay path (unchanged legacy behavior).
+            instance->replay_data = instance->generic.data;
+            instance->replay_crc = kia_v5_calculate_crc(instance->replay_data);
+
+            if(!subghz_protocol_encoder_kia_v5_get_upload(instance)) {
+                ret = SubGhzProtocolStatusErrorEncoderGetUpload;
+                break;
+            }
         }
 
         instance->encoder.is_running = true;
@@ -329,12 +461,22 @@ void subghz_protocol_encoder_kia_v5_set_button(void* context, uint8_t button) {
     furi_assert(context);
     SubGhzProtocolEncoderKiaV5* instance = context;
     instance->generic.btn = button;
+    // [PROTOPIRATE_PORT] In re-encrypt mode, regenerate RF bitstream so the
+    // UI change actually reaches the air. In pure replay mode this is a no-op
+    // (RF still emits the recorded frame).
+    if(instance->reencrypt_mode) {
+        (void)kia_v5_reencrypt_and_upload(instance);
+    }
 }
 
 void subghz_protocol_encoder_kia_v5_set_counter(void* context, uint16_t counter) {
     furi_assert(context);
     SubGhzProtocolEncoderKiaV5* instance = context;
     instance->generic.cnt = counter;
+    // [PROTOPIRATE_PORT] see set_button rationale.
+    if(instance->reencrypt_mode) {
+        (void)kia_v5_reencrypt_and_upload(instance);
+    }
 }
 
 void subghz_protocol_encoder_kia_v5_increment_counter(void* context) {
@@ -344,6 +486,10 @@ void subghz_protocol_encoder_kia_v5_increment_counter(void* context) {
         instance->generic.cnt++;
     } else {
         instance->generic.cnt = 0;
+    }
+    // [PROTOPIRATE_PORT] see set_button rationale.
+    if(instance->reencrypt_mode) {
+        (void)kia_v5_reencrypt_and_upload(instance);
     }
 }
 

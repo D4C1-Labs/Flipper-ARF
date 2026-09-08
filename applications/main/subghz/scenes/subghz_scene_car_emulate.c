@@ -41,126 +41,39 @@ typedef struct {
 static CarEmulateState* s_state = NULL;
 
 /* ═══════════════════════════════════════════════════════════════════════════
- * Button mapping  (protocol-name → InputKey → button byte)
- * Ported verbatim from protopirate_scene_emulate.c
+ * Button mapping architecture
+ * ─────────────────────────────────────────────────────────────────────────
+ * The scene NO LONGER hard-codes per-protocol byte mappings. Each protocol
+ * that supports the Custom Car Emulate feature owns its own mapping in its
+ * encoder's deserialize() path via the custom_btn system:
+ *
+ *   1. On scene enter, the decoder's deserialize() is called once so it can
+ *      publish its original button (subghz_custom_btn_set_original) and the
+ *      number of buttons it supports (subghz_custom_btn_set_max).
+ *   2. When the user presses a directional key, this scene translates it to
+ *      SUBGHZ_CUSTOM_BTN_{OK,UP,DOWN,LEFT,RIGHT} and calls
+ *      subghz_custom_btn_set(id).
+ *   3. subghz_tx_start() then re-invokes the encoder's deserialize(), which
+ *      calls subghz_custom_btn_get() to select the right protocol-specific
+ *      code before generating the bitstream.
+ *
+ * Protocols wired up (as of the ProtoPirate custom_btn port):
+ *   - alutech_at_4n, subaru (pre-existing)
+ *   - chrysler       Up=0x1  OK=0x2
+ *   - fiat_v1        Up=0x8  OK=0x0  Down=0xD
+ *   - ford_v0        Left=0x1  Up=0x2  OK=0x4  Down=0x8  Right=0x10
+ *   - ford_v1        Left=0x1  Up=0x2  OK=0x4  Down=0x8  (4-bit btn, no Right)
+ *   - ford_v2        Up=0x11 OK=0x10 Down=0x13 Left=0x14 Right=0x15
+ *   - honda_static   Up=0x1  OK=0x2  Down=0x4  Left=0x8  Right=0x5
+ *   - land_rover_v0  Up=0x02 (Lock) OK=0x04 (Unlock)
+ *   - mazda_v0       Up=0x1  OK=0x2  Down=0x4  Right=0x8  (4-bit btn, no Left)
+ *
+ * ford_v3 is decode-only (no encoder) and therefore not wired.
+ *
+ * Fallback: if the current protocol does not implement custom_btn, the
+ * default path (custom_btn_id == SUBGHZ_CUSTOM_BTN_OK) preserves the file's
+ * original Btn, so a saved .sub still transmits correctly.
  * ═════════════════════════════════════════════════════════════════════════*/
-//static uint8_t car_emulate_map_button(
-//    const char* protocol,
-//    InputKey    key,
-//    uint8_t     original) {
-
-    /* Land Rover V0 */
-//    if(strstr(protocol, "Land Rover")) {
-//        switch(key) {
-//        case InputKeyUp:   return 0x02; /* Lock   */
-//        case InputKeyOk:   return 0x04; /* Unlock */
-//        default:           return original;
-//        }
-//    }
-    /* Mazda */
-//    if(strstr(protocol, "Mazda")) {
-//        switch(key) {
-//        case InputKeyUp:    return 0x01;
-//        case InputKeyOk:    return 0x02;
-//        case InputKeyDown:  return 0x04;
-//        case InputKeyRight: return 0x08;
-//        default:            return original;
-//        }
-//    }
-    /* PSA */
-//    if(strstr(protocol, "PSA")) {
-//        switch(key) {
-//        case InputKeyUp:    return 0x1;
-//        case InputKeyOk:    return 0x2;
-//        case InputKeyDown:  return 0x4;
-//        case InputKeyLeft:  return 0x8;
-//        default:            return original;
-//        }
-//    }
-    /* VAG */
-//    if(strstr(protocol, "VAG")) {
-//        if(original == 0x10 || original == 0x20 || original == 0x40) {
-//            switch(key) {
-//            case InputKeyUp:   return 0x20;
-//            case InputKeyOk:   return 0x10;
-//            case InputKeyDown: return 0x40;
-//            default:           return original;
-//            }
-//        }
-//        switch(key) {
-//        case InputKeyUp:    return 0x2;
-//        case InputKeyOk:    return 0x1;
-//        case InputKeyDown:  return 0x4;
-//        case InputKeyLeft:  return 0x8;
-//        case InputKeyRight: return 0x3;
-//        default:            return original;
-//        }
-//    }
-    /* Honda Static */
-//    if(strstr(protocol, "Honda Static")) {
-//        switch(key) {
-//        case InputKeyUp:    return 0x1;
-//        case InputKeyOk:    return 0x2;
-//        case InputKeyDown:  return 0x4;
-//        case InputKeyRight: return 0x5;
-//        case InputKeyLeft:  return 0x8;
-//        default:            return original;
-//        }
-//    }
-    /* Ford */
-//    if(strstr(protocol, "Ford")) {
-//        switch(key) {
-//        case InputKeyLeft:  return 0x1;
-//        case InputKeyUp:    return 0x2;
-//        case InputKeyOk:    return 0x4;
-//        case InputKeyDown:  return 0x8;
-//        case InputKeyRight: return 0x10;
-//        default:            return original;
-//        }
-//    }
-    /* Chrysler */
-//    if(strstr(protocol, "Chrysler")) {
-//        switch(key) {
-//        case InputKeyUp: return 0x1;
-//        case InputKeyOk: return 0x2;
-//        default:         return original;
-//        }
-//    }
-    /* Subaru */
-//    if(strstr(protocol, "Subaru")) {
-//        switch(key) {
-//        case InputKeyUp:    return 0x1;
-//        case InputKeyOk:    return 0x2;
-//        case InputKeyDown:  return 0x3;
-//        case InputKeyLeft:  return 0x4;
-//        case InputKeyRight: return 0x8;
-//        default:            return original;
-//        }
-//    }
-    /* Fiat V1 */
-//    if(strstr(protocol, "Fiat V1")) {
-//        switch(key) {
-//        case InputKeyUp:   return 0x8;
-//        case InputKeyOk:   return 0x0;
-//        case InputKeyDown: return 0xD;
-//        default:           return original;
-//        }
-//    }
-    /* Generic KeeLoq / KIA etc. – simple 4-button layout */
-//    if(strstr(protocol, "Kia") || strstr(protocol, "KIA") ||
-//       strstr(protocol, "KeeLoq")     || strstr(protocol, "Keeloq")) {
-//        switch(key) {
-//        case InputKeyUp:    return 0x1;
-//        case InputKeyOk:    return 0x2;
-//        case InputKeyDown:  return 0x3;
-//        case InputKeyLeft:  return 0x4;
-//        case InputKeyRight: return 0x8;
-//        default:            return original;
-//        }
-//    }
-
-//    return original;
-//}
 
 /* ═══════════════════════════════════════════════════════════════════════════
  * TX helpers

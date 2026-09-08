@@ -2,6 +2,8 @@
 #include "../blocks/const.h"
 #include "../blocks/generic.h"
 #include "../blocks/math.h"
+// [PROTOPIRATE_PORT] custom_btn support
+#include "../blocks/custom_btn_i.h"
 #include <string.h>
 #include <lib/toolbox/level_duration.h>
 
@@ -512,6 +514,30 @@ SubGhzProtocolStatus
     } else if(b >= 2U && b <= 5U) {
         instance->decoded.button = honda_static_encoder_remap_button(b);
     }
+
+    // [PROTOPIRATE_PORT] custom_btn support
+    // Honda Static mapping: Up=0x1, OK=0x2, Down=0x4, Left=0x8, Right=0x5.
+    {
+        const uint8_t original_btn = instance->decoded.button;
+        if(subghz_custom_btn_get_original() == 0) {
+            subghz_custom_btn_set_original(original_btn);
+        }
+        subghz_custom_btn_set_max(5);
+        uint8_t custom_btn_id = subghz_custom_btn_get();
+        uint8_t new_btn = original_btn;
+        switch(custom_btn_id) {
+        case SUBGHZ_CUSTOM_BTN_UP:    new_btn = 0x1U; break;
+        case SUBGHZ_CUSTOM_BTN_OK:    new_btn = 0x2U; break;
+        case SUBGHZ_CUSTOM_BTN_DOWN:  new_btn = 0x4U; break;
+        case SUBGHZ_CUSTOM_BTN_LEFT:  new_btn = 0x8U; break;
+        case SUBGHZ_CUSTOM_BTN_RIGHT: new_btn = 0x5U; break;
+        default: break;
+        }
+        if(honda_static_is_valid_button(new_btn)) {
+            instance->decoded.button = new_btn;
+        }
+    }
+
     instance->decoded.counter = cnt & 0x00FFFFFFU;
 
     instance->generic.serial = instance->decoded.serial;
@@ -719,6 +745,13 @@ SubGhzProtocolStatus
     instance->generic.serial = decoded.serial;
     instance->generic.cnt = decoded.counter;
     instance->generic.btn = decoded.button;
+
+    // [PROTOPIRATE_PORT] custom_btn support
+    // Honda Static mapping: Up=0x1, OK=0x2, Down=0x4, Left=0x8, Right=0x5 (5 buttons).
+    if(subghz_custom_btn_get_original() == 0) {
+        subghz_custom_btn_set_original(instance->generic.btn);
+    }
+    subghz_custom_btn_set_max(5);
 
     return SubGhzProtocolStatusOk;
 }

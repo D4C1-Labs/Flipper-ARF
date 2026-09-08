@@ -1,5 +1,7 @@
 #include "mazda_v0.h"
 
+// [PROTOPIRATE_PORT] custom_btn support
+#include <lib/subghz/blocks/custom_btn_i.h>
 #include <string.h>
 
 // =============================================================================
@@ -442,6 +444,26 @@ SubGhzProtocolStatus
                flipper_format, "Repeat", (uint32_t*)&instance->encoder.repeat, 1)) {
             instance->encoder.repeat = 10;
         }
+
+        // [PROTOPIRATE_PORT] custom_btn support
+        // Mazda V0 mapping: Up=0x1 (LOCK), OK=0x2 (UNLOCK), Down=0x4 (BOOT),
+        // Right=0x8 (REMOTE). Left unsupported.
+        {
+            const uint8_t original_btn = (uint8_t)(instance->generic.btn & 0x0FU);
+            if(subghz_custom_btn_get_original() == 0) {
+                subghz_custom_btn_set_original(original_btn);
+            }
+            subghz_custom_btn_set_max(4);
+            uint8_t custom_btn_id = subghz_custom_btn_get();
+            switch(custom_btn_id) {
+            case SUBGHZ_CUSTOM_BTN_UP:    instance->generic.btn = 0x1U; break;
+            case SUBGHZ_CUSTOM_BTN_OK:    instance->generic.btn = 0x2U; break;
+            case SUBGHZ_CUSTOM_BTN_DOWN:  instance->generic.btn = 0x4U; break;
+            case SUBGHZ_CUSTOM_BTN_RIGHT: instance->generic.btn = 0x8U; break;
+            default:                      instance->generic.btn = original_btn; break;
+            }
+        }
+
         instance->generic.btn &= 0x0FU;
         instance->generic.cnt &= 0xFFFFFU;
 
@@ -693,6 +715,14 @@ SubGhzProtocolStatus
 
         flipper_format_read_uint32(flipper_format, "Cnt", &instance->count, 1);
         instance->generic.cnt = instance->count;
+
+        // [PROTOPIRATE_PORT] custom_btn support
+        // Mazda V0 mapping: Up=0x1 (LOCK), OK=0x2 (UNLOCK), Down=0x4 (BOOT),
+        // Right=0x8 (REMOTE). Left unsupported → 4 buttons.
+        if(subghz_custom_btn_get_original() == 0) {
+            subghz_custom_btn_set_original(instance->generic.btn);
+        }
+        subghz_custom_btn_set_max(4);
     }
 
     return ret;

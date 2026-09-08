@@ -483,3 +483,33 @@ void aut64_unpack(struct aut64_key* dest, const uint8_t src[]) {
         dest->sbox[i * 2 + 1] = src[i + 8] & 0xF;
     }
 }
+
+// [PROTOPIRATE_PORT] Optional key validator (opt-in, does not affect existing callers)
+static int aut64_validate_box_is_permutation(const uint8_t* box, size_t len) {
+    uint8_t inv[32];
+    if(len > sizeof(inv)) return AUT64_ERR_INVALID_KEY;
+    for(size_t i = 0; i < len; i++) inv[i] = 0xFFU;
+    for(size_t i = 0; i < len; i++) {
+        const uint8_t v = box[i];
+        if(v >= len) return AUT64_ERR_INVALID_KEY;
+        if(inv[v] != 0xFFU) return AUT64_ERR_INVALID_KEY;
+        inv[v] = (uint8_t)i;
+    }
+    for(size_t i = 0; i < len; i++) {
+        if(inv[i] == 0xFFU) return AUT64_ERR_INVALID_KEY;
+    }
+    return AUT64_OK;
+}
+
+int aut64_validate_key(const struct aut64_key* key) {
+    if(!key) return AUT64_ERR_NULL_POINTER;
+    // key nibbles must fit in AUT64_SBOX_SIZE (16)
+    for(uint8_t i = 0; i < AUT64_KEY_SIZE; i++) {
+        if(key->key[i] >= AUT64_SBOX_SIZE) return AUT64_ERR_INVALID_KEY;
+    }
+    // pbox must be a permutation of 0..AUT64_PBOX_SIZE-1
+    int rc = aut64_validate_box_is_permutation(key->pbox, AUT64_PBOX_SIZE);
+    if(rc != AUT64_OK) return rc;
+    // sbox must be a permutation of 0..AUT64_SBOX_SIZE-1
+    return aut64_validate_box_is_permutation(key->sbox, AUT64_SBOX_SIZE);
+}

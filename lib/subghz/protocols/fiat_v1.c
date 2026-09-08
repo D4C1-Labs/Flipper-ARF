@@ -4,6 +4,8 @@
 #include <lib/subghz/blocks/encoder.h>
 #include <lib/subghz/blocks/generic.h>
 #include <lib/subghz/blocks/math.h>
+// [PROTOPIRATE_PORT] custom_btn support
+#include <lib/subghz/blocks/custom_btn_i.h>
 #include <string.h>
 
 #define TAG "FiatProtocolV1"
@@ -264,6 +266,14 @@ static void fiat_v1_decode_fields(SubGhzProtocolDecoderFiatV1* instance) {
     instance->decoder.decode_data = instance->generic.data;
     instance->decoder.decode_count_bit = instance->generic.data_count_bit;
     fiat_v1_verify_hitag2_key(instance);
+
+    // [PROTOPIRATE_PORT] custom_btn support
+    // Fiat V1 mapping: Up=0x8 (Unlock), OK=0x0, Down=0xD → 3 custom buttons.
+    // Note: btn is a raw 4-bit code, not restricted to {1,2,4,8} in custom_btn mode.
+    if(subghz_custom_btn_get_original() == 0) {
+        subghz_custom_btn_set_original(instance->generic.btn);
+    }
+    subghz_custom_btn_set_max(3);
 }
 
 static bool fiat_v1_commit(
@@ -673,7 +683,46 @@ SubGhzProtocolStatus
     flipper_format_read_uint32(flipper_format, "Btn", &button, 1);
     flipper_format_rewind(flipper_format);
     flipper_format_read_uint32(flipper_format, "Cnt", &control, 1);
-    if(serial == 0U || serial == UINT32_MAX || !fiat_v1_button_valid((uint8_t)button)) {
+
+    // [PROTOPIRATE_PORT] custom_btn support
+    // Fiat V1 mapping (4-bit codes, may be outside the {1,2,4,8} valid set):
+    //   Up   → 0x8 (Unlock)
+    //   OK   → 0x0
+    //   Down → 0xD
+    // The 4-bit button code is fed directly into hitag2 authenticator below.
+    {
+        const uint8_t original_btn = (uint8_t)(button & 0x0FU);
+        if(subghz_custom_btn_get_original() == 0) {
+            subghz_custom_btn_set_original(original_btn);
+        }
+        subghz_custom_btn_set_max(3);
+        uint8_t custom_btn_id = subghz_custom_btn_get();
+        switch(custom_btn_id) {
+        case SUBGHZ_CUSTOM_BTN_UP:
+            button = 0x8U;
+            break;
+        case SUBGHZ_CUSTOM_BTN_DOWN:
+            button = 0xDU;
+            break;
+        case SUBGHZ_CUSTOM_BTN_OK:
+            /* OK: use historic 0x0 code if we came from a valid original;
+             * otherwise keep the original to preserve default TX. */
+            if(fiat_v1_button_valid(original_btn)) {
+                button = 0x0U;
+            } else {
+                button = original_btn;
+            }
+            break;
+        default:
+            /* LEFT/RIGHT unsupported by Fiat V1 → keep original */
+            button = original_btn;
+            break;
+        }
+    }
+
+    /* Skip strict validity check when the (possibly custom) button is any 4-bit code.
+     * Only reject if serial is missing/invalid. */
+    if(serial == 0U || serial == UINT32_MAX) {
         return SubGhzProtocolStatusErrorParserOthers;
     }
 

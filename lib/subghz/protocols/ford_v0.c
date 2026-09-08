@@ -5,6 +5,8 @@
 #include "../blocks/encoder.h"
 #include "../blocks/generic.h"
 #include "../blocks/math.h"
+// [PROTOPIRATE_PORT] custom_btn support
+#include "../blocks/custom_btn_i.h"
 #include <lib/toolbox/manchester_decoder.h>
 #include <string.h>
 
@@ -531,6 +533,25 @@ SubGhzProtocolStatus
         flipper_format_read_uint32(flipper_format, "Cnt", &cnt, 1);
         if(serial == UINT32_MAX || btn == UINT32_MAX || cnt == UINT32_MAX) break;
 
+        // [PROTOPIRATE_PORT] custom_btn support
+        // Ford mapping: Left=0x1, Up=0x2, OK=0x4, Down=0x8, Right=0x10
+        {
+            const uint8_t original_btn = (uint8_t)btn;
+            if(subghz_custom_btn_get_original() == 0) {
+                subghz_custom_btn_set_original(original_btn);
+            }
+            subghz_custom_btn_set_max(5);
+            uint8_t custom_btn_id = subghz_custom_btn_get();
+            switch(custom_btn_id) {
+            case SUBGHZ_CUSTOM_BTN_UP:    btn = 0x02U; break;
+            case SUBGHZ_CUSTOM_BTN_OK:    btn = 0x04U; break;
+            case SUBGHZ_CUSTOM_BTN_DOWN:  btn = 0x08U; break;
+            case SUBGHZ_CUSTOM_BTN_LEFT:  btn = 0x01U; break;
+            case SUBGHZ_CUSTOM_BTN_RIGHT: btn = 0x10U; break;
+            default:                      btn = original_btn; break;
+            }
+        }
+
         instance->serial = serial;
         instance->button = (uint8_t)btn;
         instance->count = cnt;
@@ -851,6 +872,13 @@ SubGhzProtocolStatus
         instance->generic.serial = instance->serial;
         instance->generic.btn = instance->button;
         instance->generic.cnt = instance->count;
+
+        // [PROTOPIRATE_PORT] custom_btn support
+        // Ford mapping: Left=0x1, Up=0x2, OK=0x4, Down=0x8, Right=0x10 (5 buttons)
+        if(subghz_custom_btn_get_original() == 0) {
+            subghz_custom_btn_set_original(instance->generic.btn);
+        }
+        subghz_custom_btn_set_max(5);
     }
 
     return ret;

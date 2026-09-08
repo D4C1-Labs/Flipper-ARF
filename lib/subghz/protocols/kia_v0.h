@@ -2,7 +2,15 @@
 
 #include "base.h"
 
+// [PROTOPIRATE_PORT] File ported from ProtoPirate kia_v0 (multi-type KIA/SUZUKI/HONDA).
+// Exported symbol names preserved for ARF registry/catalog compatibility.
+
 #define SUBGHZ_PROTOCOL_KIA_V0_NAME "KIA/HYU V0"
+
+// [PROTOPIRATE_PORT] Sub-type identifiers exposed for deserialization/UI
+#define KIA_V0_SUBTYPE_KIA    1U
+#define KIA_V0_SUBTYPE_SUZUKI 2U
+#define KIA_V0_SUBTYPE_HONDA  3U
 
 typedef struct SubGhzProtocolDecoderKIA SubGhzProtocolDecoderKIA;
 typedef struct SubGhzProtocolEncoderKIA SubGhzProtocolEncoderKIA;
@@ -42,14 +50,14 @@ void subghz_protocol_encoder_kia_stop(void* context);
 /**
  * Getting the level and duration of the upload to be loaded into DMA.
  * @param context Pointer to a SubGhzProtocolEncoderKIA instance
- * @return LevelDuration 
+ * @return LevelDuration
  */
 LevelDuration subghz_protocol_encoder_kia_yield(void* context);
 
 /**
  * Set button value for encoding.
  * @param context Pointer to a SubGhzProtocolEncoderKIA instance
- * @param button Button value (0-4)
+ * @param button Button value (0-15, masked to type)
  */
 void subghz_protocol_encoder_kia_set_button(void* context, uint8_t button);
 

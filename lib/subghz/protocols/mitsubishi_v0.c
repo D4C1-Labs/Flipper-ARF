@@ -16,14 +16,23 @@ static const SubGhzBlockConst subghz_protocol_mitsubishi_v0_const = {
     .min_count_bit_for_found = 80,
 };
 
+// [PROTOPIRATE_PORT] Added decoder_state field for FSM-based decoding.
+// te_last removed in favor of decoder.te_last (SubGhzBlockDecoder field), matching PP layout.
 struct SubGhzProtocolDecoderMitsubishiV0 {
     SubGhzProtocolDecoderBase base;
     SubGhzBlockDecoder decoder;
     SubGhzBlockGeneric generic;
-    uint32_t te_last;
-    uint8_t bit_count;
+    uint8_t decoder_state; // [PROTOPIRATE_PORT]
+    uint16_t bit_count;
     uint8_t decode_data[12];
 };
+
+// [PROTOPIRATE_PORT] FSM states for atomic pulse-pair validation.
+typedef enum {
+    MitsubishiV0DecoderStepReset = 0,
+    MitsubishiV0DecoderStepDataSave,
+    MitsubishiV0DecoderStepDataCheck,
+} MitsubishiV0DecoderStep;
 
 struct SubGhzProtocolEncoderMitsubishiV0 {
     SubGhzProtocolEncoderBase base;
@@ -52,6 +61,89 @@ static void mitsubishi_v0_scramble(uint8_t* payload, uint16_t counter) {
     // Apply inversion (first 8 bytes) — firmware XORs bytes 1..8 with 0xFF in sub_ROM_151E8
     for(int i = 0; i < 8; i++) {
         payload[i] = ~payload[i];
+    }
+}
+
+// [PROTOPIRATE_PORT] Decoder helpers — atomic pulse-pair validation, ported from
+// ProtoPirate's mitsubishi_v0 FSM. Provides robustness against glitches by resetting
+// payload on any invalid pair rather than silently drifting on te_last.
+
+static void mitsubishi_v0_reset_payload(SubGhzProtocolDecoderMitsubishiV0* instance) {
+    instance->bit_count = 0;
+    memset(instance->decode_data, 0, sizeof(instance->decode_data));
+}
+
+// [PROTOPIRATE_PORT] Validate a (high, low) pulse pair and, on success, append the
+// decoded bit MSB-first into decode_data. Returns false on invalid pair so the
+// caller can reset the FSM.
+static bool mitsubishi_v0_collect_pair(
+    SubGhzProtocolDecoderMitsubishiV0* instance,
+    uint32_t high,
+    uint32_t low) {
+    bool bit_value;
+
+    if(DURATION_DIFF(high, subghz_protocol_mitsubishi_v0_const.te_short) <
+           subghz_protocol_mitsubishi_v0_const.te_delta &&
+       DURATION_DIFF(low, subghz_protocol_mitsubishi_v0_const.te_long) <
+           subghz_protocol_mitsubishi_v0_const.te_delta) {
+        bit_value = true;
+    } else if(
+        DURATION_DIFF(high, subghz_protocol_mitsubishi_v0_const.te_long) <
+            subghz_protocol_mitsubishi_v0_const.te_delta &&
+        DURATION_DIFF(low, subghz_protocol_mitsubishi_v0_const.te_short) <
+            subghz_protocol_mitsubishi_v0_const.te_delta) {
+        bit_value = false;
+    } else {
+        return false;
+    }
+
+    uint16_t bit_index = instance->bit_count;
+    if(bit_index < MITSUBISHI_V0_BIT_COUNT) {
+        if(bit_value) {
+            uint8_t byte_index = bit_index >> 3;
+            uint8_t bit_position = 7 - (bit_index & 0x07);
+            instance->decode_data[byte_index] |= (1U << bit_position);
+        }
+        instance->bit_count++;
+    }
+
+    return true;
+}
+
+// [PROTOPIRATE_PORT] Unscramble decoded bytes (mitsubishi_v0_scramble is involutive
+// in its operations: ~~x = x, x^m^m = x) and publish decoded frame via callback.
+// NOTE: The counter used to derive mask3 is read from bytes 4,5 AFTER inversion but
+// BEFORE XOR-unscrambling. This matches the ARF encoder's behaviour and the previous
+// ARF decoder — see the TODO at bottom of file regarding cnt roundtripping.
+static void mitsubishi_v0_publish_frame(SubGhzProtocolDecoderMitsubishiV0* instance) {
+    uint8_t payload[12];
+    memcpy(payload, instance->decode_data, sizeof(payload));
+
+    // Undo inversion
+    for(uint8_t i = 0; i < 8; i++) {
+        payload[i] = (uint8_t)~payload[i];
+    }
+
+    uint16_t counter = ((uint16_t)payload[4] << 8) | payload[5];
+    uint8_t hi = (counter >> 8) & 0xFF;
+    uint8_t lo = counter & 0xFF;
+    uint8_t mask1 = (hi & 0xAAU) | (lo & 0x55U);
+    uint8_t mask2 = (lo & 0xAAU) | (hi & 0x55U);
+    uint8_t mask3 = mask1 ^ mask2;
+
+    // Undo XOR scrambling on first 5 bytes
+    for(uint8_t i = 0; i < 5; i++) {
+        payload[i] ^= mask3;
+    }
+
+    instance->generic.data_count_bit = instance->bit_count;
+    instance->generic.serial = ((uint32_t)payload[0] << 24) | ((uint32_t)payload[1] << 16) |
+                               ((uint32_t)payload[2] << 8) | payload[3];
+    instance->generic.cnt = ((uint16_t)payload[4] << 8) | payload[5];
+    instance->generic.btn = payload[6];
+
+    if(instance->base.callback) {
+        instance->base.callback(&instance->base, instance->base.context);
     }
 }
 
@@ -216,64 +308,62 @@ void subghz_protocol_decoder_mitsubishi_v0_free(void* context) {
     free(context);
 }
 
+// [PROTOPIRATE_PORT] Reset now clears FSM state as well as payload buffer.
 void subghz_protocol_decoder_mitsubishi_v0_reset(void* context) {
+    furi_check(context);
     SubGhzProtocolDecoderMitsubishiV0* instance = context;
-    instance->bit_count = 0;
-    memset(instance->decode_data, 0, 12);
+    instance->decoder_state = MitsubishiV0DecoderStepReset;
+    instance->decoder.te_last = 0;
+    instance->generic.data_count_bit = 0;
+    mitsubishi_v0_reset_payload(instance);
 }
 
+// [PROTOPIRATE_PORT] FSM-based feed ported from ProtoPirate's mitsubishi_v0.
+// Three explicit states (Reset / DataSave / DataCheck) ensure atomic validation of
+// each (high, low) pulse pair. On any invalid transition the payload is discarded
+// and the FSM returns to Reset — more robust against glitches than the previous
+// stateless implementation which silently updated te_last on every edge.
 void subghz_protocol_decoder_mitsubishi_v0_feed(void* context, bool level, uint32_t duration) {
+    furi_check(context);
     SubGhzProtocolDecoderMitsubishiV0* instance = context;
 
-    // Simplified Pulse Distance/Width Decoder
-    uint32_t te = subghz_protocol_mitsubishi_v0_const.te_short;
-    uint32_t te2 = subghz_protocol_mitsubishi_v0_const.te_long;
-    uint32_t delta = subghz_protocol_mitsubishi_v0_const.te_delta;
+    switch(instance->decoder_state) {
+    case MitsubishiV0DecoderStepReset:
+        if(level) {
+            instance->decoder.te_last = duration;
+            instance->decoder_state = MitsubishiV0DecoderStepDataCheck;
+        }
+        break;
 
-    if(!level) {
-        // Logic '1': HIGH 250, LOW 500
-        // Logic '0': HIGH 500, LOW 250
-        if(DURATION_DIFF(instance->te_last, te) < delta && DURATION_DIFF(duration, te2) < delta) {
-            // bit 1
-            instance->decode_data[instance->bit_count / 8] |= (1 << (7 - (instance->bit_count % 8)));
-            instance->bit_count++;
-        } else if(DURATION_DIFF(instance->te_last, te2) < delta && DURATION_DIFF(duration, te) < delta) {
-            // bit 0
-            instance->bit_count++;
+    case MitsubishiV0DecoderStepDataSave:
+        if(level) {
+            instance->decoder.te_last = duration;
+            instance->decoder_state = MitsubishiV0DecoderStepDataCheck;
         } else {
-            instance->bit_count = 0;
-            memset(instance->decode_data, 0, 12);
+            instance->decoder_state = MitsubishiV0DecoderStepReset;
+            mitsubishi_v0_reset_payload(instance);
         }
+        break;
 
-        if(instance->bit_count == MITSUBISHI_V0_BIT_COUNT) {
-            // Un-scramble for display
-            uint8_t payload[12];
-            memcpy(payload, instance->decode_data, 12);
-
-            // Undo Inversion
-            for(int i = 0; i < 8; i++) payload[i] = ~payload[i];
-
-            // We need the counter to unscramble (bytes 4-5)
-            uint16_t counter = (payload[4] << 8) | payload[5];
-
-            // Undo Scrambling
-            uint8_t hi = (counter >> 8) & 0xFF;
-            uint8_t lo = counter & 0xFF;
-            uint8_t m1 = (hi & 0xAA) | (lo & 0x55);
-            uint8_t m2 = (lo & 0xAA) | (hi & 0x55);
-            uint8_t m3 = m1 ^ m2;
-            for(int i = 0; i < 5; i++) payload[i] ^= m3;
-
-            instance->generic.serial = (payload[0] << 24) | (payload[1] << 16) | (payload[2] << 8) | payload[3];
-            instance->generic.cnt = counter;
-            instance->generic.btn = payload[6];
-            instance->generic.data_count_bit = instance->bit_count;
-
-            if(instance->base.callback) instance->base.callback(&instance->base, instance->base.context);
-            instance->bit_count = 0;
+    case MitsubishiV0DecoderStepDataCheck:
+        if(!level) {
+            if(mitsubishi_v0_collect_pair(instance, instance->decoder.te_last, duration)) {
+                if(instance->bit_count >= MITSUBISHI_V0_BIT_COUNT) {
+                    mitsubishi_v0_publish_frame(instance);
+                    mitsubishi_v0_reset_payload(instance);
+                    instance->decoder_state = MitsubishiV0DecoderStepReset;
+                } else {
+                    instance->decoder_state = MitsubishiV0DecoderStepDataSave;
+                }
+            } else {
+                mitsubishi_v0_reset_payload(instance);
+                instance->decoder_state = MitsubishiV0DecoderStepReset;
+            }
+        } else {
+            instance->decoder.te_last = duration;
         }
+        break;
     }
-    instance->te_last = duration;
 }
 
 uint8_t subghz_protocol_decoder_mitsubishi_v0_get_hash_data(void* context) {

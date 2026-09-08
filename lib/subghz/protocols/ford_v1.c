@@ -1,4 +1,6 @@
 #include "ford_v1.h"
+// [PROTOPIRATE_PORT] custom_btn support
+#include <lib/subghz/blocks/custom_btn_i.h>
 #include <string.h>
 
 #define TAG "FordProtocolV1"
@@ -829,6 +831,14 @@ SubGhzProtocolStatus
             instance->generic.serial = serial;
             instance->generic.btn = (uint8_t)btn;
             instance->generic.cnt = cnt;
+
+            // [PROTOPIRATE_PORT] custom_btn support
+            // Ford V1 mapping (4-bit btn): Up=0x2 (Unlock), OK=0x4 (Trunk),
+            // Down=0x8 (Panic), Left=0x1 (Lock). Right not supported (4-bit only).
+            if(subghz_custom_btn_get_original() == 0) {
+                subghz_custom_btn_set_original(instance->generic.btn);
+            }
+            subghz_custom_btn_set_max(4);
         }
     }
 
@@ -1201,6 +1211,26 @@ SubGhzProtocolStatus
             if(!flipper_format_read_uint32(flipper_format, "Cnt", &cnt, 1))
                 cnt = UINT32_MAX;
             if(serial == UINT32_MAX || btn == UINT32_MAX || cnt == UINT32_MAX) break;
+
+            // [PROTOPIRATE_PORT] custom_btn support
+            // Ford V1 mapping (4-bit): Up=0x2 (Unlock), OK=0x4 (Trunk),
+            // Down=0x8 (Panic), Left=0x1 (Lock). Right unsupported.
+            {
+                const uint8_t original_btn = (uint8_t)(btn & 0x0FU);
+                if(subghz_custom_btn_get_original() == 0) {
+                    subghz_custom_btn_set_original(original_btn);
+                }
+                subghz_custom_btn_set_max(4);
+                uint8_t custom_btn_id = subghz_custom_btn_get();
+                switch(custom_btn_id) {
+                case SUBGHZ_CUSTOM_BTN_UP:    btn = 0x02U; break;
+                case SUBGHZ_CUSTOM_BTN_OK:    btn = 0x04U; break;
+                case SUBGHZ_CUSTOM_BTN_DOWN:  btn = 0x08U; break;
+                case SUBGHZ_CUSTOM_BTN_LEFT:  btn = 0x01U; break;
+                default:                      btn = original_btn; break;
+                }
+            }
+
             instance->generic.serial = serial;
             instance->generic.btn = (uint8_t)(btn & 0x0FU);
             instance->generic.cnt = cnt & 0xFFFFFU;
