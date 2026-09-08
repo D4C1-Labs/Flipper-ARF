@@ -7,6 +7,9 @@
 #include "../blocks/generic.h"
 #include "../blocks/math.h"
 
+// [UNLEASHED_PORT] Include custom buttons support
+#include "../blocks/custom_btn_i.h"
+
 #define TAG "SubGhzProtocolSomfyKeytis"
 
 static const SubGhzBlockConst subghz_protocol_somfy_keytis_const = {
@@ -122,6 +125,29 @@ void subghz_protocol_decoder_somfy_keytis_reset(void* context) {
         NULL);
 }
 
+// [UNLEASHED_PORT] Custom button code mapping (Prog/UP swap Key_1 <-> Prog like alutech patterns)
+static uint8_t subghz_protocol_somfy_keytis_get_btn_code(void) {
+    uint8_t custom_btn_id = subghz_custom_btn_get();
+    uint8_t original_btn_code = subghz_custom_btn_get_original();
+    uint8_t btn = original_btn_code;
+
+    if((custom_btn_id == SUBGHZ_CUSTOM_BTN_OK) && (original_btn_code != 0)) {
+        btn = original_btn_code;
+    } else if(custom_btn_id == SUBGHZ_CUSTOM_BTN_UP) {
+        switch(original_btn_code) {
+        case 0x4:
+            btn = 0x3;
+            break;
+        case 0x3:
+            btn = 0x4;
+            break;
+        default:
+            break;
+        }
+    }
+    return btn;
+}
+
 static bool
     subghz_protocol_somfy_keytis_gen_data(SubGhzProtocolEncoderSomfyKeytis* instance, uint8_t btn) {
     UNUSED(btn);
@@ -129,6 +155,12 @@ static bool
     instance->generic.btn = (data >> 48) & 0xF;
     instance->generic.cnt = (data >> 24) & 0xFFFF;
     instance->generic.serial = data & 0xFFFFFF;
+
+    // [UNLEASHED_PORT] Save original button and apply custom button remap
+    if(subghz_custom_btn_get_original() == 0) {
+        subghz_custom_btn_set_original(instance->generic.btn);
+    }
+    instance->generic.btn = subghz_protocol_somfy_keytis_get_btn_code();
 
     // override button if we change it with signal settings button editor
     if(subghz_block_generic_global_button_override_get(&instance->generic.btn))
@@ -711,6 +743,12 @@ static void subghz_protocol_somfy_keytis_check_remote_controller(SubGhzBlockGene
     instance->btn = (data >> 48) & 0xF;
     instance->cnt = (data >> 24) & 0xFFFF;
     instance->serial = data & 0xFFFFFF;
+
+    // [UNLEASHED_PORT] Save original button for custom button feature
+    if(subghz_custom_btn_get_original() == 0) {
+        subghz_custom_btn_set_original(instance->btn);
+    }
+    subghz_custom_btn_set_max(1);
 }
 
 /** 

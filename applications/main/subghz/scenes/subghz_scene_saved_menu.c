@@ -8,6 +8,7 @@ enum SubmenuIndex {
     SubmenuIndexDelete,
     SubmenuIndexCounterBf,                  /* <-- comma was missing here */
     SubmenuIndexCarEmulateSettings,
+    SubmenuIndexHitag2Bf, // [HITAG2_BF]
 };
 
 void subghz_scene_saved_menu_submenu_callback(void* context, uint32_t index) {
@@ -22,6 +23,7 @@ void subghz_scene_saved_menu_on_enter(void* context) {
     bool is_psa_encrypted = false;
     bool has_signal_editor = false;
     bool has_counter = false;
+    bool is_fiat_v1_no_key = false; // [HITAG2_BF]
     if(fff) {
         FuriString* proto = furi_string_alloc();
         flipper_format_rewind(fff);
@@ -36,6 +38,15 @@ void subghz_scene_saved_menu_on_enter(void* context) {
                     has_signal_editor = false;
                 }
                 furi_string_free(type_str);
+            }
+            // [HITAG2_BF] Show Hitag2 BF button when protocol is Fiat V1 and
+            // there is no "Hitag2 Key" field (i.e. the sig wasn't cracked yet)
+            if(furi_string_equal_str(proto, "Fiat V1")) {
+                uint8_t key_buf[6];
+                flipper_format_rewind(fff);
+                if(!flipper_format_read_hex(fff, "Hitag2 Key", key_buf, 6)) {
+                    is_fiat_v1_no_key = true;
+                }
             }
         }
         furi_string_free(proto);
@@ -106,6 +117,16 @@ void subghz_scene_saved_menu_on_enter(void* context) {
             subghz);
     }
 
+    // [HITAG2_BF] Show Hitag2 BF button for uncracked Fiat V1 signals
+    if(is_fiat_v1_no_key) {
+        submenu_add_item(
+            subghz->submenu,
+            "Hitag2 BF",
+            SubmenuIndexHitag2Bf,
+            subghz_scene_saved_menu_submenu_callback,
+            subghz);
+    }
+
     submenu_set_selected_item(
         subghz->submenu,
         scene_manager_get_scene_state(subghz->scene_manager, SubGhzSceneSavedMenu));
@@ -159,6 +180,12 @@ bool subghz_scene_saved_menu_on_event(void* context, SceneManagerEvent event) {
                 SubGhzSceneSavedMenu,
                 SubmenuIndexCarEmulateSettings);
             scene_manager_next_scene(subghz->scene_manager, SubGhzSceneCarEmulateSettings);
+            return true;
+        } else if(event.event == SubmenuIndexHitag2Bf) {
+            // [HITAG2_BF]
+            scene_manager_set_scene_state(
+                subghz->scene_manager, SubGhzSceneSavedMenu, SubmenuIndexHitag2Bf);
+            scene_manager_next_scene(subghz->scene_manager, SubGhzSceneHitag2Bf);
             return true;
         }
     }

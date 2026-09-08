@@ -212,7 +212,8 @@ static bool subghz_protocol_keeloq_gen_data(
         } else if(
             (strcmp(instance->manufacture_name, "FAAC_RC,XT") == 0) ||
             (strcmp(instance->manufacture_name, "Monarch") == 0) ||
-            (strcmp(instance->manufacture_name, "NICE_Smilo") == 0)) {
+            (strcmp(instance->manufacture_name, "NICE_Smilo") == 0) ||
+            (strcmp(instance->manufacture_name, "Genius_Bravo") == 0)) { // [UNLEASHED_PORT]
             klq_last_custom_btn = 0xB;
         } else if(
             (strcmp(instance->manufacture_name, "Novoferm") == 0) ||
@@ -235,7 +236,13 @@ static bool subghz_protocol_keeloq_gen_data(
     if(subghz_block_generic_global_button_override_get(&btn))
         FURI_LOG_D(TAG, "Button sucessfully changed to 0x%X", btn);
 
-    uint32_t fix = (uint32_t)btn << 28 | instance->generic.serial;
+    uint32_t fix = 0;
+    // [UNLEASHED_PORT] Pecinin does not transmit button code in fix
+    if(strcmp(instance->manufacture_name, "Pecinin") == 0) {
+        fix = instance->generic.serial;
+    } else {
+        fix = (uint32_t)btn << 28 | instance->generic.serial;
+    }
     uint32_t hop = 0;
     uint64_t man = 0;
     uint64_t code_found_reverse;
@@ -402,6 +409,7 @@ static bool subghz_protocol_keeloq_gen_data(
                 (strcmp(instance->manufacture_name, "DTM_Neo") == 0) ||
                 (strcmp(instance->manufacture_name, "FAAC_RC,XT") == 0) ||
                 (strcmp(instance->manufacture_name, "Mutanco_Mutancode") == 0) ||
+                (strcmp(instance->manufacture_name, "Clemsa_Mutancode") == 0) || // [UNLEASHED_PORT] alias
                 (strcmp(instance->manufacture_name, "Came_Space") == 0) ||
                 (strcmp(instance->manufacture_name, "Genius_Bravo") == 0) ||
                 (strcmp(instance->manufacture_name, "GSN") == 0) ||
@@ -410,20 +418,33 @@ static bool subghz_protocol_keeloq_gen_data(
                 (strcmp(instance->manufacture_name, "Pecinin") == 0) ||
                 (strcmp(instance->manufacture_name, "Steelmate") == 0) ||
                 (strcmp(instance->manufacture_name, "Cardin_S449") == 0) ||
-                (strcmp(instance->manufacture_name, "Stilmatic") == 0)) {
+                (strcmp(instance->manufacture_name, "Stilmatic") == 0) ||
+                (strcmp(instance->manufacture_name, "Wisniowski") == 0) || // [UNLEASHED_PORT]
+                (strcmp(instance->manufacture_name, "ATA_PTX4") == 0) ||   // [UNLEASHED_PORT]
+                (strcmp(instance->manufacture_name, "Fadini") == 0) ||     // [UNLEASHED_PORT]
+                (strcmp(instance->manufacture_name, "Seav") == 0)) {       // [UNLEASHED_PORT]
                 // DTM Neo, Came_Space uses 12bit serial -> simple learning
-                // FAAC_RC,XT , Mutanco_Mutancode, Genius_Bravo, GSN 12bit serial -> normal learning
+                // FAAC_RC,XT , Mutanco_Mutancode/Clemsa_Mutancode, Genius_Bravo, GSN 12bit serial -> normal learning
                 // Rosh, Rossi, Pecinin -> 12bit serial - simple learning
                 // Steelmate -> 12bit serial - normal learning
                 // Cardin_S449 -> 12bit serial - normal learning
                 // Stilmatic (r-tech) -> 12bit serial - normal learning
+                // Wisniowski -> 12bit serial - normal learning
+                // ATA_PTX4 -> 12bit serial - normal learning
+                // Fadini -> 12bit serial - simple learning
+                // Seav -> 12bit serial - normal learning
                 decrypt = btn << 28 | (instance->generic.serial & 0xFFF) << 16 |
                           instance->generic.cnt;
             } else if(
                 (strcmp(instance->manufacture_name, "NICE_Smilo") == 0) ||
                 (strcmp(instance->manufacture_name, "NICE_MHOUSE") == 0) ||
-                (strcmp(instance->manufacture_name, "JCM_Tech") == 0)) {
-                // Nice Smilo, MHouse, JCM -> 8bit serial - simple learning
+                (strcmp(instance->manufacture_name, "JCM_Tech") == 0) ||
+                (strcmp(instance->manufacture_name, "Pujol_Vario") == 0) || // [UNLEASHED_PORT]
+                (strcmp(instance->manufacture_name, "Pujol") == 0) ||       // [UNLEASHED_PORT]
+                (strcmp(instance->manufacture_name, "Erreka") == 0)) {      // [UNLEASHED_PORT]
+                // Nice Smilo, MHouse, JCM, Pujol_Vario -> 8bit serial - simple learning
+                // Pujol -> 8bit serial - special learning
+                // Erreka -> 8bit serial - secure learning with seed
                 decrypt = btn << 28 | (instance->generic.serial & 0xFF) << 16 |
                           instance->generic.cnt;
             } else if(
@@ -486,6 +507,29 @@ static bool subghz_protocol_keeloq_gen_data(
                             man = subghz_protocol_keeloq_common_magic_serial_type1_learning(
                                 fix, manufacture_code->key);
                             hop = subghz_protocol_keeloq_common_encrypt(decrypt, man);
+                            break;
+                        // [UNLEASHED_PORT] New learning types
+                        case KEELOQ_LEARNING_AERF:
+                            man = subghz_protocol_keeloq_common_learning_aerf(
+                                fix, manufacture_code->key);
+                            hop = subghz_protocol_keeloq_common_encrypt(decrypt, man);
+                            break;
+                        case KEELOQ_LEARNING_ERREKA:
+                            man = subghz_protocol_keeloq_common_learning_erreka(
+                                fix, instance->generic.seed, manufacture_code->key);
+                            hop = subghz_protocol_keeloq_common_encrypt(decrypt, man);
+                            break;
+                        case KEELOQ_LEARNING_PUJOL:
+                            man = subghz_protocol_keeloq_common_learning_pujol(
+                                fix, manufacture_code->key);
+                            hop = subghz_protocol_keeloq_common_encrypt(decrypt, man);
+                            break;
+                        case KEELOQ_LEARNING_SIMPLE_JCM:
+                            //Simple Learning 8 bit serial
+                            decrypt = btn << 28 | (instance->generic.serial & 0xFF) << 16 |
+                                      instance->generic.cnt;
+                            hop = subghz_protocol_keeloq_common_encrypt(
+                                decrypt, manufacture_code->key);
                             break;
                         case KEELOQ_LEARNING_UNKNOWN:
                             if(kl_type_en == 1) {
@@ -571,6 +615,20 @@ bool subghz_protocol_keeloq_bft_create_data(
     return false;
 }
 
+// [UNLEASHED_PORT] Alias for upstream-compatible naming (BFT/Erreka etc. all use seed).
+bool subghz_protocol_keeloq_seed_create_data(
+    void* context,
+    FlipperFormat* flipper_format,
+    uint32_t serial,
+    uint8_t btn,
+    uint16_t cnt,
+    uint32_t seed,
+    const char* manufacture_name,
+    SubGhzRadioPreset* preset) {
+    return subghz_protocol_keeloq_bft_create_data(
+        context, flipper_format, serial, btn, cnt, seed, manufacture_name, preset);
+}
+
 static size_t subghz_protocol_encoder_keeloq_encode_to_timings(
     SubGhzProtocolEncoderKeeloq* instance,
     uint8_t btn,
@@ -580,6 +638,41 @@ static size_t subghz_protocol_encoder_keeloq_encode_to_timings(
     // Generate new key
     if(!subghz_protocol_keeloq_gen_data(instance, btn, counter_up, false)) {
         return 0;
+    }
+
+    // [UNLEASHED_PORT] Superrollo GW60 (HCS361) has its own framing (Te=450,
+    // asymmetric preamble Te/2Te, a 10*Te sync pulse, and a 67-bit frame =
+    // 64 payload + VLOW + 2-bit CRC). Timings differ from KeeLoq's, so emit
+    // it explicitly.
+    if(strcmp(instance->manufacture_name, "Superrollo") == 0) {
+        const uint32_t t = 450;
+        for(uint8_t i = 0; i < 9; i++) { // preamble: 9x (Te HIGH / 2Te LOW)
+            instance->encoder.upload[index++] = level_duration_make(true, t);
+            instance->encoder.upload[index++] = level_duration_make(false, t * 2);
+        }
+        instance->encoder.upload[index++] = level_duration_make(true, t * 10); // sync HIGH
+        instance->encoder.upload[index++] = level_duration_make(false, t * 10); // sync LOW
+        // 2-bit CRC over the 64 payload bits (LSB..MSB) plus VLOW(=1)
+        uint64_t w0 = subghz_protocol_blocks_reverse_key(instance->generic.data, 64);
+        uint8_t crc0 = 0, crc1 = 0;
+        for(uint8_t i = 0; i < 65; i++) {
+            uint8_t din = (i < 64) ? (uint8_t)((w0 >> i) & 1) : 1;
+            uint8_t nc1 = crc0 ^ din;
+            crc0 = (nc1 ^ crc1) & 1;
+            crc1 = nc1 & 1;
+        }
+        // 64 data bits (MSB first) + VLOW + CRC0 + CRC1; PWM 1=Te/2Te, 0=2Te/Te
+        for(uint8_t i = 67; i > 0; i--) {
+            uint8_t bit = (i > 3)  ? bit_read(instance->generic.data, i - 4) :
+                          (i == 3) ? 1 :
+                          (i == 2) ? crc0 :
+                                     crc1;
+            instance->encoder.upload[index++] = level_duration_make(true, bit ? t : t * 2);
+            instance->encoder.upload[index++] = level_duration_make(false, bit ? t * 2 : t);
+        }
+        instance->encoder.upload[index++] = level_duration_make(true, t); // trailing HIGH
+        instance->encoder.upload[index++] = level_duration_make(false, t * 18); // guard
+        return index;
     }
 
     uint32_t gap_duration = subghz_protocol_keeloq_const.te_short * 40;
@@ -837,6 +930,10 @@ void subghz_protocol_decoder_keeloq_reset(void* context) {
     // TODO
     instance->keystore->mfname = "";
     instance->keystore->kl_type = 0;
+    // [UNLEASHED_PORT] Reset seed / data / header_count so a new capture starts clean
+    instance->generic.seed = 0;
+    instance->generic.data = 0;
+    instance->header_count = 0;
 }
 
 void subghz_protocol_decoder_keeloq_feed(void* context, bool level, uint32_t duration) {
@@ -849,11 +946,20 @@ void subghz_protocol_decoder_keeloq_feed(void* context, bool level, uint32_t dur
                           subghz_protocol_keeloq_const.te_delta) {
             instance->decoder.parser_step = KeeloqDecoderStepCheckPreambula;
             instance->header_count++;
+        } else if(
+            // [UNLEASHED_PORT] Superrollo GW60 (HCS361): 10*Te HIGH sync pulse before the sync gap
+            (level) && (instance->header_count > 2) &&
+            (DURATION_DIFF(duration, subghz_protocol_keeloq_const.te_short * 10) <
+             subghz_protocol_keeloq_const.te_delta * 10)) {
+            instance->decoder.parser_step = KeeloqDecoderStepCheckPreambula;
         }
         break;
     case KeeloqDecoderStepCheckPreambula:
-        if((!level) && (DURATION_DIFF(duration, subghz_protocol_keeloq_const.te_short) <
-                        subghz_protocol_keeloq_const.te_delta)) {
+        if((!level) && ((DURATION_DIFF(duration, subghz_protocol_keeloq_const.te_short) <
+                         subghz_protocol_keeloq_const.te_delta) ||
+                        // [UNLEASHED_PORT] Superrollo GW60 asymmetric preamble: LOW is 2*Te
+                        (DURATION_DIFF(duration, subghz_protocol_keeloq_const.te_short * 2) <
+                         subghz_protocol_keeloq_const.te_delta))) {
             instance->decoder.parser_step = KeeloqDecoderStepReset;
             break;
         }
@@ -961,6 +1067,25 @@ static inline bool subghz_protocol_keeloq_check_decrypt(
     }
     return false;
 }
+// [UNLEASHED_PORT] Pecinin specific check
+static inline bool subghz_protocol_keeloq_check_decrypt_pecinin(
+    SubGhzBlockGeneric* instance,
+    uint32_t decrypt,
+    uint32_t end_serial) {
+    furi_assert(instance);
+    if((((uint16_t)(decrypt >> 16)) & 0xFFF) == end_serial) {
+        instance->cnt = decrypt & 0x0000FFFF;
+        /*FURI_LOG_I(
+            "KL",
+            "decrypt: 0x%08lX, end_serial: 0x%03lX, cnt: %ld",
+            decrypt,
+            end_serial,
+            instance->cnt);*/
+        return true;
+    }
+    return false;
+}
+
 // Centurion specific check
 static inline bool subghz_protocol_keeloq_check_decrypt_centurion(
     SubGhzBlockGeneric* instance,
@@ -1025,10 +1150,22 @@ static uint32_t subghz_protocol_keeloq_check_remote_controller_selector(
                 case KEELOQ_LEARNING_SIMPLE:
                     // Simple Learning
                     decrypt = subghz_protocol_keeloq_common_decrypt(hop, manufacture_code->key);
-                    if(subghz_protocol_keeloq_check_decrypt(instance, decrypt, btn, end_serial)) {
-                        *manufacture_name = furi_string_get_cstr(manufacture_code->name);
-                        keystore->mfname = *manufacture_name;
-                        return decrypt;
+                    // [UNLEASHED_PORT] Pecinin does not transmit btn in fix
+                    if((strcmp(furi_string_get_cstr(manufacture_code->name), "Pecinin") == 0)) {
+                        if(subghz_protocol_keeloq_check_decrypt_pecinin(
+                               instance, decrypt, (uint16_t)(fix & 0xFFF))) {
+                            *manufacture_name = furi_string_get_cstr(manufacture_code->name);
+                            keystore->mfname = *manufacture_name;
+                            instance->btn = decrypt >> 28;
+                            return decrypt;
+                        }
+                    } else {
+                        if(subghz_protocol_keeloq_check_decrypt(
+                               instance, decrypt, btn, end_serial)) {
+                            *manufacture_name = furi_string_get_cstr(manufacture_code->name);
+                            keystore->mfname = *manufacture_name;
+                            return decrypt;
+                        }
                     }
                     break;
                 case KEELOQ_LEARNING_NORMAL:
@@ -1055,11 +1192,23 @@ static uint32_t subghz_protocol_keeloq_check_remote_controller_selector(
                 case KEELOQ_LEARNING_SECURE:
                     bool reset_seed_back = false;
                     if((strcmp(furi_string_get_cstr(manufacture_code->name), "BFT") == 0)) {
+                        // [UNLEASHED_PORT] Try current seed from file first if present
+                        man = subghz_protocol_keeloq_common_secure_learning(
+                            fix, instance->seed, manufacture_code->key);
+                        decrypt = subghz_protocol_keeloq_common_decrypt(hop, man);
+                        if(subghz_protocol_keeloq_check_decrypt(
+                               instance, decrypt, btn, end_serial)) {
+                            *manufacture_name = furi_string_get_cstr(manufacture_code->name);
+                            keystore->mfname = *manufacture_name;
+                            return decrypt;
+                        }
+                        // Then try seed derived from serial
                         //if(instance->seed == 0) {
                         instance->seed = (fix & 0xFFFFFFF);
                         reset_seed_back = true;
                         //}
                     }
+                    // Try seed from serial or zero seed
                     man = subghz_protocol_keeloq_common_secure_learning(
                         fix, instance->seed, manufacture_code->key);
                     decrypt = subghz_protocol_keeloq_common_decrypt(hop, man);
@@ -1115,6 +1264,56 @@ static uint32_t subghz_protocol_keeloq_check_remote_controller_selector(
                     man = subghz_protocol_keeloq_common_magic_serial_type3_learning(
                         fix, manufacture_code->key);
                     decrypt = subghz_protocol_keeloq_common_decrypt(hop, man);
+                    if(subghz_protocol_keeloq_check_decrypt(instance, decrypt, btn, end_serial)) {
+                        *manufacture_name = furi_string_get_cstr(manufacture_code->name);
+                        keystore->mfname = *manufacture_name;
+                        return decrypt;
+                    }
+                    break;
+                // [UNLEASHED_PORT] New learning-type decoders
+                case KEELOQ_LEARNING_AERF:
+                    man = subghz_protocol_keeloq_common_learning_aerf(fix, manufacture_code->key);
+                    decrypt = subghz_protocol_keeloq_common_decrypt_derived(hop, man, 0x240u);
+                    if(subghz_protocol_keeloq_check_decrypt(instance, decrypt, btn, end_serial)) {
+                        *manufacture_name = furi_string_get_cstr(manufacture_code->name);
+                        keystore->mfname = *manufacture_name;
+                        return decrypt;
+                    }
+                    decrypt = subghz_protocol_keeloq_common_decrypt_derived(hop, man, 0x210u);
+                    if(subghz_protocol_keeloq_check_decrypt(instance, decrypt, btn, end_serial)) {
+                        *manufacture_name = furi_string_get_cstr(manufacture_code->name);
+                        keystore->mfname = *manufacture_name;
+                        return decrypt;
+                    }
+                    decrypt = subghz_protocol_keeloq_common_decrypt(hop, man);
+                    if(subghz_protocol_keeloq_check_decrypt(instance, decrypt, btn, end_serial)) {
+                        *manufacture_name = furi_string_get_cstr(manufacture_code->name);
+                        keystore->mfname = *manufacture_name;
+                        return decrypt;
+                    }
+                    break;
+                case KEELOQ_LEARNING_ERREKA:
+                    man = subghz_protocol_keeloq_common_learning_erreka(
+                        fix, instance->seed, manufacture_code->key);
+                    decrypt = subghz_protocol_keeloq_common_decrypt(hop, man);
+                    if(subghz_protocol_keeloq_check_decrypt(instance, decrypt, btn, end_serial)) {
+                        *manufacture_name = furi_string_get_cstr(manufacture_code->name);
+                        keystore->mfname = *manufacture_name;
+                        return decrypt;
+                    }
+                    break;
+                case KEELOQ_LEARNING_PUJOL:
+                    man = subghz_protocol_keeloq_common_learning_pujol(fix, manufacture_code->key);
+                    decrypt = subghz_protocol_keeloq_common_decrypt(hop, man);
+                    if(subghz_protocol_keeloq_check_decrypt(instance, decrypt, btn, end_serial)) {
+                        *manufacture_name = furi_string_get_cstr(manufacture_code->name);
+                        keystore->mfname = *manufacture_name;
+                        return decrypt;
+                    }
+                    break;
+                case KEELOQ_LEARNING_SIMPLE_JCM:
+                    // Simple Learning 8 bit serial
+                    decrypt = subghz_protocol_keeloq_common_decrypt(hop, manufacture_code->key);
                     if(subghz_protocol_keeloq_check_decrypt(instance, decrypt, btn, end_serial)) {
                         *manufacture_name = furi_string_get_cstr(manufacture_code->name);
                         keystore->mfname = *manufacture_name;
@@ -1306,7 +1505,10 @@ static uint32_t subghz_protocol_keeloq_check_remote_controller(
 
     // Get serial and button code from FIX part of the key
     instance->serial = key_fix & 0x0FFFFFFF;
-    instance->btn = key_fix >> 28;
+    // [UNLEASHED_PORT] For Pecinin the btn was already resolved from decrypt (fix has no btn code)
+    if(strcmp(*manufacture_name, "Pecinin") != 0) {
+        instance->btn = key_fix >> 28;
+    }
 
     // Save original button for later use
     if(subghz_custom_btn_get_original() == 0) {

@@ -212,6 +212,13 @@ SubGhz* subghz_alloc(bool alloc_for_tx_only) {
         SubGhzViewIdCarEmulate,
         subghz_car_emulate_view_get_view(subghz->car_emulate_view));
 
+    // [HITAG2_BF] Hitag2 Bruteforce view
+    subghz->subghz_hitag2_bf = subghz_view_hitag2_bf_alloc();
+    view_dispatcher_add_view(
+        subghz->view_dispatcher,
+        SubGhzViewIdHitag2Bf,
+        subghz_view_hitag2_bf_get_view(subghz->subghz_hitag2_bf));
+
     //init threshold rssi
     subghz->threshold_rssi = subghz_threshold_rssi_alloc();
 
@@ -330,6 +337,10 @@ void subghz_free(SubGhz* subghz, bool alloc_for_tx_only) {
     // Custom car-emulate view
     view_dispatcher_remove_view(subghz->view_dispatcher, SubGhzViewIdCarEmulate);
     subghz_car_emulate_view_free(subghz->car_emulate_view);
+
+    // [HITAG2_BF] Hitag2 Bruteforce view
+    view_dispatcher_remove_view(subghz->view_dispatcher, SubGhzViewIdHitag2Bf);
+    subghz_view_hitag2_bf_free(subghz->subghz_hitag2_bf);
 
     // Read RAW
     view_dispatcher_remove_view(subghz->view_dispatcher, SubGhzViewIdReadRAW);

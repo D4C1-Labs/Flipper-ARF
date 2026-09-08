@@ -10,6 +10,7 @@
 #include "views/subghz_read_raw.h"
 #include "views/subghz_psa_decrypt.h"
 #include "views/subghz_keeloq_decrypt.h"
+#include "views/subghz_hitag2_bf.h" // [HITAG2_BF]
 
 #include <gui/gui.h>
 #include <assets_icons.h>
@@ -78,6 +79,7 @@ struct SubGhz {
     SubGhzReadRAW* subghz_read_raw;
     SubGhzViewPsaDecrypt* subghz_psa_decrypt;
     SubGhzViewKeeloqDecrypt* subghz_keeloq_decrypt;
+    SubGhzViewHitag2Bf* subghz_hitag2_bf; // [HITAG2_BF]
     SubGhzCarEmulateView* car_emulate_view;
     bool raw_send_only;
 

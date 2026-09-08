@@ -112,6 +112,11 @@ const SubGhzProtocol* const subghz_protocol_registry_items[] = {
     &honda_v1_protocol,
     &honda_v2_protocol,
 
+    // [UNLEASHED_PORT] New protocols from Unleashed firmware (disabled by default)
+    //&subghz_protocol_allstar_firefly,
+    //&subghz_protocol_ditec_gol4,
+    //&subghz_protocol_nord_ice,
+    //&subghz_protocol_telcoma_edge,
 
 };
 

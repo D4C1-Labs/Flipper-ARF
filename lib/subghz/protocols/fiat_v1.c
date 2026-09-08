@@ -27,7 +27,7 @@
 #define FIAT_V1_XOR_FIELD         "XOR"
 #define FIAT_V1_HITAG2_KEY_FIELD  "Hitag2 Key"
 #define FIAT_V1_HITAG2_EPOCH_FIELD "Hitag2 Epoch"
-#define FIAT_V1_KNOWN_KEY_COUNT   8U
+// [HITAG2_BF] FIAT_V1_KNOWN_KEY_COUNT is now defined in fiat_v1.h (public API)
 
 #define FIAT_V1_ENC_LEAD_US        2033U
 #define FIAT_V1_ENC_GAP_US         3252U
@@ -965,4 +965,28 @@ void subghz_protocol_decoder_fiat_v1_get_string(void* context, FuriString* outpu
         (unsigned long)instance->generic.cnt,
         instance->tail_bits,
         instance->frame_xor);
+}
+
+// [HITAG2_BF] Public API for Hitag2 bruteforce helper
+uint32_t subghz_protocol_fiat_v1_compute_auth(
+    uint32_t uid,
+    uint8_t button,
+    uint16_t control,
+    const uint8_t key[6],
+    uint32_t epoch) {
+    return fiat_v1_bcm_generate_authenticator(uid, button, control, key, epoch);
+}
+
+bool subghz_protocol_fiat_v1_verify_key(
+    uint32_t uid,
+    uint8_t button,
+    uint16_t control,
+    uint32_t hop,
+    const uint8_t key[6],
+    uint32_t epoch) {
+    return fiat_v1_key_matches(uid, button, control, hop, key, epoch);
+}
+
+const uint8_t (*subghz_protocol_fiat_v1_get_known_keys(void))[6] {
+    return fiat_v1_known_keys;
 }

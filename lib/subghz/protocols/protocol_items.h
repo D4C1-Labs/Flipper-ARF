@@ -94,6 +94,12 @@
 #include "honda_v1.h"
 #include "honda_v2.h"
 
+// [UNLEASHED_PORT] New protocols from Unleashed firmware
+#include "allstar_firefly.h"
+#include "ditec_gol4.h"
+#include "nord_ice.h"
+#include "telcoma_edge.h"
+
 #include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
