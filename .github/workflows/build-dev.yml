@@ -5,21 +5,12 @@ on:
     branches:
       - main
 
-# 'contents: write' to publish firmware releases. The directory.json is pushed
-# to the separate website repo (Flipper-ARF-github-page) using a dedicated PAT
-# (WEBSITE_DEPLOY_TOKEN), so no pages/id-token permissions are needed here.
 permissions:
   contents: write
 
 jobs:
   build:
     runs-on: ubuntu-latest
-
-    outputs:
-      tag: ${{ steps.tag.outputs.TAG }}
-      sha256: ${{ steps.firmware.outputs.SHA256 }}
-      version: ${{ steps.firmware.outputs.VERSION }}
-      timestamp: ${{ steps.firmware.outputs.TIMESTAMP }}
 
     steps:
       - uses: actions/checkout@v4
@@ -46,11 +37,6 @@ jobs:
           fi
 
           echo "FILE=$FILE" >> $GITHUB_OUTPUT
-          # Compute the sha256 of the .tgz for the directory.json (the app
-          # verifies it before installing).
-          echo "SHA256=$(sha256sum "$FILE" | cut -d' ' -f1)" >> $GITHUB_OUTPUT
-          echo "VERSION=${{ steps.tag.outputs.TAG }}" >> $GITHUB_OUTPUT
-          echo "TIMESTAMP=$(date +%s)" >> $GITHUB_OUTPUT
 
       - name: Create Release
         uses: softprops/action-gh-release@v2
@@ -60,82 +46,3 @@ jobs:
           files: ${{ steps.firmware.outputs.FILE }}
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-
-  # ---------------------------------------------------------------------------
-  # Generate the directory.json catalog and push it to the website repo
-  # (D4C1-Labs/Flipper-ARF-github-page), which serves it via GitHub Pages at
-  # https://d4c1-labs.github.io/Flipper-ARF-github-page/directory.json .
-  # The qUnleashed companion app (ArfParser) reads that URL to discover and
-  # install ARF firmware, exactly like it does for Unleashed/Official.
-  #
-  # Requires a repository secret `WEBSITE_DEPLOY_TOKEN`: a fine-grained PAT (or
-  # classic PAT with `repo` scope) that has write access to the
-  # D4C1-Labs/Flipper-ARF-github-page repo. Set it in
-  # Settings > Secrets and variables > Actions of the Flipper-ARF repo.
-  # ---------------------------------------------------------------------------
-  publish-directory:
-    needs: build
-    runs-on: ubuntu-latest
-
-    steps:
-      - name: Checkout website repo
-        uses: actions/checkout@v4
-        with:
-          repository: D4C1-Labs/Flipper-ARF-github-page
-          token: ${{ secrets.WEBSITE_DEPLOY_TOKEN }}
-          path: website
-
-      - name: Generate directory.json
-        run: |
-          TAG="${{ needs.build.outputs.tag }}"
-          SHA256="${{ needs.build.outputs.sha256 }}"
-          VERSION="${{ needs.build.outputs.version }}"
-          TIMESTAMP="${{ needs.build.outputs.timestamp }}"
-          # The .tgz asset lives at the release download URL.
-          TGZ_URL="https://github.com/D4C1-Labs/Flipper-ARF/releases/download/${TAG}/flipper-z-f7-update-Flipper-ARF.tgz"
-
-          # The website's vite build copies public/ into the Pages root, so we
-          # write the catalog to website/public/directory.json.
-          mkdir -p website/public
-          cat > website/public/directory.json <<EOF
-          {
-            "channels": [
-              {
-                "id": "development",
-                "title": "Dev",
-                "description": "Bleeding-edge Flipper-ARF builds (built from main on every push)",
-                "versions": [
-                  {
-                    "version": "${VERSION}",
-                    "changelog": "Automated dev build ${VERSION}. See the GitHub release for details.",
-                    "timestamp": ${TIMESTAMP},
-                    "files": [
-                      {
-                        "url": "${TGZ_URL}",
-                        "target": "f7",
-                        "type": "update_tgz",
-                        "sha256": "${SHA256}"
-                      }
-                    ]
-                  }
-                ]
-              }
-            ]
-          }
-          EOF
-
-          echo "Generated directory.json:"
-          cat website/public/directory.json
-
-      - name: Commit and push directory.json to website repo
-        run: |
-          cd website
-          git config user.name "arf-firmware-bot"
-          git config user.email "actions@github.com"
-          git add public/directory.json
-          if git diff --staged --quiet; then
-            echo "No changes to directory.json"
-          else
-            git commit -m "Update directory.json for ${{ needs.build.outputs.tag }}"
-            git push
-          fi
