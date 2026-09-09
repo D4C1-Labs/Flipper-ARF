@@ -1244,9 +1244,12 @@ void subghz_protocol_decoder_vag_get_string(void* context, FuriString* output) {
             output,
             "%s %db\r\n"
             "Key1:%08lX%08lX\r\n"
-            "Key2:%04X KeyIdx:%d\r\n"
-            "Ser:%08lX Cnt:%06lX\r\n"
-            "Btn:[%s] Flags:0x%X",
+            "Key2:%04X\r\n"
+            "KeyIdx:%d\r\n"
+            "Sn:%08lX\r\n"
+            "Cnt:%06lX\r\n"
+            "Btn:[%s]\r\n"
+            "Flags:0x%X",
             vehicle_name,
             instance->data_count_bit,
             (unsigned long)(key1 >> 32),
@@ -1260,9 +1263,10 @@ void subghz_protocol_decoder_vag_get_string(void* context, FuriString* output) {
     } else {
         furi_string_cat_printf(
             output,
-            "%s %dbit\r\n"
+            "%s %db\r\n"
             "Key1:%08lX%08lX\r\n"
-            "Key2:%04X (corrupted)\r\n",
+            "Key2:%04X\r\n"
+            "(corrupted)",
             vehicle_name,
             instance->data_count_bit,
             (unsigned long)(key1 >> 32),

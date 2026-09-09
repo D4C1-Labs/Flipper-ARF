@@ -148,6 +148,10 @@ static void subghz_view_hitag2_bf_draw(Canvas* canvas, void* _model) {
                 "Elapsed: %lum %lus",
                 (unsigned long)el_m,
                 (unsigned long)el_s);
+        } else if(model->elapsed_sec == 0) {
+            // [BUGFIX] Show "<1s" instead of the misleading "0s" when the
+            // level completes in less than a second (typical for L1/L2/L3).
+            snprintf(elapsed_str, sizeof(elapsed_str), "Elapsed: <1s");
         } else {
             snprintf(
                 elapsed_str,
@@ -183,11 +187,28 @@ static void subghz_view_hitag2_bf_draw(Canvas* canvas, void* _model) {
 static bool subghz_view_hitag2_bf_input(InputEvent* event, void* context) {
     SubGhzViewHitag2Bf* instance = (SubGhzViewHitag2Bf*)context;
 
-    if(event->key == InputKeyBack || event->key == InputKeyOk) {
-        if(instance->callback) {
-            instance->callback(SubGhzCustomEventViewTransmitterBack, instance->context);
+    // [BUGFIX] Only allow Back during progress (Hold-BACK hint). OK is only
+    // meaningful after the crack is done (to acknowledge the result). Also
+    // require InputTypeShort to avoid firing on repeat/release.
+    bool done = false;
+    with_view_model(
+        instance->view, SubGhzHitag2BfModel * model, { done = model->done; }, false);
+
+    if(event->type == InputTypeShort) {
+        if(event->key == InputKeyBack) {
+            if(instance->callback) {
+                instance->callback(
+                    SubGhzCustomEventViewTransmitterBack, instance->context);
+            }
+            return true;
         }
-        return true;
+        if(event->key == InputKeyOk && done) {
+            if(instance->callback) {
+                instance->callback(
+                    SubGhzCustomEventViewTransmitterBack, instance->context);
+            }
+            return true;
+        }
     }
     return false;
 }

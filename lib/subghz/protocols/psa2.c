@@ -1210,28 +1210,32 @@ void subghz_protocol_decoder_psa2_get_string(void* context, FuriString* output) 
             furi_string_printf(output,
                 "%s %dbit\r\n"
                 "Key1:%08lX%08lX\r\n"
-                "Key2:%04X Ser:%06lX\r\n"
+                "Key2:%04X\r\n"
+                "Ser:%06lX\r\n"
                 "Btn:[%s] Cnt:%04lX\r\n"
-                "Type:%02X Sd:%06lX CRC:%02X",
+                "Type:%02X CRC:%02X\r\n"
+                "Sd:%06lX",
                 inst->base.protocol->name, 128,
                 inst->key1_high, inst->key1_low,
                 key2_val, inst->generic.serial,
                 psa_button_name(display_btn), inst->generic.cnt,
-                inst->decrypted_type, inst->decrypted_seed,
-                inst->decrypted_crc);
+                inst->decrypted_type, inst->decrypted_crc,
+                inst->decrypted_seed);
         } else {
             furi_string_printf(output,
                 "%s %dbit\r\n"
                 "Key1:%08lX%08lX\r\n"
-                "Key2:%04X Ser:%06lX\r\n"
+                "Key2:%04X\r\n"
+                "Ser:%06lX\r\n"
                 "Btn:[%s] Cnt:%08lX\r\n"
-                "Type:%02X Sd:%06lX CRC:%04X",
+                "Type:%02X CRC:%04X\r\n"
+                "Sd:%06lX",
                 inst->base.protocol->name, 128,
                 inst->key1_high, inst->key1_low,
                 key2_val, inst->generic.serial,
                 psa_button_name(display_btn), inst->generic.cnt,
-                inst->decrypted_type, inst->decrypted_seed,
-                inst->decrypted_crc);
+                inst->decrypted_type, inst->decrypted_crc,
+                inst->decrypted_seed);
         }
     } else {
         furi_string_printf(output,

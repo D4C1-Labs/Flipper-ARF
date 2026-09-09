@@ -485,8 +485,9 @@ void subghz_protocol_decoder_ford_v3_get_string(void* context, FuriString* outpu
             output,
             "%s US %dbit\r\n"
             "Key:%02X%02X%02X%02X%02X%02X%02X%02X%02X%02X%02X%02X%02X\r\n"
-            "Sn:%08lX Btn:%02X %s\r\n"
-            "Cnt:%04X Hop:%02X%02X%02X%02X\r\n",
+            "Sn:%08lX\r\n"
+            "Btn:%02X %s\r\n"
+            "Cnt:%04X\r\n",
             instance->generic.protocol_name,
             (int)instance->generic.data_count_bit,
             k[0],
@@ -505,11 +506,7 @@ void subghz_protocol_decoder_ford_v3_get_string(void* context, FuriString* outpu
             (unsigned long)instance->generic.serial,
             instance->generic.btn,
             ford_v3_button_name(instance->generic.btn, FORD_V3_VARIANT_US),
-            (unsigned)instance->counter,
-            k[9],
-            k[10],
-            k[11],
-            k[12]);
+            (unsigned)instance->counter);
         return;
     }
 
@@ -517,8 +514,9 @@ void subghz_protocol_decoder_ford_v3_get_string(void* context, FuriString* outpu
         output,
         "%s %dbit\r\n"
         "Key:%02X%02X%02X%02X%02X%02X%02X%02X%02X%02X%02X%02X%02X\r\n"
-        "Sn:%08lX Btn:%02X %s\r\n"
-        "Cnt:%04X Hop:%02X%02X%02X%02X\r\n",
+        "Sn:%08lX\r\n"
+        "Btn:%02X %s\r\n"
+        "Cnt:%04X\r\n",
         instance->generic.protocol_name,
         (int)instance->generic.data_count_bit,
         k[0],
@@ -537,11 +535,7 @@ void subghz_protocol_decoder_ford_v3_get_string(void* context, FuriString* outpu
         (unsigned long)instance->generic.serial,
         instance->generic.btn,
         ford_v3_button_name(instance->generic.btn, FORD_V3_VARIANT_EU),
-        (unsigned)instance->counter,
-        k[9],
-        k[10],
-        k[11],
-        k[12]);
+        (unsigned)instance->counter);
 }
 
 const SubGhzProtocolDecoder subghz_protocol_ford_v3_decoder = {

@@ -1036,23 +1036,22 @@ void subghz_protocol_decoder_fiat_v1_get_string(void* context, FuriString* outpu
     furi_string_cat_printf(
         output,
         "%s %ubit %s\r\n"
-        "%08lX %03lX%01X %08lX\r\n"
-        "Sync:%02X UID:%08lX Auth:%08lX\r\n"
-        "Btn:%02X [%s] Ctrl:%03lX\r\n"
+        "Sn:%08lX\r\n"
+        "UID:%08lX\r\n"
+        "Hop:%08lX\r\n"
+        "Btn:%02X [%s]\r\n"
+        "Ctrl:%03lX Sync:%02X\r\n"
         "Tail:%u XOR:%02X\r\n",
         instance->generic.protocol_name,
         FIAT_V1_LOGICAL_BITS,
         instance->hitag2_key_valid ? "KEY:OK" : "KEY:??",
         (unsigned long)instance->generic.serial,
-        (unsigned long)instance->generic.cnt,
-        instance->generic.btn,
-        (unsigned long)instance->hop,
-        instance->family,
         (unsigned long)instance->uid,
         (unsigned long)instance->hop,
         instance->generic.btn,
         fiat_v1_button_name(instance->generic.btn),
         (unsigned long)instance->generic.cnt,
+        instance->family,
         instance->tail_bits,
         instance->frame_xor);
 }

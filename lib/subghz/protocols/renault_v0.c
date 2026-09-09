@@ -1323,10 +1323,11 @@ void subghz_protocol_decoder_renault_v0_get_string(void* context, FuriString* ou
         output,
         "%s %dbit\r\n"
         "Key:%016llX\r\n"
-        "Key2:%05lX Sn:%06lX\r\n"
-        "Btn:%01X [%s] Cnt:%02lX\r\n"
-        "C1:[%s] C2:[%s]\r\n"
-        "IC:[%s]",
+        "Key2:%05lX\r\n"
+        "Sn:%06lX\r\n"
+        "Btn:%01X [%s]\r\n"
+        "Cnt:%02lX\r\n"
+        "C1:[%s] C2:[%s] IC:[%s]",
         instance->generic.protocol_name,
         instance->packet_bit_count,
         instance->generic.data,

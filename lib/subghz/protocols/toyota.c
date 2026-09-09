@@ -116,6 +116,18 @@ static const SubGhzBlockConst toyota_const_b = {
 /* First HIGH duration below this -> Variant B, above -> Variant A */
 #define TOYOTA_VARIANT_THRESH  310u
 
+// [FALSE_POSITIVE_FIX] Kia/Hyundai V3/V4 shares Variant A's 400/800us PWM
+// timing, its ~12 short-pair preamble, and its 68-bit length, so a Kia burst
+// used to sail straight through the Variant A decoder. The one structural
+// feature that distinguishes them is Kia's mandatory ~1000-1500us sync pulse
+// between preamble and data: genuine Toyota Variant A has NO such gap (it goes
+// straight from SS preamble pairs to LS/SL data pairs, where no single level
+// ever exceeds te_long+te_delta = 900us). Any level in this band during the
+// Variant A preamble/data phase is therefore a Kia-style sync gap (or other
+// foreign framing) and must abort, never be treated as end-of-preamble.
+#define TOYOTA_A_KIA_SYNC_MIN  901u
+#define TOYOTA_A_KIA_SYNC_MAX  1600u
+
 /* ----------------------------------------------------------------
  * Button codes
  * ---------------------------------------------------------------- */
@@ -393,6 +405,14 @@ static void toyota_feed_variant_a(
         }
         inst->have_high = false;
 
+        // [FALSE_POSITIVE_FIX] Reject Kia/Hyundai V3/V4 sync gap. A ~1000-1500us
+        // LOW here is Kia's preamble->data sync pulse, not a Toyota bit pair.
+        // Genuine Toyota Variant A never produces a single level this long.
+        if(duration >= TOYOTA_A_KIA_SYNC_MIN && duration <= TOYOTA_A_KIA_SYNC_MAX) {
+            subghz_protocol_decoder_toyota_reset(inst);
+            return;
+        }
+
         bool hs = te_is_short(inst->te_last, c);
         bool hl = te_is_long (inst->te_last, c);
         bool ls = te_is_short(duration, c);
@@ -404,6 +424,14 @@ static void toyota_feed_variant_a(
         }
 
         if(inst->preamble_count < TOYOTA_A_PREAMBLE_MIN) {
+            subghz_protocol_decoder_toyota_reset(inst);
+            return;
+        }
+
+        // A valid data-phase entry must be exactly one LS or SL pair. If neither
+        // matches (e.g. a Kia HIGH sync ~1200us landed in te_last), abort rather
+        // than fall through into the data state with a bogus first bit.
+        if(!((hl && ls) || (hs && ll))) {
             subghz_protocol_decoder_toyota_reset(inst);
             return;
         }

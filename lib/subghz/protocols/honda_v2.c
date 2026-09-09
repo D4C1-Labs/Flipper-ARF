@@ -732,9 +732,12 @@ void subghz_protocol_decoder_honda_v2_get_string(void* context, FuriString* outp
         output,
         "%s %dbit\r\n"
         "Key:%016llX\r\n"
-        "Sn:%06lX  Btn:%02X - %s\r\n"
+        "Sn:%06lX\r\n"
+        "Btn:%02X - %s\r\n"
         "BtnSig:%06lX\r\n"
-        "Cnt:%05lX  Chk:%02X [%s]  Tail:%05lX [%s]\r\n",
+        "Cnt:%05lX\r\n"
+        "Chk:%02X [%s]\r\n"
+        "Tail:%05lX [%s]\r\n",
         instance->generic.protocol_name,
         instance->generic.data_count_bit,
         (unsigned long long)instance->key,

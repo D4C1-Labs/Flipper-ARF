@@ -1419,9 +1419,11 @@ void subghz_protocol_decoder_psa_get_string(void* context, FuriString* output) {
                 output,
                 "%s %dbit\r\n"
                 "Key1:%08lX%08lX\r\n"
-                "Key2:%04X Ser:%06lX\r\n"
+                "Key2:%04X\r\n"
+                "Ser:%06lX\r\n"
                 "Btn:[%s] Cnt:%04lX\r\n"
-                "Type:%02X Sd:%06lX CRC:%02X",
+                "Type:%02X CRC:%02X\r\n"
+                "Sd:%06lX",
                 instance->base.protocol->name,
                 128,
                 instance->key1_high,
@@ -1431,16 +1433,18 @@ void subghz_protocol_decoder_psa_get_string(void* context, FuriString* output) {
                 psa_button_name(display_btn),
                 instance->generic.cnt,
                 instance->decrypted_type,
-                instance->decrypted_seed,
-                instance->decrypted_crc);
+                instance->decrypted_crc,
+                instance->decrypted_seed);
         } else if(instance->decrypted_type == 0x36) {
             furi_string_printf(
                 output,
                 "%s %dbit\r\n"
                 "Key1:%08lX%08lX\r\n"
-                "Key2:%04X Ser:%06lX\r\n"
+                "Key2:%04X\r\n"
+                "Ser:%06lX\r\n"
                 "Btn:[%s] Cnt:%08lX\r\n"
-                "Type:%02X Sd:%06lX CRC:%02X",
+                "Type:%02X CRC:%02X\r\n"
+                "Sd:%06lX",
                 instance->base.protocol->name,
                 128,
                 instance->key1_high,
@@ -1450,15 +1454,15 @@ void subghz_protocol_decoder_psa_get_string(void* context, FuriString* output) {
                 psa_button_name(display_btn),
                 instance->generic.cnt,
                 instance->decrypted_type,
-                instance->decrypted_seed,
-                instance->decrypted_crc);
+                instance->decrypted_crc,
+                instance->decrypted_seed);
         }
     } else {
         furi_string_printf(
             output,
             "%s %dbit\r\n"
             "Key1:%08lX%08lX\r\n"
-            "Key2:%X",
+            "Key2:%04X",
             instance->base.protocol->name,
             128,
             instance->key1_high,

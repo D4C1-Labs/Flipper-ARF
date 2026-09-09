@@ -546,8 +546,10 @@ void subghz_protocol_decoder_mazda_siemens_get_string(void* context, FuriString*
         output,
         "%s %dbit\r\n"
         "Key:%02X %02X %02X %02X %02X %02X %02X %02X\r\n"
-        "Sn:%08lX Btn:%s\r\n"
-        "Cnt:%04lX Chk:%02X\r\n",
+        "Sn:%08lX\r\n"
+        "Btn:%s\r\n"
+        "Cnt:%04lX\r\n"
+        "Chk:%02X\r\n",
         instance->generic.protocol_name,
         instance->generic.data_count_bit,
         data[0],

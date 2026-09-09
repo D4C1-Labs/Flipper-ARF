@@ -568,15 +568,12 @@ void subghz_protocol_decoder_fiat_v0_get_string(void* context, FuriString* outpu
     furi_string_cat_printf(
         output,
         "%s %dbit\r\n"
-        "Key:%08lX%08lX\r\n"
-        "Hop:%08lX\r\n"
         "Sn:%08lX\r\n"
+        "Hop:%08lX\r\n"
         "EndByte:%02X\r\n",
         instance->generic.protocol_name,
         instance->generic.data_count_bit,
-        instance->hop,
-        instance->fix,
-        instance->hop,
-        instance->fix,
+        (unsigned long)instance->fix,
+        (unsigned long)instance->hop,
         instance->endbyte & 0x3F);
 }

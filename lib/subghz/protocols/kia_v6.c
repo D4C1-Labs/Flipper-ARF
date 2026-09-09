@@ -770,9 +770,10 @@ void subghz_protocol_decoder_kia_v6_get_string(void* context, FuriString* output
     furi_string_printf(
         output,
         "%s %dbit\r\n"
-        "%08lX%08lX%04lX\r\n"
-        "%08lX%08lX Fx:%02X\r\n"
-        "Ser:%06lX Btn:%01X[%s]\r\n"
+        "Key:%08lX%08lX%04lX\r\n"
+        "    %08lX%08lX\r\n"
+        "Fx:%02X\r\n"
+        "Ser:%06lX Btn:%01X [%s]\r\n"
         "Cnt:%08lX CRC:%02X-%02X\r\n",
         instance->generic.protocol_name,
         instance->generic.data_count_bit,

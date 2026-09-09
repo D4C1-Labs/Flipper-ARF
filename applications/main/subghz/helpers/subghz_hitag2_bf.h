@@ -7,7 +7,7 @@
 //   L1 - 8 hardcoded known keys (from fiat_v1.c)
 //   L2 - Extended dictionary embedded in flash (see subghz_hitag2_bf_dict.c)
 //   L3 - Extended dictionary loaded from SD card
-//        (path: apps_data/subghz/assets/fiat_hitag2_keys.txt, one hex key per line)
+//        (path: apps_data/subghz/assets/hitag2, one hex key per line)
 //   L4 - Heuristic mutations (UID-derived patterns, XOR masks, ASCII patterns)
 //   L5 - Hitag2Hell guess-and-determine attack (Verstegen 2018, bitsliced 32-way)
 //
@@ -22,7 +22,7 @@
 #include <storage/storage.h>
 
 #define SUBGHZ_HITAG2_BF_MAX_CAPTURES 8U
-#define SUBGHZ_HITAG2_BF_SD_DICT_PATH "apps_data/subghz/assets/fiat_hitag2_keys.txt"
+#define SUBGHZ_HITAG2_BF_SD_DICT_PATH "apps_data/subghz/assets/hitag2"
 
 typedef struct {
     uint32_t uid;     // 32-bit vehicle UID

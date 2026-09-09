@@ -910,12 +910,10 @@ void subghz_protocol_decoder_ford_v0_get_string(void* context, FuriString* outpu
         output,
         "%s %dbit CRC:%s\r\n"
         "Key1: %08lX%08lX\r\n"
-        "Key2: %04X"
-        "  Sn: %08lX\r\n"
-        "Cnt: %05lX"
-        "  Checksum: %02X"
-        "  CRC: %02X\r\n"
-        "  Btn: %02X - %s\r\n",
+        "Key2: %04X\r\n"
+        "Sn: %08lX\r\n"
+        "Cnt: %05lX\r\n"
+        "Btn: %02X - %s\r\n",
         instance->generic.protocol_name,
         instance->generic.data_count_bit,
         crc_ok ? "OK" : "BAD",
@@ -923,10 +921,7 @@ void subghz_protocol_decoder_ford_v0_get_string(void* context, FuriString* outpu
         (unsigned long)code_found_lo,
         instance->key2,
         (unsigned long)instance->serial,
-
         (unsigned long)instance->count,
-        (instance->key2 >> 8) & 0xFF,
-        instance->key2 & 0xFF,
         instance->button,
         button_name);
 }

@@ -839,10 +839,12 @@ void subghz_protocol_decoder_chrysler_get_string(void* context, FuriString* outp
 
     furi_string_cat_printf(
         output,
-        "%s %dbit\r\n%016llX%04X\r\n",
+        "%s %dbit\r\n"
+        "Key:%016llX\r\n"
+        "Key2:%04X\r\n",
         instance->generic.protocol_name,
         instance->packet_bit_count,
-        instance->generic.data,
+        (unsigned long long)instance->generic.data,
         instance->data_2);
 
     if(instance->plain_a_present) {
@@ -850,18 +852,22 @@ void subghz_protocol_decoder_chrysler_get_string(void* context, FuriString* outp
             furi_string_cat_printf(
                 output,
                 "SnA:%08lX\r\nSnB:%08lX\r\n",
-                instance->generic.cnt,
-                chrysler_v0_get_sn_b(instance));
+                (unsigned long)instance->generic.cnt,
+                (unsigned long)chrysler_v0_get_sn_b(instance));
         } else {
-            furi_string_cat_printf(output, "SnA:%08lX\r\n", instance->generic.cnt);
+            furi_string_cat_printf(
+                output, "SnA:%08lX\r\n", (unsigned long)instance->generic.cnt);
         }
     } else if(instance->plain_b_present) {
-        furi_string_cat_printf(output, "SnB:%08lX\r\n", chrysler_v0_get_sn_b(instance));
+        furi_string_cat_printf(
+            output, "SnB:%08lX\r\n", (unsigned long)chrysler_v0_get_sn_b(instance));
     }
 
     furi_string_cat_printf(
         output,
-        "Btn:%02X [%s] Cnt:%02X\r\nChk:%s",
+        "Btn:%02X [%s]\r\n"
+        "Cnt:%02X\r\n"
+        "Chk:%s",
         instance->decoded_button,
         chrysler_v0_get_button_name(instance->decoded_button),
         instance->seed,

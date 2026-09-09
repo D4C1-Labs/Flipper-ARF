@@ -181,6 +181,16 @@ static bool subghz_hitag2_bf_run_l2(
     SubGhzHitag2BfProgressCallback progress_cb,
     void* context) {
     const uint32_t total = subghz_hitag2_bf_flash_dict_size();
+    // [BUGFIX] Emit an initial 0% frame so the UI switches from L1 to L2
+    // immediately, even if the whole dict runs in <100ms.
+    if(progress_cb) {
+        progress_cb(
+            SubGhzHitag2BfLevelFlashDict,
+            "Flash Dict",
+            0,
+            instance->keys_tested_total,
+            context);
+    }
     for(uint32_t i = 0; i < total; i++) {
         if(instance->cancel) return false;
         const uint8_t(*key)[6] = subghz_hitag2_bf_flash_dict_get(i);
@@ -207,10 +217,22 @@ static bool subghz_hitag2_bf_run_l2(
             }
         }
     }
+    // [BUGFIX] Flush final 100% so the UI does not stay frozen at the last
+    // reported frame (was 72% for a 90-entry dict, causing the "stuck at 73%"
+    // bug report). L3 may skip silently if no SD dict is present, so without
+    // this flush the UI stays on L2's stale frame until L4 hits a checkpoint.
+    if(progress_cb) {
+        progress_cb(
+            SubGhzHitag2BfLevelFlashDict,
+            "Flash Dict",
+            100,
+            instance->keys_tested_total,
+            context);
+    }
     return false;
 }
 
-// L3: SD dictionary streaming (apps_data/subghz/assets/fiat_hitag2_keys.txt)
+// L3: SD dictionary streaming (apps_data/subghz/assets/hitag2)
 // Format: one 12-hex-char key per line (may have # comments and blank lines)
 static uint8_t hex_char_to_nibble(char c) {
     if(c >= '0' && c <= '9') return (uint8_t)(c - '0');
@@ -246,17 +268,28 @@ static bool subghz_hitag2_bf_run_l3(
     SubGhzHitag2Bf* instance,
     SubGhzHitag2BfProgressCallback progress_cb,
     void* context) {
+    // [BUGFIX] Emit initial 0% frame so the UI transitions from L2 to L3 even
+    // if L3 skips silently (no SD dict file present).
+    if(progress_cb) {
+        progress_cb(
+            SubGhzHitag2BfLevelSDDict,
+            "SD Dict",
+            0,
+            instance->keys_tested_total,
+            context);
+    }
+
     Storage* storage = furi_record_open(RECORD_STORAGE);
     File* file = storage_file_alloc(storage);
     bool opened = storage_file_open(
-        file, APP_DATA_PATH("/subghz/assets/fiat_hitag2_keys.txt"),
+        file, APP_DATA_PATH("/subghz/assets/hitag2"),
         FSAM_READ, FSOM_OPEN_EXISTING);
 
     if(!opened) {
         // Try alternative path (some flippers may have subghz/assets in EXT)
         storage_file_close(file);
         opened = storage_file_open(
-            file, EXT_PATH("subghz/assets/fiat_hitag2_keys.txt"),
+            file, EXT_PATH("subghz/assets/hitag2"),
             FSAM_READ, FSOM_OPEN_EXISTING);
     }
 
@@ -264,6 +297,16 @@ static bool subghz_hitag2_bf_run_l3(
         storage_file_free(file);
         furi_record_close(RECORD_STORAGE);
         FURI_LOG_I(TAG, "L3: no SD dictionary file, skipping");
+        // [BUGFIX] Flush 100% so UI does not stay on the initial 0% frame
+        // when L3 skips.
+        if(progress_cb) {
+            progress_cb(
+                SubGhzHitag2BfLevelSDDict,
+                "SD Dict",
+                100,
+                instance->keys_tested_total,
+                context);
+        }
         return false;
     }
 
@@ -340,6 +383,15 @@ static bool subghz_hitag2_bf_run_l3(
     storage_file_close(file);
     storage_file_free(file);
     furi_record_close(RECORD_STORAGE);
+    // [BUGFIX] Flush final 100% frame so UI transitions to L4 promptly.
+    if(!found && progress_cb) {
+        progress_cb(
+            SubGhzHitag2BfLevelSDDict,
+            "SD Dict",
+            100,
+            instance->keys_tested_total,
+            context);
+    }
     return found;
 }
 
@@ -351,6 +403,16 @@ static bool subghz_hitag2_bf_run_l4(
     uint32_t uid = subghz_hitag2_bf_get_uid(instance);
     uint8_t key[6];
     uint32_t tried = 0;
+
+    // [BUGFIX] Emit initial 0% frame so the UI transitions from L3 to L4.
+    if(progress_cb) {
+        progress_cb(
+            SubGhzHitag2BfLevelHeuristic,
+            "Heuristic",
+            0,
+            instance->keys_tested_total,
+            context);
+    }
 
     // Strategy 1: XOR common masks with UID and pad with common tails
     // UID split into bytes; combined with typical BCM constants
@@ -440,6 +502,15 @@ static bool subghz_hitag2_bf_run_l4(
         }
     }
 
+    // [BUGFIX] Flush final 100% frame so UI transitions to L5 promptly.
+    if(progress_cb) {
+        progress_cb(
+            SubGhzHitag2BfLevelHeuristic,
+            "Heuristic",
+            100,
+            instance->keys_tested_total,
+            context);
+    }
     return false;
 }
 
@@ -463,12 +534,17 @@ typedef struct {
     SubGhzHitag2BfProgressCallback outer_cb;
     void* outer_ctx;
     uint32_t chunk_base;   // L0 base index of this chunk (0..2^20 in steps of CHUNK_SIZE)
+    uint64_t keys_before_l5; // [BUGFIX] snapshot of keys_tested_total when L5 started
 } Hitag2HellBridge;
 
 static bool subghz_hitag2_bf_hell_progress(
     uint8_t pct_within_chunk, uint64_t states_tested, void* ctx) {
     Hitag2HellBridge* b = (Hitag2HellBridge*)ctx;
-    b->instance->keys_tested_total = states_tested;
+    // [BUGFIX] Do not clobber keys_tested_total accumulated by L1..L4. Add
+    // L5's states_tested on top of the pre-L5 baseline. Otherwise the final
+    // "Tried X keys" reported to the user shows only L5's states and hides
+    // the L1..L4 work that already happened.
+    b->instance->keys_tested_total = b->keys_before_l5 + states_tested;
 
     if(b->instance->cancel) return false;
 
@@ -487,7 +563,7 @@ static bool subghz_hitag2_bf_hell_progress(
                SubGhzHitag2BfLevelHitag2Hell,
                "Hitag2Hell",
                global_pct,
-               states_tested,
+               b->instance->keys_tested_total,
                b->outer_ctx)) {
             b->instance->cancel = true;
             return false;
@@ -506,6 +582,9 @@ static bool subghz_hitag2_bf_try_hell_on_capture(
     bridge.instance = instance;
     bridge.outer_cb = progress_cb;
     bridge.outer_ctx = context;
+    // [BUGFIX] Snapshot keys_tested_total so L5's states_tested is added on top
+    // of L1..L4 work rather than clobbering it.
+    bridge.keys_before_l5 = instance->keys_tested_total;
 
     // Sweep the layer-0 space in chunks
     for(uint32_t chunk_start = 0;

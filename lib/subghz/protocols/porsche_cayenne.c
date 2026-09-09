@@ -442,9 +442,10 @@ void subghz_protocol_decoder_porsche_cayenne_get_string(void* context, FuriStrin
     furi_string_cat_printf(
         output,
         "%s 64bit\r\n"
-        "Sn:%06lX Btn:%X\r\n"
+        "Sn:%06lX\r\n"
+        "Btn:%X\r\n"
         "Cnt:%04lX FT:%s\r\n"
-        "Raw:%08lX%08lX\r\n",
+        "Raw:%08lX%08lX",
         instance->generic.protocol_name,
         (unsigned long)(instance->generic.serial & 0xFFFFFF),
         (unsigned int)instance->generic.btn,
