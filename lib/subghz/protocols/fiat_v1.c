@@ -686,10 +686,12 @@ SubGhzProtocolStatus
 
     // [PROTOPIRATE_PORT] custom_btn support
     // Fiat V1 mapping (4-bit codes, may be outside the {1,2,4,8} valid set):
-    //   Up   → 0x8 (Unlock)
-    //   OK   → 0x0
-    //   Down → 0xD
-    // The 4-bit button code is fed directly into hitag2 authenticator below.
+    //   OK (default) → replay original captured button (do NOT rewrite to 0x0
+    //                  or the hitag2 authenticator will produce a different
+    //                  hop and the receiver will reject the frame)
+    //   Up           → 0x8 (Unlock)
+    //   Down         → 0xD (special code)
+    //   Left/Right   → unsupported, keep original
     {
         const uint8_t original_btn = (uint8_t)(button & 0x0FU);
         if(subghz_custom_btn_get_original() == 0) {
@@ -705,16 +707,11 @@ SubGhzProtocolStatus
             button = 0xDU;
             break;
         case SUBGHZ_CUSTOM_BTN_OK:
-            /* OK: use historic 0x0 code if we came from a valid original;
-             * otherwise keep the original to preserve default TX. */
-            if(fiat_v1_button_valid(original_btn)) {
-                button = 0x0U;
-            } else {
-                button = original_btn;
-            }
-            break;
         default:
-            /* LEFT/RIGHT unsupported by Fiat V1 → keep original */
+            // [BUGFIX] OK is the default state after loading a .sub; the old
+            // code overwrote the button with 0x0 unconditionally, which broke
+            // the hitag2 authenticator (receiver rejected the frame). Replay
+            // the captured button instead.
             button = original_btn;
             break;
         }
@@ -726,10 +723,16 @@ SubGhzProtocolStatus
         return SubGhzProtocolStatusErrorParserOthers;
     }
 
+    // [BUGFIX] Hitag2 Key is now OPTIONAL: if not present in the .sub (which
+    // happens when the capture was serialized before hitag2_key_valid was set,
+    // or when the file was hand-edited), try to auto-discover the key by
+    // iterating the 8 known keys against the captured (uid, btn, cnt, hop).
+    // This mirrors what fiat_v1_verify_hitag2_key() does at RX time.
+    bool key_loaded = false;
     flipper_format_rewind(flipper_format);
-    if(!flipper_format_read_hex(
+    if(flipper_format_read_hex(
            flipper_format, FIAT_V1_HITAG2_KEY_FIELD, instance->hitag2_key, 6U)) {
-        return SubGhzProtocolStatusErrorParserOthers;
+        key_loaded = true;
     }
 
     uint32_t epoch = 0U;
@@ -738,6 +741,44 @@ SubGhzProtocolStatus
         instance->epoch = epoch & 0x3FFFFUL;
     } else {
         instance->epoch = 0U;
+    }
+
+    if(!key_loaded) {
+        // Reconstruct captured hop+btn from the Raw field (or from generic if Raw missing)
+        uint32_t captured_hop = 0U;
+        uint8_t captured_btn = 0U;
+        uint16_t captured_cnt = (uint16_t)(control & 0x03FFU);
+        if(fiat_v1_frame_valid(raw_from_file)) {
+            captured_hop = fiat_v1_hop(raw_from_file);
+            captured_btn = raw_from_file[6] >> 4U;
+        } else {
+            // Fallback: derive from generic.data (upper 32 bits = serial, lower = hop)
+            captured_hop = (uint32_t)(instance->generic.data & 0xFFFFFFFFULL);
+            captured_btn = (uint8_t)(button & 0x0FU);
+        }
+
+        bool found = false;
+        for(uint8_t i = 0U; i < FIAT_V1_KNOWN_KEY_COUNT; i++) {
+            if(fiat_v1_key_matches(
+                   serial,
+                   captured_btn,
+                   captured_cnt,
+                   captured_hop,
+                   fiat_v1_known_keys[i],
+                   instance->epoch)) {
+                memcpy(instance->hitag2_key, fiat_v1_known_keys[i], 6U);
+                found = true;
+                FURI_LOG_I(TAG, "TX: auto-discovered known key %u", i);
+                break;
+            }
+        }
+        if(!found) {
+            FURI_LOG_E(
+                TAG,
+                "TX: no Hitag2 Key in .sub and no known key matches (uid=%08lX)",
+                (unsigned long)serial);
+            return SubGhzProtocolStatusErrorParserOthers;
+        }
     }
 
     control &= 0x03FFU;

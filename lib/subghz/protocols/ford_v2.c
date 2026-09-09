@@ -483,11 +483,13 @@ static SubGhzProtocolStatus
         uint8_t new_btn = original_btn;
         switch(custom_btn_id) {
         case SUBGHZ_CUSTOM_BTN_UP:    new_btn = 0x11U; break;
-        case SUBGHZ_CUSTOM_BTN_OK:    new_btn = 0x10U; break;
+        // [BUGFIX] OK = default post-load; replay captured button (do not
+        // overwrite to 0x10 unconditionally).
+        case SUBGHZ_CUSTOM_BTN_OK:    new_btn = original_btn; break;
         case SUBGHZ_CUSTOM_BTN_DOWN:  new_btn = 0x13U; break;
         case SUBGHZ_CUSTOM_BTN_LEFT:  new_btn = 0x14U; break;
         case SUBGHZ_CUSTOM_BTN_RIGHT: new_btn = 0x15U; break;
-        default: break;
+        default:                      new_btn = original_btn; break;
         }
         if(new_btn != original_btn) {
             instance->raw_bytes[6] = new_btn;

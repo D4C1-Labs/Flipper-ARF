@@ -544,7 +544,10 @@ SubGhzProtocolStatus
             uint8_t custom_btn_id = subghz_custom_btn_get();
             switch(custom_btn_id) {
             case SUBGHZ_CUSTOM_BTN_UP:    btn = 0x02U; break;
-            case SUBGHZ_CUSTOM_BTN_OK:    btn = 0x04U; break;
+            // [BUGFIX] OK is the default state after loading a .sub; do not
+            // rewrite the button unconditionally or the receiver will get a
+            // different button code than the one captured.
+            case SUBGHZ_CUSTOM_BTN_OK:    btn = original_btn; break;
             case SUBGHZ_CUSTOM_BTN_DOWN:  btn = 0x08U; break;
             case SUBGHZ_CUSTOM_BTN_LEFT:  btn = 0x01U; break;
             case SUBGHZ_CUSTOM_BTN_RIGHT: btn = 0x10U; break;

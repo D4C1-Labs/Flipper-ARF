@@ -527,11 +527,14 @@ SubGhzProtocolStatus
         uint8_t new_btn = original_btn;
         switch(custom_btn_id) {
         case SUBGHZ_CUSTOM_BTN_UP:    new_btn = 0x1U; break;
-        case SUBGHZ_CUSTOM_BTN_OK:    new_btn = 0x2U; break;
+        // [BUGFIX] OK is the default state after loading a .sub. The old
+        // code overwrote new_btn with 0x2 unconditionally, which produced a
+        // TX with a different button than the captured one. Replay original.
+        case SUBGHZ_CUSTOM_BTN_OK:    new_btn = original_btn; break;
         case SUBGHZ_CUSTOM_BTN_DOWN:  new_btn = 0x4U; break;
         case SUBGHZ_CUSTOM_BTN_LEFT:  new_btn = 0x8U; break;
         case SUBGHZ_CUSTOM_BTN_RIGHT: new_btn = 0x5U; break;
-        default: break;
+        default:                      new_btn = original_btn; break;
         }
         if(honda_static_is_valid_button(new_btn)) {
             instance->decoded.button = new_btn;

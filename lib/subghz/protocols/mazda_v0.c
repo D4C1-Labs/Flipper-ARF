@@ -457,7 +457,8 @@ SubGhzProtocolStatus
             uint8_t custom_btn_id = subghz_custom_btn_get();
             switch(custom_btn_id) {
             case SUBGHZ_CUSTOM_BTN_UP:    instance->generic.btn = 0x1U; break;
-            case SUBGHZ_CUSTOM_BTN_OK:    instance->generic.btn = 0x2U; break;
+            // [BUGFIX] OK = default post-load; replay captured button.
+            case SUBGHZ_CUSTOM_BTN_OK:    instance->generic.btn = original_btn; break;
             case SUBGHZ_CUSTOM_BTN_DOWN:  instance->generic.btn = 0x4U; break;
             case SUBGHZ_CUSTOM_BTN_RIGHT: instance->generic.btn = 0x8U; break;
             default:                      instance->generic.btn = original_btn; break;

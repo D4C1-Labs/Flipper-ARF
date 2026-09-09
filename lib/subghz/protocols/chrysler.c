@@ -501,11 +501,10 @@ SubGhzProtocolStatus
             tx_button = 0x1U;
             break;
         case SUBGHZ_CUSTOM_BTN_OK:
-            /* OK → original; if original is not 1/2 fall back to Unlock */
-            tx_button = (original_button == 1U || original_button == 2U) ? original_button : 0x2U;
-            break;
         default:
-            /* DOWN/LEFT/RIGHT: unsupported by Chrysler, keep tx_button */
+            // [BUGFIX] OK is the default state after loading a .sub. Replay
+            // the original captured button rather than force a specific one.
+            tx_button = original_button;
             break;
         }
     }

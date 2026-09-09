@@ -924,8 +924,10 @@ SubGhzProtocolStatus subghz_protocol_encoder_land_rover_v0_deserialize(
             uint8_t new_btn = original_btn;
             switch(custom_btn_id) {
             case SUBGHZ_CUSTOM_BTN_UP: new_btn = LAND_ROVER_V0_BTN_LOCK;   break;
-            case SUBGHZ_CUSTOM_BTN_OK: new_btn = LAND_ROVER_V0_BTN_UNLOCK; break;
-            default: break;
+            // [BUGFIX] OK = default post-load; replay captured button (do
+            // not overwrite to UNLOCK unconditionally).
+            case SUBGHZ_CUSTOM_BTN_OK: new_btn = original_btn;             break;
+            default:                   new_btn = original_btn;             break;
             }
             if(new_btn != original_btn && new_btn != 0U) {
                 instance->button = new_btn;
