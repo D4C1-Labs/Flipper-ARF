@@ -4,6 +4,7 @@
 #include "../blocks/encoder.h"
 #include "../blocks/generic.h"
 #include "../blocks/math.h"
+#include "../blocks/custom_btn_i.h"
 #include <lib/toolbox/manchester_decoder.h>
 #include <string.h>
 
@@ -381,6 +382,27 @@ SubGhzProtocolStatus
         instance->generic.btn &= 0x0FU;
         instance->generic.cnt &= 0xFFFFU;
         instance->generic.serial &= 0x0FFFFFFFU;
+
+        // [PROTOPIRATE_PORT] custom_btn support
+        // Kia V7 codes (see kia_v7_get_button_name): Lock=0x01, Unlock=0x02,
+        // Trunk=0x03 (0x08 also decodes as Trunk). Three named buttons; RIGHT
+        // falls back to the captured one. encode_key below reads generic.btn.
+        {
+            const uint8_t original_btn = (uint8_t)(instance->generic.btn & 0x0FU);
+            if(subghz_custom_btn_get_original() == 0) {
+                subghz_custom_btn_set_original(original_btn);
+            }
+            subghz_custom_btn_set_max(4);
+            uint8_t custom_btn_id = subghz_custom_btn_get();
+            switch(custom_btn_id) {
+            case SUBGHZ_CUSTOM_BTN_UP:    instance->generic.btn = 0x01U;         break; // Lock
+            case SUBGHZ_CUSTOM_BTN_OK:    instance->generic.btn = original_btn;  break;
+            case SUBGHZ_CUSTOM_BTN_DOWN:  instance->generic.btn = 0x02U;         break; // Unlock
+            case SUBGHZ_CUSTOM_BTN_LEFT:  instance->generic.btn = 0x03U;         break; // Trunk
+            default:                      instance->generic.btn = original_btn;  break;
+            }
+            instance->generic.btn &= 0x0FU;
+        }
 
         instance->generic.data = kia_v7_encode_key(
             instance->fixed_high_byte,

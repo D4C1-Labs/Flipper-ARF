@@ -265,6 +265,25 @@ SubGhzProtocolStatus
         instance->generic.cnt = ((instance->generic.data >> 4) & 0xF) << 8 |
                                 ((instance->generic.data >> 8) & 0xFF);
 
+        // [PROTOPIRATE_PORT] custom_btn support
+        // Kia V1 codes (see get_name_button): Close/Lock=0x1, Open/Unlock=0x2,
+        // Boot/Trunk=0x3. Only 3 buttons; RIGHT falls back to the captured one.
+        {
+            const uint8_t original_btn = (uint8_t)(instance->generic.btn & 0x0FU);
+            if(subghz_custom_btn_get_original() == 0) {
+                subghz_custom_btn_set_original(original_btn);
+            }
+            subghz_custom_btn_set_max(4);
+            uint8_t custom_btn_id = subghz_custom_btn_get();
+            switch(custom_btn_id) {
+            case SUBGHZ_CUSTOM_BTN_UP:    instance->generic.btn = 0x1U;          break; // Lock
+            case SUBGHZ_CUSTOM_BTN_OK:    instance->generic.btn = original_btn;  break;
+            case SUBGHZ_CUSTOM_BTN_DOWN:  instance->generic.btn = 0x2U;          break; // Unlock
+            case SUBGHZ_CUSTOM_BTN_LEFT:  instance->generic.btn = 0x3U;          break; // Trunk
+            default:                      instance->generic.btn = original_btn;  break;
+            }
+        }
+
         instance->encoder.repeat = 10;
 
         if(instance->encoder.upload == NULL) {

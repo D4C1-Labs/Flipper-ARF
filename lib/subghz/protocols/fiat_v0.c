@@ -4,6 +4,7 @@
 #include <lib/subghz/blocks/encoder.h>
 #include <lib/subghz/blocks/generic.h>
 #include <lib/subghz/blocks/math.h>
+#include <lib/subghz/blocks/custom_btn_i.h>
 #include <lib/toolbox/manchester_decoder.h>
 
 #define TAG                     "FiatProtocolV0"
@@ -244,6 +245,34 @@ SubGhzProtocolStatus
             instance->endbyte = (uint8_t)(eb_read & 0x7FU);
         } else {
             instance->endbyte = (uint8_t)(btn_u32 & 0x7FU);
+        }
+
+        // [PROTOPIRATE_PORT] custom_btn support
+        // Fiat V0 carries the button in the LOW NIBBLE of the endbyte:
+        //   Lock   = 0x4..0x7   (canonical bits 0b01xx)
+        //   Unlock = 0x8..0xB   (canonical bits 0b10xx)
+        //   (no Trunk/Panic on this protocol)
+        // Up  -> Lock, Down -> Unlock, OK -> original (byte-identical replay).
+        // The two low sub-code bits and the high nibble (rolling portion) of the
+        // endbyte are preserved so only the Lock/Unlock selector changes; when OK
+        // is selected the endbyte is left completely untouched.
+        {
+            const uint8_t original_btn = instance->endbyte;
+            if(subghz_custom_btn_get_original() == 0) {
+                subghz_custom_btn_set_original(original_btn);
+            }
+            subghz_custom_btn_set_max(4);
+            uint8_t custom_btn_id = subghz_custom_btn_get();
+            const uint8_t high = (uint8_t)(original_btn & 0xF0U);
+            const uint8_t sub = (uint8_t)(original_btn & 0x03U); // preserve sub-code
+            uint8_t endbyte = original_btn;
+            switch(custom_btn_id) {
+            case SUBGHZ_CUSTOM_BTN_UP:   endbyte = (uint8_t)(high | 0x04U | sub); break; // Lock
+            case SUBGHZ_CUSTOM_BTN_OK:   endbyte = original_btn;                  break;
+            case SUBGHZ_CUSTOM_BTN_DOWN: endbyte = (uint8_t)(high | 0x08U | sub); break; // Unlock
+            default:                     endbyte = original_btn;                  break;
+            }
+            instance->endbyte = (uint8_t)(endbyte & 0x7FU);
         }
 
         instance->generic.btn = instance->endbyte;

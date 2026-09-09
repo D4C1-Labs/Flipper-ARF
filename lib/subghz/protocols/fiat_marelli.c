@@ -272,6 +272,43 @@ SubGhzProtocolStatus
             instance->te_detected = te;
         }
 
+        // [PROTOPIRATE_PORT] custom_btn support
+        // Fiat Marelli button codes live in the high nibble of frame byte 6,
+        // which is bits [15:12] of the 64-bit generic.data key.
+        //   Up    = 0x7 (Lock)
+        //   Down  = 0xB (Unlock)
+        //   Left  = 0xD (Trunk)
+        //   OK    = original captured button (byte-identical replay)
+        //   Right unsupported -> fall through to original.
+        // NOTE: bytes 8-12 are an encrypted payload keyed to the captured
+        // (button, counter); this port only rewrites the button nibble and the
+        // CRC8 (done in rebuild). When OK is selected the frame is unchanged.
+        {
+            const uint8_t original_btn = (uint8_t)((instance->generic.data >> 12U) & 0x0FU);
+            if(subghz_custom_btn_get_original() == 0) {
+                subghz_custom_btn_set_original(original_btn);
+            }
+            subghz_custom_btn_set_max(4);
+            uint8_t custom_btn_id = subghz_custom_btn_get();
+            uint8_t remapped = original_btn;
+            switch(custom_btn_id) {
+            case SUBGHZ_CUSTOM_BTN_UP:    remapped = 0x7U;          break; // Lock
+            case SUBGHZ_CUSTOM_BTN_OK:    remapped = original_btn;  break;
+            case SUBGHZ_CUSTOM_BTN_DOWN:  remapped = 0xBU;          break; // Unlock
+            case SUBGHZ_CUSTOM_BTN_LEFT:  remapped = 0xDU;          break; // Trunk
+            default:                      remapped = original_btn;  break;
+            }
+            if(remapped != original_btn) {
+                // Rewrite the button nibble (bits [15:12]) in generic.data so the
+                // rebuild-from-fields step below re-encodes the frame with the
+                // new button and recomputes the CRC8.
+                instance->generic.data =
+                    (instance->generic.data & ~((uint64_t)0x0FU << 12U)) |
+                    ((uint64_t)(remapped & 0x0FU) << 12U);
+                instance->generic.btn = remapped;
+            }
+        }
+
         fiat_marelli_encoder_rebuild_raw_data(instance);
 
         if(!fiat_marelli_encoder_get_upload(instance)) {

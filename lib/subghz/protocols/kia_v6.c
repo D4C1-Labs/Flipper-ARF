@@ -4,6 +4,7 @@
 #include "../blocks/encoder.h"
 #include "../blocks/generic.h"
 #include "../blocks/math.h"
+#include "../blocks/custom_btn_i.h"
 #include <lib/toolbox/manchester_decoder.h>
 #include <string.h>
 
@@ -955,6 +956,28 @@ SubGhzProtocolStatus
         instance->generic.cnt = dec.generic.cnt;
         instance->generic.data_count_bit = subghz_protocol_kia_v6_const.min_count_bit_for_found;
         instance->fx_field = dec.fx_field;
+
+        // [PROTOPIRATE_PORT] custom_btn support
+        // Kia V6 codes (see get_string switch): Lock=0x01, Unlock=0x02,
+        // Trunk=0x03, Panic=0x04. build_upload re-encrypts using
+        // instance->generic.btn, so remap it here before that call.
+        {
+            const uint8_t original_btn = (uint8_t)(instance->generic.btn & 0x0FU);
+            if(subghz_custom_btn_get_original() == 0) {
+                subghz_custom_btn_set_original(original_btn);
+            }
+            subghz_custom_btn_set_max(4);
+            uint8_t custom_btn_id = subghz_custom_btn_get();
+            switch(custom_btn_id) {
+            case SUBGHZ_CUSTOM_BTN_UP:    instance->generic.btn = 0x01U;         break; // Lock
+            case SUBGHZ_CUSTOM_BTN_OK:    instance->generic.btn = original_btn;  break;
+            case SUBGHZ_CUSTOM_BTN_DOWN:  instance->generic.btn = 0x02U;         break; // Unlock
+            case SUBGHZ_CUSTOM_BTN_LEFT:  instance->generic.btn = 0x03U;         break; // Trunk
+            case SUBGHZ_CUSTOM_BTN_RIGHT: instance->generic.btn = 0x04U;         break; // Panic
+            default:                      instance->generic.btn = original_btn;  break;
+            }
+            instance->generic.btn &= 0x0FU;
+        }
 
         kia_v6_encoder_build_upload(instance);
 

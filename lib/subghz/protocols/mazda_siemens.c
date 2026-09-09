@@ -6,6 +6,9 @@
 #include "../blocks/generic.h"
 #include "../blocks/math.h"
 
+// [PROTOPIRATE_PORT] custom_btn support
+#include "../blocks/custom_btn_i.h"
+
 #define TAG "SubGhzProtocolMazdaSiemens"
 
 static const SubGhzBlockConst subghz_protocol_mazda_siemens_const = {
@@ -341,6 +344,37 @@ SubGhzProtocolStatus
         }
         flipper_format_read_uint32(
             flipper_format, "Repeat", (uint32_t*)&instance->encoder.repeat, 1);
+
+        // [PROTOPIRATE_PORT] custom_btn support
+        // Mazda Siemens button codes (see mazda_get_btn_name):
+        //   0x10 = Lock, 0x20 = Unlock, 0x40 = Trunk.
+        // Btn occupies bits 24..31 of generic.data.
+        mazda_parse_data(&instance->generic);
+        {
+            const uint8_t original_btn = (uint8_t)instance->generic.btn;
+            if(subghz_custom_btn_get_original() == 0) {
+                subghz_custom_btn_set_original(original_btn);
+            }
+            subghz_custom_btn_set_max(4);
+            uint8_t custom_btn_id = subghz_custom_btn_get();
+            uint8_t new_btn = original_btn;
+            switch(custom_btn_id) {
+            case SUBGHZ_CUSTOM_BTN_UP:    new_btn = 0x10U; break; // Lock
+            case SUBGHZ_CUSTOM_BTN_OK:    new_btn = original_btn; break;
+            case SUBGHZ_CUSTOM_BTN_DOWN:  new_btn = 0x20U; break; // Unlock
+            case SUBGHZ_CUSTOM_BTN_LEFT:  new_btn = 0x40U; break; // Trunk
+            // Only 3 real buttons (Lock/Unlock/Trunk); RIGHT falls back to captured.
+            case SUBGHZ_CUSTOM_BTN_RIGHT: new_btn = original_btn; break;
+            default:                      new_btn = original_btn; break;
+            }
+            if(new_btn != original_btn) {
+                // Re-encode packet with new button; get_upload recomputes checksum.
+                instance->generic.btn = new_btn;
+                instance->generic.data =
+                    (instance->generic.data & ~((uint64_t)0xFFU << 24U)) |
+                    ((uint64_t)new_btn << 24U);
+            }
+        }
 
         if(!subghz_protocol_encoder_mazda_siemens_get_upload(instance)) {
             res = SubGhzProtocolStatusErrorEncoderGetUpload;

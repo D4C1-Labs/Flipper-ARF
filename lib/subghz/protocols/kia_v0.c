@@ -429,6 +429,41 @@ static const char* kia_v0_button_name(uint8_t button, uint8_t type) {
     }
 }
 
+// [PROTOPIRATE_PORT] custom_btn D-pad -> per-subtype button code mapping.
+// Codes taken from kia_v0_button_name():
+//   KIA:    Lock=0x01, Unlock=0x02, Trunk=0x03
+//   SUZUKI: Lock=0x03, Unlock=0x04, Trunk=0x02
+//   HONDA:  index into kia_v0_honda_button_names[]: Unlock=1, Trunk=2,
+//           Lock2=3, Unlock2=4, Trunk2=5, Unlock3=6, Trunk3=7 (no plain Lock)
+// UP=Lock, DOWN=Unlock, LEFT=Trunk, RIGHT=Panic/Horn (unused here). OK/unknown
+// replays the captured button.
+static uint8_t kia_v0_custom_to_btn(uint8_t custom_btn_id, uint8_t type, uint8_t original_btn) {
+    if(type == KIA_V0_TYPE_SUZUKI) {
+        switch(custom_btn_id) {
+        case SUBGHZ_CUSTOM_BTN_UP:   return 0x03U; // Lock
+        case SUBGHZ_CUSTOM_BTN_DOWN: return 0x04U; // Unlock
+        case SUBGHZ_CUSTOM_BTN_LEFT: return 0x02U; // Trunk
+        default:                     return original_btn;
+        }
+    }
+    if(type == KIA_V0_TYPE_HONDA) {
+        switch(custom_btn_id) {
+        // Honda has no plain "Lock"; map UP to the closest analog (Unlock).
+        case SUBGHZ_CUSTOM_BTN_UP:   return 0x01U; // Unlock
+        case SUBGHZ_CUSTOM_BTN_DOWN: return 0x01U; // Unlock
+        case SUBGHZ_CUSTOM_BTN_LEFT: return 0x02U; // Trunk
+        default:                     return original_btn;
+        }
+    }
+    // KIA classic
+    switch(custom_btn_id) {
+    case SUBGHZ_CUSTOM_BTN_UP:   return 0x01U; // Lock
+    case SUBGHZ_CUSTOM_BTN_DOWN: return 0x02U; // Unlock
+    case SUBGHZ_CUSTOM_BTN_LEFT: return 0x03U; // Trunk
+    default:                     return original_btn;
+    }
+}
+
 // [PROTOPIRATE_PORT] Populate KiaV0Fields from generic.data using a given type
 static void kia_v0_parse_data(
     SubGhzBlockGeneric* generic,
@@ -839,11 +874,21 @@ SubGhzProtocolStatus
     }
     instance->encoder.repeat = repeat;
 
-    // [PROTOPIRATE_PORT] custom_btn integration: prime original button once
-    if(subghz_custom_btn_get_original() == 0) {
-        subghz_custom_btn_set_original(instance->generic.btn);
+    // [PROTOPIRATE_PORT] custom_btn integration: prime original button once,
+    // then read the D-pad selection and remap the button so it flows into the
+    // re-encode/CRC/upload performed by kia_v0_encoder_sync_from_generic().
+    {
+        const uint8_t original_btn =
+            (uint8_t)(instance->generic.btn &
+                      ((instance->type == KIA_V0_TYPE_HONDA) ? 0x07U : 0x0FU));
+        if(subghz_custom_btn_get_original() == 0) {
+            subghz_custom_btn_set_original(original_btn);
+        }
+        subghz_custom_btn_set_max((instance->type == KIA_V0_TYPE_HONDA) ? 7 : 4);
+        uint8_t custom_btn_id = subghz_custom_btn_get();
+        instance->generic.btn =
+            kia_v0_custom_to_btn(custom_btn_id, instance->type, original_btn);
     }
-    subghz_custom_btn_set_max((instance->type == KIA_V0_TYPE_HONDA) ? 7 : 4);
 
     kia_v0_encoder_sync_from_generic(instance);
 

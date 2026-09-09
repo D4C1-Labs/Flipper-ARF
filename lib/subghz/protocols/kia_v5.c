@@ -4,7 +4,28 @@
 #include "../blocks/encoder.h"
 #include "../blocks/generic.h"
 #include "../blocks/math.h"
+// [PROTOPIRATE_PORT] custom_btn support (full D-pad TX)
+#include "../blocks/custom_btn_i.h"
 #include <lib/toolbox/manchester_decoder.h>
+
+// [PROTOPIRATE_PORT] Map the global D-pad custom-button selection to a KIA V5
+// 4-bit button code. KIA V5 codes: Unlock=0x01, Lock=0x02, Trunk=0x04,
+// Horn=0x08. OK / unknown falls back to the originally captured button.
+static uint8_t kia_v5_custom_to_btn(uint8_t custom_btn_id, uint8_t original_btn) {
+    switch(custom_btn_id) {
+    case SUBGHZ_CUSTOM_BTN_UP:
+        return 0x02U; // Lock
+    case SUBGHZ_CUSTOM_BTN_DOWN:
+        return 0x01U; // Unlock
+    case SUBGHZ_CUSTOM_BTN_LEFT:
+        return 0x04U; // Trunk
+    case SUBGHZ_CUSTOM_BTN_RIGHT:
+        return 0x08U; // Horn
+    case SUBGHZ_CUSTOM_BTN_OK:
+    default:
+        return original_btn; // replay captured button
+    }
+}
 
 #define TAG "SubGhzProtocolKiaV5"
 
@@ -409,12 +430,37 @@ SubGhzProtocolStatus
         flipper_format_rewind(flipper_format);
         const bool have_cnt = flipper_format_read_uint32(flipper_format, "Cnt", &sub_cnt, 1);
 
+        // [PROTOPIRATE_PORT] custom_btn support: read the D-pad selection and
+        // remap the button. If the user picked a button other than the captured
+        // one, force the re-encrypt path so the new button reaches the air.
+        const uint8_t kia_v5_original_btn = (uint8_t)(instance->generic.btn & 0x0FU);
+        if(subghz_custom_btn_get_original() == 0) {
+            subghz_custom_btn_set_original(kia_v5_original_btn);
+        }
+        subghz_custom_btn_set_max(4);
+        const uint8_t kia_v5_selected_btn =
+            kia_v5_custom_to_btn(subghz_custom_btn_get(), kia_v5_original_btn);
+        const bool kia_v5_custom_active = (kia_v5_selected_btn != kia_v5_original_btn);
+
         if(have_serial && have_btn && have_cnt && sub_serial != UINT32_MAX &&
            sub_btn != UINT32_MAX && sub_cnt != UINT32_MAX) {
             // Adopt user-provided values (masked to their protocol widths).
             instance->generic.serial = sub_serial & 0x0FFFFFFFU;
             instance->generic.btn = (uint8_t)(sub_btn & 0x0FU);
             instance->generic.cnt = (uint16_t)(sub_cnt & 0xFFFFU);
+            // A D-pad selection overrides the file's Btn field.
+            if(kia_v5_custom_active) instance->generic.btn = kia_v5_selected_btn;
+            instance->reencrypt_mode = true;
+
+            if(!kia_v5_reencrypt_and_upload(instance)) {
+                ret = SubGhzProtocolStatusErrorEncoderGetUpload;
+                break;
+            }
+        } else if(kia_v5_custom_active) {
+            // No explicit re-encrypt fields, but the user chose a different
+            // button on the D-pad: re-encrypt from the decoded serial/cnt so the
+            // transmitted frame carries the selected button.
+            instance->generic.btn = kia_v5_selected_btn;
             instance->reencrypt_mode = true;
 
             if(!kia_v5_reencrypt_and_upload(instance)) {

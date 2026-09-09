@@ -4,6 +4,7 @@
 #include "../blocks/encoder.h"
 #include "../blocks/generic.h"
 #include "../blocks/math.h"
+#include "../blocks/custom_btn_i.h"
 #include "keeloq_common.h"
 
 #define TAG "SubGhzProtocolKiaV3V4"
@@ -447,6 +448,29 @@ SubGhzProtocolStatus
         instance->generic.serial = instance->serial;
         instance->generic.btn = instance->btn;
         instance->generic.cnt = instance->cnt;
+
+        // [PROTOPIRATE_PORT] custom_btn support
+        // Kia V3/V4 codes (see get_name_button): Lock=0x1, Unlock=0x2,
+        // Trunk=0x3, Panic=0x4, Horn=0x8. The re-encode below reads
+        // instance->btn, so remap it here before get_upload().
+        {
+            const uint8_t original_btn = (uint8_t)(instance->btn & 0x0FU);
+            if(subghz_custom_btn_get_original() == 0) {
+                subghz_custom_btn_set_original(original_btn);
+            }
+            subghz_custom_btn_set_max(4);
+            uint8_t custom_btn_id = subghz_custom_btn_get();
+            switch(custom_btn_id) {
+            case SUBGHZ_CUSTOM_BTN_UP:    instance->btn = 0x1U;          break; // Lock
+            case SUBGHZ_CUSTOM_BTN_OK:    instance->btn = original_btn;  break;
+            case SUBGHZ_CUSTOM_BTN_DOWN:  instance->btn = 0x2U;          break; // Unlock
+            case SUBGHZ_CUSTOM_BTN_LEFT:  instance->btn = 0x3U;          break; // Trunk
+            case SUBGHZ_CUSTOM_BTN_RIGHT: instance->btn = 0x4U;          break; // Panic
+            default:                      instance->btn = original_btn;  break;
+            }
+            instance->btn &= 0x0FU;
+            instance->generic.btn = instance->btn;
+        }
 
         flipper_format_rewind(flipper_format);
         uint32_t version_temp;

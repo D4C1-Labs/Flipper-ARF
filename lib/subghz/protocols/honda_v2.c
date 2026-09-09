@@ -4,6 +4,7 @@
 #include "../blocks/encoder.h"
 #include "../blocks/generic.h"
 #include "../blocks/math.h"
+#include "../blocks/custom_btn_i.h"
 #include <string.h>
 
 #define TAG "HondaV2"
@@ -855,6 +856,34 @@ SubGhzProtocolStatus subghz_protocol_encoder_honda_v2_deserialize(
         flipper_format_rewind(flipper_format);
         if(flipper_format_read_uint32(flipper_format, HONDA_V2_FF_BTNSIG, &u32, 1)) {
             instance->command_signature = u32 & 0xFFFFFFU;
+        }
+
+        // [PROTOPIRATE_PORT] custom_btn support
+        // Honda V2 has only two real buttons:
+        //   Up   = 0x02 (Lock)
+        //   Down = 0x04 (Unlock)
+        //   OK   = original captured button (byte-identical replay)
+        //   Left/Right unsupported -> fall through to original.
+        {
+            const uint8_t original_btn = instance->button;
+            if(subghz_custom_btn_get_original() == 0) {
+                subghz_custom_btn_set_original(original_btn);
+            }
+            subghz_custom_btn_set_max(4);
+            uint8_t custom_btn_id = subghz_custom_btn_get();
+            uint8_t remapped = original_btn;
+            switch(custom_btn_id) {
+            case SUBGHZ_CUSTOM_BTN_UP:   remapped = HONDA_V2_BTN_LOCK;   break;
+            case SUBGHZ_CUSTOM_BTN_OK:   remapped = original_btn;        break;
+            case SUBGHZ_CUSTOM_BTN_DOWN: remapped = HONDA_V2_BTN_UNLOCK; break;
+            default:                     remapped = original_btn;        break;
+            }
+            // Only accept the remap if it maps to a known signature; otherwise
+            // keep the original captured button so replay stays valid.
+            if(honda_v2_signature_from_button(remapped) != 0U) {
+                instance->button = remapped;
+                have_button = true;
+            }
         }
 
         if(have_button) {

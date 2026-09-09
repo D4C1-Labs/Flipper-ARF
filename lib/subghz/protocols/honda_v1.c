@@ -4,6 +4,7 @@
 #include "../blocks/encoder.h"
 #include "../blocks/generic.h"
 #include "../blocks/math.h"
+#include "../blocks/custom_btn_i.h"
 #include <string.h>
 #include <lib/toolbox/level_duration.h>
 
@@ -537,6 +538,33 @@ SubGhzProtocolStatus
     }
     if(!honda_v1_button_valid(button)) {
         button = HondaV1ButtonUnlock;
+    }
+
+    // [PROTOPIRATE_PORT] custom_btn support
+    // Honda V1 mapping (button codes, see HondaV1Button enum):
+    //   Up    = 8  (Lock)
+    //   Down  = 0  (Unlock)
+    //   Left  = 9  (Trunk)
+    //   Right = 10 (Panic)
+    //   OK    = original captured button (byte-identical replay)
+    {
+        const uint8_t original_btn = button;
+        if(subghz_custom_btn_get_original() == 0) {
+            subghz_custom_btn_set_original(original_btn);
+        }
+        subghz_custom_btn_set_max(4);
+        uint8_t custom_btn_id = subghz_custom_btn_get();
+        switch(custom_btn_id) {
+        case SUBGHZ_CUSTOM_BTN_UP:    button = (uint8_t)HondaV1ButtonLock;   break;
+        case SUBGHZ_CUSTOM_BTN_OK:    button = original_btn;                 break;
+        case SUBGHZ_CUSTOM_BTN_DOWN:  button = (uint8_t)HondaV1ButtonUnlock; break;
+        case SUBGHZ_CUSTOM_BTN_LEFT:  button = (uint8_t)HondaV1ButtonTrunk;  break;
+        case SUBGHZ_CUSTOM_BTN_RIGHT: button = (uint8_t)HondaV1ButtonPanic;  break;
+        default:                      button = original_btn;                 break;
+        }
+        if(!honda_v1_button_valid(button)) {
+            button = original_btn;
+        }
     }
 
     instance->generic.serial = serial;

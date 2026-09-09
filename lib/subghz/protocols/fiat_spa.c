@@ -4,6 +4,7 @@
 #include "../blocks/encoder.h"
 #include "../blocks/generic.h"
 #include "../blocks/math.h"
+#include "../blocks/custom_btn_i.h"
 #include <lib/toolbox/manchester_decoder.h>
 
 #define TAG "SubGhzProtocolFiatSpa"
@@ -502,6 +503,34 @@ SubGhzProtocolStatus subghz_protocol_encoder_fiat_spa_deserialize(
             instance->endbyte = 0;
         } else {
             instance->endbyte = (uint8_t)endbyte_temp;
+        }
+
+        // [PROTOPIRATE_PORT] custom_btn support
+        // Fiat SPA shares the Fiat V0 frame: the button is carried in the LOW
+        // NIBBLE of the endbyte:
+        //   Lock   = 0x4..0x7   (canonical bits 0b01xx)
+        //   Unlock = 0x8..0xB   (canonical bits 0b10xx)
+        //   (no Trunk/Panic on this protocol)
+        // Up  -> Lock, Down -> Unlock, OK -> original (byte-identical replay).
+        // High nibble (rolling portion) and the two low sub-code bits are
+        // preserved; when OK is selected the endbyte is left untouched.
+        {
+            const uint8_t original_btn = instance->endbyte;
+            if(subghz_custom_btn_get_original() == 0) {
+                subghz_custom_btn_set_original(original_btn);
+            }
+            subghz_custom_btn_set_max(4);
+            uint8_t custom_btn_id = subghz_custom_btn_get();
+            const uint8_t high = (uint8_t)(original_btn & 0xF0U);
+            const uint8_t sub = (uint8_t)(original_btn & 0x03U); // preserve sub-code
+            uint8_t endbyte = original_btn;
+            switch(custom_btn_id) {
+            case SUBGHZ_CUSTOM_BTN_UP:   endbyte = (uint8_t)(high | 0x04U | sub); break; // Lock
+            case SUBGHZ_CUSTOM_BTN_OK:   endbyte = original_btn;                  break;
+            case SUBGHZ_CUSTOM_BTN_DOWN: endbyte = (uint8_t)(high | 0x08U | sub); break; // Unlock
+            default:                     endbyte = original_btn;                  break;
+            }
+            instance->endbyte = endbyte;
         }
 
         instance->generic.cnt = instance->hop;

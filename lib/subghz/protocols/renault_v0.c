@@ -6,6 +6,9 @@
 #include "../blocks/math.h"
 #include <lib/toolbox/level_duration.h>
 
+// [PROTOPIRATE_PORT] custom_btn support
+#include "../blocks/custom_btn_i.h"
+
 #define RENAULT_V0_MIN_BITS           0x52U
 #define RENAULT_V0_DECODER_BIT_LIMIT  0x6DU
 #define RENAULT_V0_SYNC_MIN_US        0x320U
@@ -1104,6 +1107,30 @@ SubGhzProtocolStatus
             flipper_format_read_uint32(flipper_format, "Btn", &btn_u32, 1);
             flipper_format_rewind(flipper_format);
             flipper_format_read_uint32(flipper_format, "Cnt", &cnt_u32, 1);
+
+            // [PROTOPIRATE_PORT] custom_btn support
+            // Renault V0 Type13 (rolling) supports two buttons:
+            //   0x06 = Lock, 0x0A = Unlock (see renault_v0_get_button_name).
+            // The re-encode (renault_v0_build_key) + checksum validation below make
+            // the remapped button a real, valid frame. OK reproduces the captured
+            // button exactly (byte-identical replay).
+            {
+                const uint8_t original_btn = captured_button;
+                if(subghz_custom_btn_get_original() == 0) {
+                    subghz_custom_btn_set_original(original_btn);
+                }
+                subghz_custom_btn_set_max(4);
+                uint8_t custom_btn_id = subghz_custom_btn_get();
+                switch(custom_btn_id) {
+                case SUBGHZ_CUSTOM_BTN_UP:    btn_u32 = 0x06U; break; // Lock
+                case SUBGHZ_CUSTOM_BTN_OK:    btn_u32 = original_btn; break;
+                case SUBGHZ_CUSTOM_BTN_DOWN:  btn_u32 = 0x0AU; break; // Unlock
+                // Type13 has no Trunk/Panic; fall back to captured button.
+                case SUBGHZ_CUSTOM_BTN_LEFT:  btn_u32 = original_btn; break;
+                case SUBGHZ_CUSTOM_BTN_RIGHT: btn_u32 = original_btn; break;
+                default:                      btn_u32 = original_btn; break;
+                }
+            }
 
             instance->tx_button = (uint8_t)btn_u32;
             if(!renault_v0_type_button_valid(captured_type, instance->tx_button)) {

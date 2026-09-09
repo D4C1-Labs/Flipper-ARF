@@ -6,6 +6,9 @@
 #include "../blocks/math.h"
 #include "common.h"
 
+// [PROTOPIRATE_PORT] custom_btn support
+#include "../blocks/custom_btn_i.h"
+
 #define TAG "SubGhzProtocolNord_Ice"
 
 static const SubGhzBlockConst subghz_protocol_nord_ice_const = {
@@ -134,11 +137,54 @@ static void subghz_protocol_nord_ice_check_remote_controller(SubGhzBlockGeneric*
 
 SubGhzProtocolStatus
     subghz_protocol_encoder_nord_ice_deserialize(void* context, FlipperFormat* flipper_format) {
-    return subghz_protocol_encoder_common_deserialize(
-        context,
+    furi_assert(context);
+    SubGhzProtocolEncoderNord_Ice* instance = context;
+
+    SubGhzProtocolStatus ret = subghz_block_generic_deserialize_check_count_bit(
+        &instance->generic,
         flipper_format,
-        subghz_protocol_nord_ice_const.min_count_bit_for_found,
-        subghz_protocol_encoder_nord_ice_get_upload);
+        subghz_protocol_nord_ice_const.min_count_bit_for_found);
+    if(ret != SubGhzProtocolStatusOk) {
+        return ret;
+    }
+    // Optional value
+    flipper_format_read_uint32(
+        flipper_format, "Repeat", (uint32_t*)&instance->encoder.repeat, 1);
+
+    // [PROTOPIRATE_PORT] custom_btn support
+    // Nord ICE button codes (from decoder key samples, 6-bit field at data>>9 & 0x3F):
+    //   btn1 = 0x34 Lock, btn2 = 0x18 Unlock, btn3 = 0x31 Trunk, btn4 = 0x32 Panic.
+    subghz_protocol_nord_ice_check_remote_controller(&instance->generic);
+    {
+        const uint8_t original_btn = (uint8_t)(instance->generic.btn & 0x3FU);
+        if(subghz_custom_btn_get_original() == 0) {
+            subghz_custom_btn_set_original(original_btn);
+        }
+        subghz_custom_btn_set_max(4);
+        uint8_t custom_btn_id = subghz_custom_btn_get();
+        uint8_t new_btn = original_btn;
+        switch(custom_btn_id) {
+        case SUBGHZ_CUSTOM_BTN_UP:    new_btn = 0x34U; break; // Lock
+        case SUBGHZ_CUSTOM_BTN_OK:    new_btn = original_btn; break;
+        case SUBGHZ_CUSTOM_BTN_DOWN:  new_btn = 0x18U; break; // Unlock
+        case SUBGHZ_CUSTOM_BTN_LEFT:  new_btn = 0x31U; break; // Trunk
+        case SUBGHZ_CUSTOM_BTN_RIGHT: new_btn = 0x32U; break; // Panic
+        default:                      new_btn = original_btn; break;
+        }
+        if(new_btn != original_btn) {
+            // Re-pack the 6-bit button field (bits 9..14) into generic.data.
+            instance->generic.data =
+                (instance->generic.data & ~((uint64_t)0x3FU << 9U)) |
+                ((uint64_t)(new_btn & 0x3FU) << 9U);
+            instance->generic.btn = new_btn & 0x3FU;
+        }
+    }
+
+    if(!subghz_protocol_encoder_nord_ice_get_upload(instance)) {
+        return SubGhzProtocolStatusErrorEncoderGetUpload;
+    }
+    instance->encoder.is_running = true;
+    return ret;
 }
 
 void* subghz_protocol_decoder_nord_ice_alloc(SubGhzEnvironment* environment) {

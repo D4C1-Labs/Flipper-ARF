@@ -207,6 +207,28 @@ SubGhzProtocolStatus
         uint16_t raw_count = (uint16_t)((instance->generic.data >> 4) & 0xFFF);
         instance->generic.cnt = ((raw_count >> 4) | (raw_count << 8)) & 0xFFF;
 
+        // [PROTOPIRATE_PORT] custom_btn support
+        // Kia/Hyundai V2 uses a raw 4-bit button field (no in-file name table).
+        // Follow the shared KIA family convention used by V3/V4/V6/V7:
+        // Lock=0x01, Unlock=0x02, Trunk=0x03, Panic=0x04.
+        {
+            const uint8_t original_btn = (uint8_t)(instance->generic.btn & 0x0FU);
+            if(subghz_custom_btn_get_original() == 0) {
+                subghz_custom_btn_set_original(original_btn);
+            }
+            subghz_custom_btn_set_max(4);
+            uint8_t custom_btn_id = subghz_custom_btn_get();
+            switch(custom_btn_id) {
+            case SUBGHZ_CUSTOM_BTN_UP:    instance->generic.btn = 0x01U;         break; // Lock
+            case SUBGHZ_CUSTOM_BTN_OK:    instance->generic.btn = original_btn;  break;
+            case SUBGHZ_CUSTOM_BTN_DOWN:  instance->generic.btn = 0x02U;         break; // Unlock
+            case SUBGHZ_CUSTOM_BTN_LEFT:  instance->generic.btn = 0x03U;         break; // Trunk
+            case SUBGHZ_CUSTOM_BTN_RIGHT: instance->generic.btn = 0x04U;         break; // Panic
+            default:                      instance->generic.btn = original_btn;  break;
+            }
+            instance->generic.btn &= 0x0FU;
+        }
+
         instance->encoder.repeat = 10;
 
         uint64_t new_data = 0;
