@@ -140,6 +140,12 @@ typedef struct SubGhzProtocolDecoderVAG {
     uint32_t serial;
     uint32_t cnt;
     uint8_t btn;
+    // [VAG_HOLD_DIAG] Preserve the low nibble of dec[7] (the decrypted button
+    // byte). Currently unused by the framework but reported by get_string as
+    // "Flags:0x?" so users can capture short-press vs hold-press and compare.
+    // Hypothesis: this nibble encodes the comfort-close/comfort-open flag
+    // that VW/Audi keys emit while the button is held.
+    uint8_t btn_flags;
     uint8_t check_byte;
     uint8_t key_idx;
     bool decrypted;
@@ -223,6 +229,11 @@ static void vag_fill_from_decrypted(
     instance->cnt = (uint32_t)dec[4] | ((uint32_t)dec[5] << 8) | ((uint32_t)dec[6] << 16);
 
     instance->btn = (dec[7] >> 4) & 0xF;
+    // [VAG_HOLD_DIAG] Preserve the low nibble of the decrypted button byte.
+    // In captured frames from a static key state, dec[7] is expected to be
+    // strictly 0x10/0x20/0x40 (btn_flags = 0). If the low nibble is non-zero
+    // on hold-press captures, it likely encodes the comfort/hold flag.
+    instance->btn_flags = dec[7] & 0x0F;
     instance->check_byte = dispatch_byte;
     instance->decrypted = true;
 }
@@ -291,7 +302,13 @@ static void vag_parse_data(SubGhzProtocolDecoderVAG* instance) {
                     instance->cnt = (uint32_t)block_copy[4] | ((uint32_t)block_copy[5] << 8) |
                                     ((uint32_t)block_copy[6] << 16);
 
-                    instance->btn = block_copy[7];
+                    // [VAG_HOLD_DIAG] Split dec[7] into btn nibble + flags nibble.
+                    // Type 1 legacy stored the whole byte in ->btn; that caused
+                    // vag_button_name() to fail whenever the low nibble was
+                    // non-zero. Store btn nibble in ->btn (as Types 2/3/4 do)
+                    // and preserve the low nibble in ->btn_flags for diagnosis.
+                    instance->btn = (block_copy[7] >> 4) & 0xF;
+                    instance->btn_flags = block_copy[7] & 0x0F;
                     instance->check_byte = dispatch_byte;
                     instance->key_idx = key_idx;
                     instance->decrypted = true;
@@ -393,6 +410,7 @@ static void vag_parse_data(SubGhzProtocolDecoderVAG* instance) {
     instance->serial = 0;
     instance->cnt = 0;
     instance->btn = 0;
+    instance->btn_flags = 0; // [VAG_HOLD_DIAG]
     instance->check_byte = 0;
 }
 
@@ -433,6 +451,7 @@ void* subghz_protocol_decoder_vag_alloc(SubGhzEnvironment* environment) {
     instance->serial = 0;
     instance->cnt = 0;
     instance->btn = 0;
+    instance->btn_flags = 0; // [VAG_HOLD_DIAG]
     instance->check_byte = 0;
     instance->key_idx = 0xFF;
     instance->last_valid_serial = 0;
@@ -457,6 +476,7 @@ void subghz_protocol_decoder_vag_reset(void* context) {
     instance->serial = 0;
     instance->cnt = 0;
     instance->btn = 0;
+    instance->btn_flags = 0; // [VAG_HOLD_DIAG]
     instance->check_byte = 0;
     instance->key_idx = 0xFF;
 }
@@ -769,6 +789,13 @@ SubGhzProtocolStatus subghz_protocol_decoder_vag_serialize(
             flipper_format_write_uint32(flipper_format, "Cnt", &cnt_tmp, 1);
             uint32_t serial_tmp = instance->serial;
             flipper_format_write_uint32(flipper_format, "Serial", &serial_tmp, 1);
+            uint32_t btn_tmp = instance->btn;
+            flipper_format_write_uint32(flipper_format, "Btn", &btn_tmp, 1);
+            // [VAG_HOLD_DIAG] Diagnostic: preserve the low nibble of dec[7].
+            // If a captured hold-press produces a non-zero value here, that
+            // nibble encodes the comfort/hold flag we need to reproduce.
+            uint32_t btn_flags_tmp = instance->btn_flags;
+            flipper_format_write_uint32(flipper_format, "BtnFlags", &btn_flags_tmp, 1);
         }
     }
 
@@ -1209,13 +1236,17 @@ void subghz_protocol_decoder_vag_get_string(void* context, FuriString* output) {
     }
 
     if(instance->decrypted) {
+        // [VAG_HOLD_DIAG] Show the low nibble of dec[7] as "Flags" when non-zero.
+        // If capturing a hold-press produces a non-zero value here, that nibble
+        // (or one of its bits) is the comfort/hold flag we need to reproduce in
+        // the encoder to trigger windows-down/windows-up on real vehicles.
         furi_string_cat_printf(
             output,
             "%s %db\r\n"
             "Key1:%08lX%08lX\r\n"
             "Key2:%04X KeyIdx:%d\r\n"
             "Ser:%08lX Cnt:%06lX\r\n"
-            "Btn:[%s]",
+            "Btn:[%s] Flags:0x%X",
             vehicle_name,
             instance->data_count_bit,
             (unsigned long)(key1 >> 32),
@@ -1224,7 +1255,8 @@ void subghz_protocol_decoder_vag_get_string(void* context, FuriString* output) {
             instance->key_idx,
             (unsigned long)instance->serial,
             (unsigned long)instance->cnt,
-            vag_button_name(instance->btn));
+            vag_button_name(instance->btn),
+            (unsigned int)instance->btn_flags);
     } else {
         furi_string_cat_printf(
             output,
