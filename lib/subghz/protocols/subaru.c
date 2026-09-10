@@ -452,6 +452,17 @@ SubGhzProtocolStatus subghz_protocol_decoder_subaru_deserialize(void* context, F
     return ret;
 }
 
+static const char* subaru_get_button_name(uint8_t btn) {
+    switch(btn) {
+        case 0x01: return "Lock";
+        case 0x02: return "Unlock";
+        case 0x03: return "Trunk";
+        case 0x04: return "Panic";
+        case 0x08: return "0x08";
+        default: return "??";
+    }
+}
+
 void subghz_protocol_decoder_subaru_get_string(void* context, FuriString* output) {
     furi_assert(context);
     SubGhzProtocolDecoderSubaru* instance = context;
@@ -463,14 +474,14 @@ void subghz_protocol_decoder_subaru_get_string(void* context, FuriString* output
         output,
         "%s %dbit\r\n"
         "Key:0x%08lX%08lX\r\n"
-        "SN:0x%lX Btn:%X\r\n"
+        "SN:0x%lX Btn:[%s]\r\n"
         "Cnt:%04X",
         instance->generic.protocol_name,
         instance->generic.data_count_bit,
         key_hi,
         key_lo,
         instance->serial,
-        instance->button,
+        subaru_get_button_name(instance->button),
         instance->count);
 }
 

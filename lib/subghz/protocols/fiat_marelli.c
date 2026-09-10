@@ -662,6 +662,19 @@ SubGhzProtocolStatus subghz_protocol_decoder_fiat_marelli_deserialize(
     return ret;
 }
 
+static const char* fiat_marelli_button_name(uint8_t btn) {
+    switch(btn) {
+    case 0x7:
+        return "Lock";
+    case 0xB:
+        return "Unlock";
+    case 0xD:
+        return "Trunk";
+    default:
+        return "Unknown";
+    }
+}
+
 void subghz_protocol_decoder_fiat_marelli_get_string(void* context, FuriString* output) {
     furi_check(context);
     SubGhzProtocolDecoderFiatMarelli* instance = context;
@@ -678,7 +691,7 @@ void subghz_protocol_decoder_fiat_marelli_get_string(void* context, FuriString* 
         output,
         "%s %dbit\r\n"
         "Key:%02X%02X%02X%02X%02X\r\n"
-        "SN:0x%X Btn:%02X\r\n"
+        "SN:0x%X Btn:[%s]\r\n"
         "CRC:%s Cnt:%02X\r\n",
         instance->generic.protocol_name,
         (int)instance->bit_count,
@@ -686,7 +699,7 @@ void subghz_protocol_decoder_fiat_marelli_get_string(void* context, FuriString* 
         instance->raw_data[10], instance->raw_data[11],
         instance->raw_data[12],
         (unsigned int)instance->generic.serial,
-        (unsigned)instance->generic.btn,
+        fiat_marelli_button_name(instance->generic.btn),
         crc_str,
         (unsigned)counter);
 }

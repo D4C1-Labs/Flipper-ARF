@@ -440,6 +440,31 @@ SubGhzProtocolStatus
         &instance->generic, flipper_format, subghz_protocol_hollarm_const.min_count_bit_for_found);
 }
 
+/**
+ * Get button name.
+ * @param btn Button number, 4 bit
+ */
+static const char* subghz_protocol_hollarm_get_button_name(uint8_t btn) {
+    const char* name_btn[16] = {
+        "Unknown",
+        "Disarm", // B (2)
+        "Arm", // A (1)
+        "0x3",
+        "Ringtone/Alarm", // C (3)
+        "0x5",
+        "0x6",
+        "0x7",
+        "Ring", // D (4)
+        "Settings mode",
+        "Exit settings",
+        "Vibro sens. setting",
+        "Not used\n(in settings)",
+        "Volume setting",
+        "0xE",
+        "0xF"};
+    return btn <= 0xf ? name_btn[btn] : name_btn[0];
+}
+
 void subghz_protocol_decoder_hollarm_get_string(void* context, FuriString* output) {
     furi_assert(context);
     SubGhzProtocolDecoderHollarm* instance = context;
@@ -457,11 +482,11 @@ void subghz_protocol_decoder_hollarm_get_string(void* context, FuriString* outpu
         output,
         "%s %dbit\r\n"
         "Key:0x%02lX%08lX\r\n"
-        "SN:0x%06lX Btn:%X\r\n",
+        "SN:0x%06lX Btn:[%s]\r\n",
         instance->generic.protocol_name,
         instance->generic.data_count_bit,
         (uint32_t)(instance->generic.data >> 32),
         (uint32_t)instance->generic.data,
         instance->generic.serial,
-        instance->generic.btn);
+        subghz_protocol_hollarm_get_button_name(instance->generic.btn));
 }

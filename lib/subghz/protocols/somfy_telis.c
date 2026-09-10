@@ -632,10 +632,31 @@ static void subghz_protocol_somfy_telis_check_remote_controller(SubGhzBlockGener
     subghz_custom_btn_set_max(3);
 }
 
-/** 
+ /** 
  * Get button name.
  * @param btn Button number, 4 bit
  */
+static const char* subghz_protocol_somfy_telis_get_name_button(uint8_t btn) {
+    const char* name_btn[16] = {
+        "Unknown",
+        "My",
+        "Up",
+        "My+Up",
+        "Down",
+        "My+Down",
+        "Up+Down",
+        "0x07",
+        "Prog",
+        "Sun+Flag",
+        "Flag",
+        "0x0B",
+        "0x0C",
+        "0x0D",
+        "0x0E",
+        "0x0F"};
+    return btn <= 0xf ? name_btn[btn] : name_btn[0];
+}
+
 uint8_t subghz_protocol_decoder_somfy_telis_get_hash_data(void* context) {
     furi_assert(context);
     SubGhzProtocolDecoderSomfyTelis* instance = context;
@@ -750,13 +771,13 @@ void subghz_protocol_decoder_somfy_telis_get_string(void* context, FuriString* o
         output,
         "%s %dbit\r\n"
         "Key:0x%lX%08lX\r\n"
-        "SN:0x%lX Btn:%X\r\n"
+        "SN:0x%lX Btn:[%s]\r\n"
         "Cnt:%04lX",
         instance->generic.protocol_name,
         instance->generic.data_count_bit,
         (uint32_t)(instance->generic.data >> 32),
         (uint32_t)instance->generic.data,
         instance->generic.serial,
-        instance->generic.btn,
+        subghz_protocol_somfy_telis_get_name_button(instance->generic.btn),
         instance->generic.cnt);
 }

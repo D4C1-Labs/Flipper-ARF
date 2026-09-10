@@ -1416,7 +1416,7 @@ void subghz_protocol_decoder_psa_get_string(void* context, FuriString* output) {
                 output,
                 "%s %dbit\r\n"
                 "Key:0x%08lX%08lX\r\n"
-                "SN:0x%lX Btn:%s\r\n"
+                "SN:0x%lX Btn:[%s]\r\n"
                 "CRC:%02X Cnt:%04lX",
                 instance->base.protocol->name,
                 128,
@@ -1431,7 +1431,7 @@ void subghz_protocol_decoder_psa_get_string(void* context, FuriString* output) {
                 output,
                 "%s %dbit\r\n"
                 "Key:0x%08lX%08lX\r\n"
-                "SN:0x%lX Btn:%s\r\n"
+                "SN:0x%lX Btn:[%s]\r\n"
                 "CRC:%02X Cnt:%08lX",
                 instance->base.protocol->name,
                 128,

@@ -470,6 +470,25 @@ SubGhzProtocolStatus
         &instance->generic, flipper_format, subghz_protocol_kia_v1_const.min_count_bit_for_found);
 }
 
+static const char* subghz_protocol_kia_v1_get_name_button(uint8_t btn) {
+    const char* name;
+    switch(btn) {
+    case 0x1:
+        name = "Close";
+        break;
+    case 0x2:
+        name = "Open";
+        break;
+    case 0x3:
+        name = "Boot";
+        break;
+    default:
+        name = "??";
+        break;
+    }
+    return name;
+}
+
 void subghz_protocol_decoder_kia_v1_get_string(void* context, FuriString* output) {
     furi_assert(context);
     SubGhzProtocolDecoderKiaV1* instance = context;
@@ -482,14 +501,14 @@ void subghz_protocol_decoder_kia_v1_get_string(void* context, FuriString* output
         output,
         "%s %dbit\r\n"
         "Key:0x%06lX%08lX\r\n"
-        "SN:0x%lX Btn:%X\r\n"
+        "SN:0x%lX Btn:[%s]\r\n"
         "CRC:%01X %s Cnt:%03lX\r\n",
         instance->generic.protocol_name,
         instance->generic.data_count_bit,
         code_found_hi,
         code_found_lo,
         instance->generic.serial,
-        instance->generic.btn,
+        subghz_protocol_kia_v1_get_name_button(instance->generic.btn),
         instance->crc,
         instance->crc_check ? "OK" : "WRONG",
         instance->generic.cnt);

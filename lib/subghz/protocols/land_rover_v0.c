@@ -743,6 +743,14 @@ SubGhzProtocolStatus subghz_protocol_decoder_land_rover_v0_deserialize(
     return ret;
 }
 
+static const char* land_rover_v0_button_name(uint8_t button) {
+    switch(button) {
+    case LAND_ROVER_V0_BTN_LOCK:   return "Lock";
+    case LAND_ROVER_V0_BTN_UNLOCK: return "Unlock";
+    default:                        return "Unknown";
+    }
+}
+
 void subghz_protocol_decoder_land_rover_v0_get_string(void* context, FuriString* output) {
     furi_check(context);
     SubGhzProtocolDecoderLandRoverV0* instance = context;
@@ -751,13 +759,13 @@ void subghz_protocol_decoder_land_rover_v0_get_string(void* context, FuriString*
         output,
         "%s %dbit\r\n"
         "Key:0x%llX\r\n"
-        "SN:0x%06lX Btn:%X\r\n"
+        "SN:0x%06lX Btn:[%s]\r\n"
         "CRC:%02X Cnt:%05lX [%s]",
         instance->generic.protocol_name,
         instance->generic.data_count_bit,
         (unsigned long long)instance->key,
         (unsigned long)instance->serial,
-        instance->button,
+        land_rover_v0_button_name(instance->button),
         instance->check,
         (unsigned long)instance->count,
         instance->check_ok ? "OK" : "BAD");

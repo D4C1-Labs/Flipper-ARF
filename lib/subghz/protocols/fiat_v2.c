@@ -112,6 +112,19 @@ static bool fiat_v2_button_valid(uint8_t button) {
            sel == FIAT_V2_BUTTON_TRUNK;
 }
 
+static const char* fiat_v2_button_name(uint8_t button) {
+    switch(button >> FIAT_V2_BTN_SHIFT) {
+    case FIAT_V2_BUTTON_LOCK:
+        return "Lock";
+    case FIAT_V2_BUTTON_UNLOCK:
+        return "Unlock";
+    case FIAT_V2_BUTTON_TRUNK:
+        return "Trunk";
+    default:
+        return "Unknown";
+    }
+}
+
 static uint32_t fiat_v2_uid(const uint8_t raw[FIAT_V2_WIRE_BYTES]) {
     return ((uint32_t)raw[2] << 24U) | ((uint32_t)raw[3] << 16U) |
            ((uint32_t)raw[4] << 8U) | raw[5];
@@ -399,11 +412,11 @@ void subghz_protocol_decoder_fiat_v2_get_string(void* context, FuriString* outpu
     furi_string_cat_printf(
         output,
         "%s %ubit\r\n"
-        "SN:0x%lX Btn:%02X\r\n"
+        "SN:0x%lX Btn:[%s]\r\n"
         "Cnt:%02lX\r\n",
         instance->generic.protocol_name,
         FIAT_V2_LOGICAL_BITS,
         (unsigned long)instance->uid,
-        instance->button,
+        fiat_v2_button_name(instance->button),
         (unsigned long)instance->generic.cnt);
 }

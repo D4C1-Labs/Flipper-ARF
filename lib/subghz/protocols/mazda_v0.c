@@ -743,13 +743,13 @@ void subghz_protocol_decoder_mazda_v0_get_string(void* context, FuriString* outp
         output,
         "%s %dbit\r\n"
         "Key:0x%016llX\r\n"
-        "SN:0x%lX Btn:%X\r\n"
+        "SN:0x%lX Btn:[%s]\r\n"
         "CRC:%02X Cnt:%05lX [%s]\r\n",
         instance->generic.protocol_name,
         instance->generic.data_count_bit,
         (unsigned long long)instance->generic.data,
         (unsigned long)instance->generic.serial,
-        instance->generic.btn,
+        mazda_v0_get_button_name(instance->generic.btn),
         raw_crc,
         (unsigned long)(instance->generic.cnt & 0xFFFFFU),
         (raw_crc == calc_crc) ? "OK" : "BAD");

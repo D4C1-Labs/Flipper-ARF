@@ -549,6 +549,19 @@ SubGhzProtocolStatus
         subghz_protocol_mazda_siemens_const.min_count_bit_for_found);
 }
 
+static const char* mazda_get_btn_name(uint8_t btn) {
+    switch(btn) {
+    case 0x10:
+        return "Lock";
+    case 0x20:
+        return "Unlock";
+    case 0x40:
+        return "Trunk";
+    default:
+        return "Unknown";
+    }
+}
+
 void subghz_protocol_decoder_mazda_siemens_get_string(void* context, FuriString* output) {
     furi_assert(context);
     SubGhzProtocolDecoderMazdaSiemens* instance = context;
@@ -564,13 +577,13 @@ void subghz_protocol_decoder_mazda_siemens_get_string(void* context, FuriString*
         output,
         "%s %dbit\r\n"
         "Key:0x%llX\r\n"
-        "SN:0x%lX Btn:%X\r\n"
+        "SN:0x%lX Btn:[%s]\r\n"
         "CRC:%02X Cnt:%04lX\r\n",
         instance->generic.protocol_name,
         instance->generic.data_count_bit,
         (uint64_t)instance->generic.data,
         (uint32_t)instance->generic.serial,
-        instance->generic.btn,
+        mazda_get_btn_name(instance->generic.btn),
         chk,
         (uint32_t)instance->generic.cnt);
 }

@@ -247,6 +247,26 @@ static uint32_t toyota_extract(
  * Name helpers
  * ---------------------------------------------------------------- */
 
+static const char* toyota_button_name(uint8_t btn, uint8_t variant) {
+    if(variant == 1) {
+        switch(btn & 0x0F) {
+        case TOYOTA_B_BTN_LOCK:   return "Lock";
+        case TOYOTA_B_BTN_UNLOCK: return "Unlock";
+        case 0x0F:                return "Lock+Unlock";
+        case 0x04:                return "Trunk";
+        default:                  return "Unknown";
+        }
+    }
+    switch(btn & 0x0F) {
+    case TOYOTA_A_BTN_LOCK:   return "Lock";
+    case TOYOTA_A_BTN_UNLOCK: return "Unlock";
+    case 0x09:                return "Lock+Unlock";
+    case 0x02:                return "Trunk";
+    case 0x04:                return "Aux";
+    default:                  return "Unknown";
+    }
+}
+
 static const char* toyota_model_name(uint8_t variant) {
     return (variant == 1) ? "Tundra" : "Corolla";
 }
@@ -703,11 +723,11 @@ void subghz_protocol_decoder_toyota_get_string(void* context, FuriString* output
         output,
         "%s %dbit\r\n"
         "Key:0x%lX%08lX\r\n"
-        "SN:0x%lX Btn:%X",
+        "SN:0x%lX Btn:[%s]",
         toyota_model_name(var),
         inst->generic.data_count_bit,
         (uint32_t)(inst->generic.data >> 32),
         (uint32_t)inst->generic.data,
         (unsigned long)serial,
-        button);
+        toyota_button_name(button, var));
 }

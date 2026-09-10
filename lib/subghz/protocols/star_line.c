@@ -6,6 +6,22 @@
 
 #define TAG "SubGhzProtocolStarLine"
 
+static const char* star_line_btn_name(uint8_t btn) {
+    switch(btn) {
+    case 0x01: return "Lock";
+    case 0x02: return "Unlock";
+    case 0x03: return "Trunk";
+    case 0x04: return "Panic";
+    case 0x21: return "Lock";
+    case 0x22: return "Unlock";
+    case 0x23: return "Trunk";
+    case 0x24: return "Start";
+    case 0x25: return "Stop";
+    case 0x26: return "Extra";
+    default:   return "Unknown";
+    }
+}
+
 static uint8_t star_line_btn_to_custom(uint8_t btn) {
     switch(btn) {
     case 0x01:
@@ -1088,13 +1104,13 @@ void subghz_protocol_decoder_star_line_get_string(void* context, FuriString* out
         output,
         "%s %dbit\r\n"
         "Key:0x%08lX%08lX\r\n"
-        "SN:0x%lX Btn:%X\r\n"
+        "SN:0x%lX Btn:[%s]\r\n"
         "Cnt:%04lX",
         instance->generic.protocol_name,
         instance->generic.data_count_bit,
         code_found_hi,
         code_found_lo,
         instance->generic.serial,
-        display_btn,
+        star_line_btn_name(display_btn),
         instance->generic.cnt);
 }

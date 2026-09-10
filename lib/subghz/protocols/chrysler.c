@@ -863,9 +863,8 @@ void subghz_protocol_decoder_chrysler_get_string(void* context, FuriString* outp
 
     furi_string_cat_printf(
         output,
-        "Btn:%X [%s]\r\n"
+        "Btn:[%s]\r\n"
         "CRC:%s Cnt:%02X",
-        instance->decoded_button,
         chrysler_v0_get_button_name(instance->decoded_button),
         instance->check_ok ? "OK" : "ERR",
         instance->seed);

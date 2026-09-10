@@ -738,18 +738,37 @@ void subghz_protocol_decoder_kia_v6_get_string(void* context, FuriString* output
     uint32_t key1_lo = instance->stored_part1_low;
     uint32_t serial_6 = instance->generic.serial & 0xFFFFFF;
 
+    const char* btn_name;
+    switch(instance->generic.btn & 0x0F) {
+    case 0x01:
+        btn_name = "Lock";
+        break;
+    case 0x02:
+        btn_name = "Unlock";
+        break;
+    case 0x03:
+        btn_name = "Trunk";
+        break;
+    case 0x04:
+        btn_name = "Panic";
+        break;
+    default:
+        btn_name = "Unknown";
+        break;
+    }
+
     furi_string_printf(
         output,
         "%s %dbit\r\n"
         "Key:0x%08lX%08lX\r\n"
-        "SN:0x%06lX Btn:%X\r\n"
+        "SN:0x%06lX Btn:[%s]\r\n"
         "CRC:%02X-%02X Cnt:%08lX\r\n",
         instance->generic.protocol_name,
         instance->generic.data_count_bit,
         key1_hi,
         key1_lo,
         serial_6,
-        instance->generic.btn & 0x0F,
+        btn_name,
         instance->crc1_field,
         instance->crc2_field,
         instance->generic.cnt);

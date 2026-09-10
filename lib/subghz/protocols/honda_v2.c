@@ -713,6 +713,17 @@ SubGhzProtocolStatus subghz_protocol_decoder_honda_v2_deserialize(
     return ret;
 }
 
+static const char* honda_v2_button_name(uint8_t button) {
+    switch(button) {
+    case HONDA_V2_BTN_LOCK:
+        return "Lock";
+    case HONDA_V2_BTN_UNLOCK:
+        return "Unlock";
+    default:
+        return "Unknown";
+    }
+}
+
 void subghz_protocol_decoder_honda_v2_get_string(void* context, FuriString* output) {
     furi_check(context);
     SubGhzProtocolDecoderHondaV2* instance = context;
@@ -721,13 +732,13 @@ void subghz_protocol_decoder_honda_v2_get_string(void* context, FuriString* outp
         output,
         "%s %dbit\r\n"
         "Key:%016llX\r\n"
-        "SN:%06lX Btn:%02X\r\n"
+        "SN:%06lX Btn:[%s]\r\n"
         "CRC:%02X [%s] Cnt:%05lX",
         instance->generic.protocol_name,
         instance->generic.data_count_bit,
         (unsigned long long)instance->key,
         (unsigned long)instance->serial,
-        instance->button,
+        honda_v2_button_name(instance->button),
         instance->check,
         instance->check_ok ? "OK" : "BAD",
         (unsigned long)instance->count);

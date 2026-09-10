@@ -92,6 +92,16 @@ static void cfm_encrypt_transform(uint8_t* hop, SheriffCfmModel model) {
     }
 }
 
+static const char* cfm_btn_name(uint8_t btn) {
+    switch(btn) {
+    case 0x10: return "Lock";
+    case 0x20: return "Unlock";
+    case 0x40: return "Trunk";
+    case 0x80: return "Panic";
+    default: return "?";
+    }
+}
+
 static uint8_t cfm_btn_to_custom(uint8_t btn) {
     switch(btn) {
     case 0x10: return SUBGHZ_CUSTOM_BTN_UP;
@@ -628,13 +638,13 @@ void subghz_protocol_decoder_sheriff_cfm_get_string(void* context, FuriString* o
         output,
         "%s %dbit\r\n"
         "Key:0x%lX%08lX\r\n"
-        "SN:0x%lX Btn:%X\r\n"
+        "SN:0x%lX Btn:[%s]\r\n"
         "Cnt:%04lX",
         instance->generic.protocol_name,
         instance->generic.data_count_bit,
         (uint32_t)(instance->generic.data >> 32),
         (uint32_t)instance->generic.data,
         instance->generic.serial,
-        selected_btn,
+        cfm_btn_name(selected_btn),
         (uint32_t)instance->generic.cnt);
 }

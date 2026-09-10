@@ -375,6 +375,43 @@ SubGhzProtocolStatus
  * Get button name.
  * @param btn Button number, 8 bit
  */
+static const char* subghz_protocol_dooya_get_name_button(uint8_t btn) {
+    const char* btn_name;
+    switch(btn) {
+    case 0b00010001:
+        btn_name = "Up_Long";
+        break;
+    case 0b00011110:
+        btn_name = "Up_Short";
+        break;
+    case 0b00110011:
+        btn_name = "Down_Long";
+        break;
+    case 0b00111100:
+        btn_name = "Down_Short";
+        break;
+    case 0b01010101:
+        btn_name = "Stop";
+        break;
+    case 0b01111001:
+        btn_name = "Up+Down";
+        break;
+    case 0b10000000:
+        btn_name = "Up+Stop";
+        break;
+    case 0b10000001:
+        btn_name = "Down+Stop";
+        break;
+    case 0b11001100:
+        btn_name = "P2";
+        break;
+    default:
+        btn_name = "Unknown";
+        break;
+    }
+    return btn_name;
+}
+
 void subghz_protocol_decoder_dooya_get_string(void* context, FuriString* output) {
     furi_assert(context);
     SubGhzProtocolDecoderDooya* instance = context;
@@ -391,10 +428,10 @@ void subghz_protocol_decoder_dooya_get_string(void* context, FuriString* output)
         output,
         "%s %dbit\r\n"
         "Key:0x%010llX\r\n"
-        "SN:0x%lX Btn:%X\r\n",
+        "SN:0x%lX Btn:[%s]\r\n",
         instance->generic.protocol_name,
         instance->generic.data_count_bit,
         instance->generic.data,
         instance->generic.serial,
-        instance->generic.btn);
+        subghz_protocol_dooya_get_name_button(instance->generic.btn));
 }

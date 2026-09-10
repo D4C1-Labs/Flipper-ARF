@@ -342,19 +342,17 @@ void subghz_protocol_decoder_suzuki_get_string(void *context, FuriString *output
         output,
         "%s %dbit\r\n"
         "Key:%08lX%08lX\r\n"
-        "Sn:%07lX Cnt:%04lX\r\n"
-        "Btn:%02X:[%s]\r\n"
-        "CRC:%02X %s",
+        "SN:0x%07lX Btn:[%s]\r\n"
+        "CRC:%02X [%s] Cnt:%04lX",
         instance->generic.protocol_name,
         instance->generic.data_count_bit,
         key_high,
         key_low,
         instance->generic.serial,
-        instance->generic.cnt,
-        instance->generic.btn,
         suzuki_get_button_name(instance->generic.btn),
         received_crc,
-        crc_valid ? "(OK)" : "(FAIL)");
+        crc_valid ? "OK" : "ERR",
+        instance->generic.cnt);
 }
 
 void *subghz_protocol_encoder_suzuki_alloc(SubGhzEnvironment *environment)

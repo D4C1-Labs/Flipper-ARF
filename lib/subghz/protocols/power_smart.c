@@ -358,6 +358,12 @@ SubGhzProtocolStatus
         subghz_protocol_power_smart_const.min_count_bit_for_found);
 }
 
+static const char* subghz_protocol_power_smart_get_name_button(uint8_t btn) {
+    btn &= 0x3;
+    const char* name_btn[0x4] = {"Unknown", "Down", "Up", "Stop"};
+    return name_btn[btn];
+}
+
 void subghz_protocol_decoder_power_smart_get_string(void* context, FuriString* output) {
     furi_assert(context);
     SubGhzProtocolDecoderPowerSmart* instance = context;
@@ -373,11 +379,11 @@ void subghz_protocol_decoder_power_smart_get_string(void* context, FuriString* o
         output,
         "%s %dbit\r\n"
         "Key:0x%lX%08lX\r\n"
-        "SN:0x%lX Btn:%X\r\n",
+        "SN:0x%lX Btn:[%s]\r\n",
         instance->generic.protocol_name,
         instance->generic.data_count_bit,
         (uint32_t)(instance->generic.data >> 32),
         (uint32_t)(instance->generic.data & 0xFFFFFFFF),
         instance->generic.serial,
-        instance->generic.btn);
+        subghz_protocol_power_smart_get_name_button(instance->generic.btn));
 }

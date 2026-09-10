@@ -1318,6 +1318,28 @@ uint8_t subghz_protocol_decoder_renault_v0_get_hash_data(void* context) {
     return (uint8_t)(hash ^ key2_mix);
 }
 
+static const char* renault_v0_get_button_name(RenaultV0TypeId type_id, uint8_t button) {
+    if(type_id == RenaultV0Type13) {
+        switch(button) {
+        case 0x06:
+            return "Lock";
+        case 0x0A:
+            return "Unlock";
+        default:
+            return "??";
+        }
+    }
+
+    const uint8_t low_nibble = button & 0x0FU;
+    if((low_nibble >= 0x04U) && (low_nibble <= 0x07U)) {
+        return "Lock";
+    }
+    if((low_nibble >= 0x08U) && (low_nibble <= 0x0BU)) {
+        return "Unlock";
+    }
+    return "??";
+}
+
 void subghz_protocol_decoder_renault_v0_get_string(void* context, FuriString* output) {
     furi_assert(context);
 
@@ -1327,13 +1349,13 @@ void subghz_protocol_decoder_renault_v0_get_string(void* context, FuriString* ou
         output,
         "%s %dbit\r\n"
         "Key:0x%016llX\r\n"
-        "SN:0x%lX Btn:%X\r\n"
+        "SN:0x%lX Btn:[%s]\r\n"
         "CRC:%s Cnt:%02lX",
         instance->generic.protocol_name,
         instance->packet_bit_count,
         instance->generic.data,
         instance->generic.serial,
-        instance->generic.btn,
+        renault_v0_get_button_name(instance->type_id, instance->generic.btn),
         (instance->check_c1 || instance->check_c2) ? "ERR" : "OK",
         instance->generic.cnt);
 }

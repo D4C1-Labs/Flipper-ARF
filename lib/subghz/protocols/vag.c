@@ -90,6 +90,25 @@ static uint8_t vag_custom_to_btn(uint8_t custom, uint8_t original_btn) {
     }
 }
 
+static const char* vag_button_name(uint8_t btn) {
+    switch(btn) {
+    case 0x1:
+        return "Unlock";
+    case 0x2:
+        return "Lock";
+    case 0x4:
+        return "Boot";
+    case 0x10:
+        return "Unlock";
+    case 0x20:
+        return "Lock";
+    case 0x40:
+        return "Boot";
+    default:
+        return "Unkn";
+    }
+}
+
 static uint8_t vag_btn_to_custom(uint8_t btn) {
     switch(btn) {
         case 0x10: return 2;
@@ -1224,14 +1243,14 @@ void subghz_protocol_decoder_vag_get_string(void* context, FuriString* output) {
             output,
             "%s %dbit\r\n"
             "Key:0x%08lX%08lX\r\n"
-            "SN:0x%lX Btn:%X\r\n"
+            "SN:0x%lX Btn:[%s]\r\n"
             "Cnt:%06lX",
             vehicle_name,
             instance->data_count_bit,
             (unsigned long)(key1 >> 32),
             (unsigned long)(key1 & 0xFFFFFFFF),
             (unsigned long)instance->serial,
-            (unsigned int)instance->btn,
+            vag_button_name(instance->btn),
             (unsigned long)instance->cnt);
     } else {
         furi_string_cat_printf(

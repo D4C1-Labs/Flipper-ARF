@@ -218,6 +218,15 @@ const SubGhzProtocol subghz_protocol_psa2 = {
  * BUTTON HELPERS
  * ========================================================= */
 
+ static const char* psa_button_name(uint8_t btn) {
+    switch(btn) {
+    case PSA_BTN_LOCK:   return "Lock";
+    case PSA_BTN_UNLOCK: return "Unlock";
+    case PSA_BTN_TRUNK:  return "Trunk";
+    default:             return "??";
+    }
+}
+
 static uint8_t psa_get_btn_code(void) {
     uint8_t custom_btn   = subghz_custom_btn_get();
     uint8_t original_raw = subghz_custom_btn_get_original();
@@ -981,21 +990,21 @@ void subghz_protocol_decoder_psa2_get_string(void* context, FuriString* output) 
             furi_string_printf(output,
                 "%s %dbit\r\n"
                 "Key:0x%08lX%08lX\r\n"
-                "SN:0x%lX Btn:%X\r\n"
+                "SN:0x%lX Btn:[%s]\r\n"
                 "CRC:%02X Cnt:%04lX",
                 inst->base.protocol->name, 128,
                 inst->key1_high, inst->key1_low,
-                inst->generic.serial, display_btn,
+                inst->generic.serial, psa_button_name(display_btn),
                 inst->decrypted_crc, inst->generic.cnt);
         } else {
             furi_string_printf(output,
                 "%s %dbit\r\n"
                 "Key:0x%08lX%08lX\r\n"
-                "SN:0x%lX Btn:%X\r\n"
+                "SN:0x%lX Btn:[%s]\r\n"
                 "CRC:%04X Cnt:%08lX",
                 inst->base.protocol->name, 128,
                 inst->key1_high, inst->key1_low,
-                inst->generic.serial, display_btn,
+                inst->generic.serial, psa_button_name(display_btn),
                 inst->decrypted_crc, inst->generic.cnt);
         }
     } else {

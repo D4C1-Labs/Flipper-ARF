@@ -887,6 +887,21 @@ SubGhzProtocolStatus
     return ret;
 }
 
+static const char* ford_v0_get_button_name(uint8_t button) {
+    switch(button) {
+    case 0x01:
+        return "Panic";
+    case 0x02:
+        return "Lock";
+    case 0x04:
+        return "Unlock";
+    case 0x08:
+        return "Boot";
+    default:
+        return "??";
+    }
+}
+
 void subghz_protocol_decoder_ford_v0_get_string(void* context, FuriString* output) {
     furi_check(context);
     SubGhzProtocolDecoderFordV0* instance = context;
@@ -900,14 +915,14 @@ void subghz_protocol_decoder_ford_v0_get_string(void* context, FuriString* outpu
         output,
         "%s %dbit\r\n"
         "Key:0x%08lX%08lX\r\n"
-        "SN:0x%lX Btn:%02X\r\n"
+        "SN:0x%lX Btn:[%s]\r\n"
         "CRC:%s Cnt:%05lX\r\n",
         instance->generic.protocol_name,
         instance->generic.data_count_bit,
         (unsigned long)code_found_hi,
         (unsigned long)code_found_lo,
         (unsigned long)instance->serial,
-        instance->button,
+        ford_v0_get_button_name(instance->button),
         crc_ok ? "OK" : "BAD",
         (unsigned long)instance->count);
 }

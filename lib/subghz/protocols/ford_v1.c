@@ -832,6 +832,23 @@ void subghz_protocol_decoder_ford_v1_free(void* context) {
     free(context);
 }
 
+static const char* ford_v1_get_button_name(uint8_t btn) {
+    switch(btn) {
+    case 0:
+        return "Sync";
+    case 1:
+        return "Lock";
+    case 2:
+        return "Unlock";
+    case 4:
+        return "Trunk";
+    case 8:
+        return "Panic";
+    default:
+        return "??";
+    }
+}
+
 void subghz_protocol_decoder_ford_v1_get_string(void* context, FuriString* output) {
     furi_check(context);
     SubGhzProtocolDecoderFordV1* instance = context;
@@ -857,14 +874,14 @@ void subghz_protocol_decoder_ford_v1_get_string(void* context, FuriString* outpu
             output,
             "%s %dbit\r\n"
             "Key:0x%014llX\r\n"
-            "SN:0x%lX Btn:%01X\r\n"
+            "SN:0x%lX Btn:[%s]\r\n"
             "CRC:%04lX Cnt:%05lX\r\n"
             "[%s]\r\n",
             instance->generic.protocol_name,
             instance->generic.data_count_bit,
             (unsigned long long)key1,
             (unsigned long)instance->generic.serial,
-            instance->generic.btn,
+            ford_v1_get_button_name(instance->generic.btn),
             (unsigned long)crc16,
             (unsigned long)instance->generic.cnt,
             crc_ok ? "OK" : "ERR");

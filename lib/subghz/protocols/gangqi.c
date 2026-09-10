@@ -428,6 +428,31 @@ SubGhzProtocolStatus
         &instance->generic, flipper_format, subghz_protocol_gangqi_const.min_count_bit_for_found);
 }
 
+/**
+ * Get button name.
+ * @param btn Button number, 4 bit
+ */
+static const char* subghz_protocol_gangqi_get_button_name(uint8_t btn) {
+    const char* name_btn[16] = {
+        "Unknown",
+        "Exit settings",
+        "Volume setting",
+        "0x3",
+        "Vibro sens. setting",
+        "Settings mode",
+        "Ringtone setting",
+        "Ring", // D
+        "0x8",
+        "0x9",
+        "0xA",
+        "Alarm", // C
+        "0xC",
+        "Arm", // A
+        "Disarm", // B
+        "0xF"};
+    return btn <= 0xf ? name_btn[btn] : name_btn[0];
+}
+
 void subghz_protocol_decoder_gangqi_get_string(void* context, FuriString* output) {
     furi_assert(context);
     SubGhzProtocolDecoderGangQi* instance = context;
@@ -445,11 +470,11 @@ void subghz_protocol_decoder_gangqi_get_string(void* context, FuriString* output
         output,
         "%s %dbit\r\n"
         "Key:0x%X%08lX\r\n"
-        "SN:0x%lX Btn:%01X\r\n",
+        "SN:0x%lX Btn:[%s]\r\n",
         instance->generic.protocol_name,
         instance->generic.data_count_bit,
         (uint8_t)(instance->generic.data >> 32),
         (uint32_t)(instance->generic.data & 0xFFFFFFFF),
         instance->generic.serial,
-        instance->generic.btn);
+        subghz_protocol_gangqi_get_button_name(instance->generic.btn));
 }
