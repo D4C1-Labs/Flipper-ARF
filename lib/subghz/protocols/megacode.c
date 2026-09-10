@@ -415,13 +415,10 @@ void subghz_protocol_decoder_megacode_get_string(void* context, FuriString* outp
         output,
         "%s %dbit\r\n"
         "Key:0x%06lX\r\n"
-        "Sn:0x%04lX - %lu\r\n"
-        "Facility:%lX Btn:%X\r\n",
+        "SN:0x%lX Btn:%X\r\n",
         instance->generic.protocol_name,
         instance->generic.data_count_bit,
         (uint32_t)instance->generic.data,
         instance->generic.serial,
-        instance->generic.serial,
-        instance->generic.cnt,
         instance->generic.btn);
 }

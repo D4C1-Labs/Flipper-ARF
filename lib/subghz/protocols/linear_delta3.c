@@ -340,10 +340,8 @@ void subghz_protocol_decoder_linear_delta3_get_string(void* context, FuriString*
     furi_string_cat_printf(
         output,
         "%s %dbit\r\n"
-        "Key:0x%lX\r\n"
-        "DIP:" DIP_PATTERN "\r\n",
+        "Key:0x%lX\r\n",
         instance->generic.protocol_name,
         instance->generic.data_count_bit,
-        data,
-        DATA_TO_DIP(data));
+        data);
 }

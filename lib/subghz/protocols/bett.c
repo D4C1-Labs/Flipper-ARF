@@ -320,14 +320,8 @@ void subghz_protocol_decoder_bett_get_string(void* context, FuriString* output) 
     furi_string_cat_printf(
         output,
         "%s %dbit\r\n"
-        "Key:%05lX\r\n"
-        "  +:   " DIP_PATTERN "\r\n"
-        "  o:   " DIP_PATTERN "\r\n"
-        "  -:   " DIP_PATTERN "\r\n",
+        "Key:0x%05lX\r\n",
         instance->generic.protocol_name,
         instance->generic.data_count_bit,
-        data,
-        SHOW_DIP_P(data, DIP_P),
-        SHOW_DIP_P(data, DIP_O),
-        SHOW_DIP_P(data, DIP_N));
+        data);
 }

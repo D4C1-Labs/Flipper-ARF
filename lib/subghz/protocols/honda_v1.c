@@ -822,15 +822,14 @@ void subghz_protocol_decoder_honda_v1_get_string(void* context, FuriString* outp
         output,
         "%s %dbit\r\n"
         "Key:%016llX\r\n"
-        "Btn:%s\r\n"
-        "Sn:%07lX Cnt:%04lX\r\n"
-        "Crc:%X [%s]",
+        "SN:%07lX Btn:%s\r\n"
+        "CRC:%X [%s] Cnt:%04lX",
         instance->generic.protocol_name,
         (int)instance->generic.data_count_bit,
         (unsigned long long)instance->generic.data,
-        honda_v1_button_name((uint8_t)instance->generic.btn),
         (unsigned long)instance->generic.serial,
-        (unsigned long)instance->generic.cnt,
+        honda_v1_button_name((uint8_t)instance->generic.btn),
         k2,
-        crc_ok ? "OK" : "ERR");
+        crc_ok ? "OK" : "ERR",
+        (unsigned long)instance->generic.cnt);
 }

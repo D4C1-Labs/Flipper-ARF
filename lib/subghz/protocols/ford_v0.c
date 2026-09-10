@@ -896,32 +896,18 @@ void subghz_protocol_decoder_ford_v0_get_string(void* context, FuriString* outpu
 
     bool crc_ok = ford_v0_verify_crc(instance->key1, instance->key2);
 
-    const char* button_name = "??";
-    if(instance->button == 0x01)
-        button_name = "Panic";
-    else if(instance->button == 0x02)
-        button_name = "Lock";
-    else if(instance->button == 0x04)
-        button_name = "Unlock";
-    else if(instance->button == 0x08)
-        button_name = "Boot";
-
     furi_string_cat_printf(
         output,
-        "%s %dbit CRC:%s\r\n"
-        "Key1: %08lX%08lX\r\n"
-        "Key2: %04X\r\n"
-        "Sn: %08lX\r\n"
-        "Cnt: %05lX\r\n"
-        "Btn: %02X - %s\r\n",
+        "%s %dbit\r\n"
+        "Key:0x%08lX%08lX\r\n"
+        "SN:0x%lX Btn:%02X\r\n"
+        "CRC:%s Cnt:%05lX\r\n",
         instance->generic.protocol_name,
         instance->generic.data_count_bit,
-        crc_ok ? "OK" : "BAD",
         (unsigned long)code_found_hi,
         (unsigned long)code_found_lo,
-        instance->key2,
         (unsigned long)instance->serial,
-        (unsigned long)instance->count,
         instance->button,
-        button_name);
+        crc_ok ? "OK" : "BAD",
+        (unsigned long)instance->count);
 }

@@ -577,9 +577,7 @@ void subghz_protocol_decoder_secplus_v1_get_string(void* context, FuriString* ou
     instance->generic.cnt = instance->generic.data & 0xFFFFFFFF;
 
     instance->generic.btn = fixed % 3;
-    uint8_t id0 = (fixed / 3) % 3;
     uint8_t id1 = (fixed / 9) % 3;
-    uint16_t pin = 0;
 
     // push protocol data to global variable
     subghz_block_generic_global.cnt_is_available = true;
@@ -591,69 +589,25 @@ void subghz_protocol_decoder_secplus_v1_get_string(void* context, FuriString* ou
     subghz_block_generic_global.btn_length_bit = 2;
     //
 
+    if(id1 == 0) {
+        // (fixed // 3**3) % (3**7)    3^3=27  3^73=72187
+        instance->generic.serial = (fixed / 27) % 2187;
+    } else {
+        //id = fixed / 27;
+        instance->generic.serial = fixed / 27;
+    }
+
     furi_string_cat_printf(
         output,
-        "%s %db\r\n"
-        "Key:%lX%08lX\r\n"
-        "id1:%d id0:%d",
+        "%s %dbit\r\n"
+        "Key:0x%lX%08lX\r\n"
+        "SN:0x%lX Btn:%X\r\n"
+        "Cnt:%08lX",
         instance->generic.protocol_name,
         instance->generic.data_count_bit,
         (uint32_t)(instance->generic.data >> 32),
         (uint32_t)instance->generic.data,
-        id1,
-        id0);
-
-    if(id1 == 0) {
-        // (fixed // 3**3) % (3**7)    3^3=27  3^73=72187
-
-        instance->generic.serial = (fixed / 27) % 2187;
-        // pin = (fixed // 3**10) % (3**9)  3^10=59049 3^9=19683
-        pin = (fixed / 59049) % 19683;
-
-        if(pin <= 9999) {
-            furi_string_cat_printf(output, " pin:%d", pin);
-        } else if(pin <= 11029) {
-            furi_string_cat_printf(output, " pin:enter");
-        }
-
-        int pin_suffix = 0;
-        // pin_suffix = (fixed // 3**19) % 3   3^19=1162261467
-        pin_suffix = (fixed / 1162261467) % 3;
-
-        if(pin_suffix == 1) {
-            furi_string_cat_printf(output, " #\r\n");
-        } else if(pin_suffix == 2) {
-            furi_string_cat_printf(output, " *\r\n");
-        } else {
-            furi_string_cat_printf(output, "\r\n");
-        }
-
-        furi_string_cat_printf(
-            output,
-            "Sn:0x%08lX\r\n"
-            "Cnt:%08lX "
-            "SwID:0x%X\r\n",
-            instance->generic.serial,
-            instance->generic.cnt,
-            instance->generic.btn);
-    } else {
-        //id = fixed / 27;
-        instance->generic.serial = fixed / 27;
-        if(instance->generic.btn == 1) {
-            furi_string_cat_printf(output, " Btn:left\r\n");
-        } else if(instance->generic.btn == 0) {
-            furi_string_cat_printf(output, " Btn:middle\r\n");
-        } else if(instance->generic.btn == 2) { //-V547
-            furi_string_cat_printf(output, " Btn:right\r\n");
-        }
-
-        furi_string_cat_printf(
-            output,
-            "Sn:0x%08lX\r\n"
-            "Cnt:%08lX "
-            "SwID:0x%X\r\n",
-            instance->generic.serial,
-            instance->generic.cnt,
-            instance->generic.btn);
-    }
+        instance->generic.serial,
+        instance->generic.btn,
+        instance->generic.cnt);
 }

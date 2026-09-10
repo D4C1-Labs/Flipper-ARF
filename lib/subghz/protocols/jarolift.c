@@ -541,28 +541,6 @@ void subghz_protocol_decoder_jarolift_feed(void* context, bool level, uint32_t d
  * Get button name.
  * @param btn Button number, 4 bit
  */
-static const char* subghz_protocol_jarolift_get_button_name(uint8_t btn) {
-    const char* btn_name;
-    switch(btn) {
-    case 0x1:
-        btn_name = "Learn";
-        break;
-    case 0x2:
-        btn_name = "Down";
-        break;
-    case 0x4:
-        btn_name = "Stop";
-        break;
-    case 0x8:
-        btn_name = "Up";
-        break;
-    default:
-        btn_name = "Unkn";
-        break;
-    }
-    return btn_name;
-}
-
 /** 
  * Analysis of received data
  * @param instance Pointer to a SubGhzBlockGeneric* instance
@@ -772,15 +750,13 @@ void subghz_protocol_decoder_jarolift_get_string(void* context, FuriString* outp
     furi_string_cat_printf(
         output,
         "%s %dbit\r\n"
-        "Key:%0llX\r\n"
-        "Sn:%07lX  Btn:%01X - %s\r\n"
-        "Cnt:%04lX Group:%04lX\r\n",
+        "Key:0x%0llX\r\n"
+        "SN:0x%07lX Btn:%X\r\n"
+        "Cnt:%04lX\r\n",
         instance->generic.protocol_name,
         instance->generic.data_count_bit,
         instance->generic.data,
         instance->generic.serial,
         instance->generic.btn,
-        subghz_protocol_jarolift_get_button_name(instance->generic.btn),
-        instance->generic.cnt,
-        instance->generic.seed);
+        instance->generic.cnt);
 }

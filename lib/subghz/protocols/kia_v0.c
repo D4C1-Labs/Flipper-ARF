@@ -105,17 +105,6 @@ static const uint8_t kia_v0_honda_crc_table[16] = {
     0xDB,
 };
 
-// [PROTOPIRATE_PORT] Honda button names
-static const char* const kia_v0_honda_button_names[7] = {
-    "Unlock",
-    "Trunk",
-    "Lock2",
-    "Unlock2",
-    "Trunk2",
-    "Unlock3",
-    "Trunk3",
-};
-
 // ============================================================================
 // [PROTOPIRATE_PORT] Inlined helpers replacing protocols_common.c dependencies
 // ============================================================================
@@ -394,38 +383,6 @@ static const char* kia_v0_protocol_subtype_name(uint8_t type) {
         return "Honda V0";
     default:
         return SUBGHZ_PROTOCOL_KIA_V0_NAME;
-    }
-}
-
-static const char* kia_v0_button_name(uint8_t button, uint8_t type) {
-    if(type == KIA_V0_TYPE_HONDA) {
-        if((button >= 1U) && (button <= (uint8_t)(sizeof(kia_v0_honda_button_names) /
-                                                  sizeof(kia_v0_honda_button_names[0])))) {
-            return kia_v0_honda_button_names[button - 1U];
-        }
-        return "??";
-    }
-    if(type == KIA_V0_TYPE_SUZUKI) {
-        switch(button) {
-        case 0x03:
-            return "Lock";
-        case 0x04:
-            return "Unlock";
-        case 0x02:
-            return "Trunk";
-        default:
-            return "??";
-        }
-    }
-    switch(button) {
-    case 0x01:
-        return "Lock";
-    case 0x02:
-        return "Unlock";
-    case 0x03:
-        return "Trunk";
-    default:
-        return "??";
     }
 }
 
@@ -1312,8 +1269,8 @@ void subghz_protocol_decoder_kia_get_string(void* context, FuriString* output) {
     // [PROTOPIRATE_PORT] Honda serial is 24-bit (6 hex), others 28-bit (7 hex)
     const char* sn_fmt =
         (instance->type == KIA_V0_TYPE_HONDA) ?
-            "%s %dbit\r\nKey:%016llX\r\nSn:%06lX Btn:%01X [%s]\r\nCnt:%04X CRC:%02X [%s]\r\n" :
-            "%s %dbit\r\nKey:%016llX\r\nSn:%07lX Btn:%01X [%s]\r\nCnt:%04X CRC:%02X [%s]\r\n";
+            "%s %dbit\r\nKey:0x%llX\r\nSN:0x%06lX Btn:%X\r\nCRC:%02X [%s] Cnt:%04X\r\n" :
+            "%s %dbit\r\nKey:0x%llX\r\nSN:0x%07lX Btn:%X\r\nCRC:%02X [%s] Cnt:%04X\r\n";
     furi_string_cat_printf(
         output,
         sn_fmt,
@@ -1322,8 +1279,7 @@ void subghz_protocol_decoder_kia_get_string(void* context, FuriString* output) {
         (unsigned long long)instance->generic.data,
         (unsigned long)fields.serial,
         fields.button,
-        kia_v0_button_name(fields.button, instance->type),
-        fields.counter,
         fields.crc,
-        fields.crc_valid ? "OK" : "ERR");
+        fields.crc_valid ? "OK" : "ERR",
+        fields.counter);
 }

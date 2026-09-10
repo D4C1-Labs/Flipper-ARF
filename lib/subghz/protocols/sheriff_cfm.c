@@ -44,14 +44,6 @@ typedef enum {
     SheriffCfmModelCount = 2,
 } SheriffCfmModel;
 
-static const char* cfm_model_name(SheriffCfmModel model) {
-    switch(model) {
-    case SheriffCfmModelZX750: return "ZX-750";
-    case SheriffCfmModelZX930: return "ZX-930";
-    default: return "?";
-    }
-}
-
 static void cfm_decrypt_transform(uint8_t* hop, SheriffCfmModel model) {
     uint8_t temp;
     switch(model) {
@@ -97,16 +89,6 @@ static void cfm_encrypt_transform(uint8_t* hop, SheriffCfmModel model) {
 
     default:
         break;
-    }
-}
-
-static const char* cfm_btn_name(uint8_t btn) {
-    switch(btn) {
-    case 0x10: return "Lock";
-    case 0x20: return "Unlock";
-    case 0x40: return "Trunk";
-    case 0x80: return "Panic";
-    default: return "?";
     }
 }
 
@@ -646,14 +628,13 @@ void subghz_protocol_decoder_sheriff_cfm_get_string(void* context, FuriString* o
         output,
         "%s %dbit\r\n"
         "Key:0x%lX%08lX\r\n"
-        "Sn:%08lX Btn:[%s]\r\n"
-        "Cnt:%04lX Model:%s\r\n",
+        "SN:0x%lX Btn:%X\r\n"
+        "Cnt:%04lX",
         instance->generic.protocol_name,
         instance->generic.data_count_bit,
         (uint32_t)(instance->generic.data >> 32),
         (uint32_t)instance->generic.data,
         instance->generic.serial,
-        cfm_btn_name(selected_btn),
-        (uint32_t)instance->generic.cnt,
-        cfm_model_name(instance->model));
+        selected_btn,
+        (uint32_t)instance->generic.cnt);
 }

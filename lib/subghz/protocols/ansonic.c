@@ -333,12 +333,10 @@ void subghz_protocol_decoder_ansonic_get_string(void* context, FuriString* outpu
     furi_string_cat_printf(
         output,
         "%s %dbit\r\n"
-        "Key:%03lX\r\n"
-        "Btn:%X\r\n"
-        "DIP:" DIP_PATTERN "\r\n",
+        "Key:0x%03lX\r\n"
+        "Btn:%X\r\n",
         instance->generic.protocol_name,
         instance->generic.data_count_bit,
         (uint32_t)(instance->generic.data & 0xFFFFFFFF),
-        instance->generic.btn,
-        CNT_TO_DIP(instance->generic.cnt));
+        instance->generic.btn);
 }

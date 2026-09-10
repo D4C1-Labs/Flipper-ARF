@@ -8,6 +8,8 @@
 #include "PagerActionsScreen.hpp"
 
 #include "lib/hardware/subghz/SubGhzModule.hpp"
+#include "lib/hardware/subghz/ModulationManager.hpp"
+#include "lib/hardware/subghz/HopBandManager.hpp"
 
 #include "app/AppConfig.hpp"
 #include "app/AppNotifications.hpp"
@@ -49,6 +51,7 @@ private:
     bool updateUserCategory = true;
     int scanForMoreButtonIndex = -1;
     uint32_t fromFilePagersCount = 0;
+    String hopCaption; // live caption buffer for the hopping frequency
 
 public:
     ScanStationsScreen(AppConfig* config) : ScanStationsScreen(config, true, NotSelected, NULL) {
@@ -67,7 +70,7 @@ public:
             HANDLER_3ARG(&ScanStationsScreen::getElementColumnName)
         );
         menuView->SetOnDestroyHandler(HANDLER(&ScanStationsScreen::destroy));
-        menuView->SetOnReturnToViewHandler([this]() { this->menuView->Refresh(); });
+        menuView->SetOnReturnToViewHandler(HANDLER(&ScanStationsScreen::onReturnToView));
         menuView->SetGoBackHandler(HANDLER(&ScanStationsScreen::goBack));
 
         menuView->SetColumnFonts(stationScreenColumnFonts);
@@ -75,11 +78,13 @@ public:
 
         menuView->SetLeftButton("Conf", HANDLER_1ARG(&ScanStationsScreen::showConfig));
 
-        subghz = new SubGhzModule(config->Frequency);
+        subghz = new SubGhzModule(
+            config->Frequency, ModulationManager::GetPreset(config->ModulationIndex));
         subghz->SetReceiveHandler(HANDLER_1ARG(&ScanStationsScreen::receive));
+        subghz->SetHopFrequencyChangedHandler(HANDLER_1ARG(&ScanStationsScreen::onHopFrequencyChanged));
         if(receiveNew) {
             subghz->SetReceiveAfterTransmission(true);
-            subghz->ReceiveAsync();
+            startScanning();
         }
 
         pagerReceiver = new PagerReceiver(config);
@@ -95,11 +100,7 @@ public:
         }
 
         if(receiveNew) {
-            if(subghz->IsExternal()) {
-                menuView->SetNoElementCaption("Receiving via EXT...");
-            } else {
-                menuView->SetNoElementCaption("Receiving...");
-            }
+            updateReceivingCaption();
         } else {
             menuView->SetNoElementCaption("No stations found!");
         }
@@ -122,9 +123,72 @@ public:
     }
 
 private:
+    // Start receiving in the mode selected in config: automatic hopping across
+    // the chosen band, or manual single-frequency listening.
+    void startScanning() {
+        if(config->AutoHop) {
+            uint32_t* freqs = new uint32_t[HopBandManager::GetMaxCount()];
+            size_t count = HopBandManager::FillFrequencies(
+                (HopBand)config->HopBandMode, freqs, HopBandManager::GetMaxCount());
+            if(count > 0) {
+                subghz->StartHopping(freqs, count, config->HopDwellMs);
+            } else {
+                subghz->ReceiveAsync(); // fallback to manual if list empty
+            }
+            delete[] freqs;
+        } else {
+            subghz->StopHopping();
+            subghz->SetReceiveFrequency(config->Frequency);
+            subghz->ReceiveAsync();
+        }
+        updateReceivingCaption();
+    }
+
+    // Caption shown while listening: reflects hopping vs manual and, when
+    // hopping, the live frequency the receiver is currently parked on.
+    void updateReceivingCaption() {
+        const char* via = subghz->IsExternal() ? " EXT" : "";
+        uint32_t freq = subghz->GetReceiveFrequency();
+        if(config->AutoHop && subghz->IsHopping()) {
+            hopCaption.format(
+                "Hopping%s %lu.%02lu", via, freq / 1000000, (freq % 1000000) / 10000);
+        } else {
+            hopCaption.format(
+                "Recv%s %lu.%02lu", via, freq / 1000000, (freq % 1000000) / 10000);
+        }
+        menuView->SetNoElementCaption(hopCaption.cstr());
+    }
+
+    // Called by SubGhzModule each time the hopper retunes: refresh the live
+    // frequency caption if the list is still empty (nothing captured yet).
+    void onHopFrequencyChanged(uint32_t) {
+        if(menuView->GetElementsCount() == 0) {
+            updateReceivingCaption();
+            if(menuView->IsOnTop()) {
+                menuView->Refresh();
+            }
+        }
+    }
+
     void receive(SubGhzReceivedData* data) {
+        // When hopping, stop on the first hit so the signal is not missed while
+        // the radio keeps sweeping. The user can resume via "Scan here for more".
+        if(subghz->IsHopping()) {
+            subghz->StopHopping();
+        }
         pagerAdded(pagerReceiver->Receive(data));
         delete data;
+    }
+
+    // Returning from Settings: the user may have flipped Manual/Auto-hop, the
+    // band, dwell, or modulation. Re-apply the scan mode if we are still in an
+    // active receive session with nothing captured yet, so config changes take
+    // effect immediately without leaving the screen.
+    void onReturnToView() {
+        if(receiveMode && menuView->GetElementsCount() == 0) {
+            startScanning();
+        }
+        menuView->Refresh();
     }
 
     void pagerAdded(ReceivedPagerData* pagerData) {
@@ -235,7 +299,7 @@ private:
         if((int)index == scanForMoreButtonIndex) {
             if(!receiveMode) {
                 subghz->SetReceiveAfterTransmission(true);
-                subghz->ReceiveAsync();
+                startScanning();
 
                 receiveMode = true;
             }

@@ -80,25 +80,6 @@ static struct aut64_key* protocol_vag_get_key(uint8_t index) {
 
 static const uint32_t vag_tea_key_schedule[] = {0x0B46502D, 0x5E253718, 0x2BF93A19, 0x622C1206};
 
-static const char* vag_button_name(uint8_t btn) {
-    switch(btn) {
-    case 0x1:
-        return "Unlock";
-    case 0x2:
-        return "Lock";
-    case 0x4:
-        return "Boot";
-    case 0x10:
-        return "Unlock";
-    case 0x20:
-        return "Lock";
-    case 0x40:
-        return "Boot";
-    default:
-        return "Unkn";
-    }
-}
-
 static uint8_t vag_custom_to_btn(uint8_t custom, uint8_t original_btn) {
     switch(custom) {
         case 1: return 0x20;
@@ -1210,7 +1191,6 @@ void subghz_protocol_decoder_vag_get_string(void* context, FuriString* output) {
     }
 
     uint64_t key1 = ((uint64_t)instance->key1_high << 32) | instance->key1_low;
-    uint16_t key2 = (uint16_t)(instance->key2_low & 0xFFFF);
 
     uint8_t type_byte = (uint8_t)(instance->key1_high >> 24);
     const char* vehicle_name;
@@ -1242,36 +1222,27 @@ void subghz_protocol_decoder_vag_get_string(void* context, FuriString* output) {
         // the encoder to trigger windows-down/windows-up on real vehicles.
         furi_string_cat_printf(
             output,
-            "%s %db\r\n"
-            "Key1:%08lX%08lX\r\n"
-            "Key2:%04X\r\n"
-            "KeyIdx:%d\r\n"
-            "Sn:%08lX\r\n"
-            "Cnt:%06lX\r\n"
-            "Btn:[%s]\r\n"
-            "Flags:0x%X",
+            "%s %dbit\r\n"
+            "Key:0x%08lX%08lX\r\n"
+            "SN:0x%lX Btn:%X\r\n"
+            "Cnt:%06lX",
             vehicle_name,
             instance->data_count_bit,
             (unsigned long)(key1 >> 32),
             (unsigned long)(key1 & 0xFFFFFFFF),
-            key2,
-            instance->key_idx,
             (unsigned long)instance->serial,
-            (unsigned long)instance->cnt,
-            vag_button_name(instance->btn),
-            (unsigned int)instance->btn_flags);
+            (unsigned int)instance->btn,
+            (unsigned long)instance->cnt);
     } else {
         furi_string_cat_printf(
             output,
-            "%s %db\r\n"
-            "Key1:%08lX%08lX\r\n"
-            "Key2:%04X\r\n"
+            "%s %dbit\r\n"
+            "Key:0x%08lX%08lX\r\n"
             "(corrupted)",
             vehicle_name,
             instance->data_count_bit,
             (unsigned long)(key1 >> 32),
-            (unsigned long)(key1 & 0xFFFFFFFF),
-            key2);
+            (unsigned long)(key1 & 0xFFFFFFFF));
     }
 }
 

@@ -339,13 +339,11 @@ void subghz_protocol_decoder_feron_get_string(void* context, FuriString* output)
 
     furi_string_cat_printf(
         output,
-        "%s %db\r\n"
-        "Key: 0x%08lX\r\n"
-        "Serial: 0x%04lX\r\n"
-        "Command: 0x%04lX\r\n",
+        "%s %dbit\r\n"
+        "Key:0x%08lX\r\n"
+        "SN:0x%lX\r\n",
         instance->generic.protocol_name,
         instance->generic.data_count_bit,
         (uint32_t)(instance->generic.data & 0xFFFFFFFF),
-        instance->generic.serial,
-        (uint32_t)(instance->generic.data & 0xFFFF));
+        instance->generic.serial);
 }

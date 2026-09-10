@@ -1406,9 +1406,6 @@ void subghz_protocol_decoder_psa_get_string(void* context, FuriString* output) {
     furi_assert(context);
     SubGhzProtocolDecoderPSA* instance = context;
 
-
-    uint16_t key2_value = (uint16_t)(instance->key2_low & 0xFFFF);
-
     if(instance->decrypted == 0x50 && instance->decrypted_type != 0) {
         // Always update original button when loading a new file
         subghz_custom_btn_set_original(psa_btn_to_custom(instance->generic.btn));
@@ -1418,56 +1415,42 @@ void subghz_protocol_decoder_psa_get_string(void* context, FuriString* output) {
             furi_string_printf(
                 output,
                 "%s %dbit\r\n"
-                "Key1:%08lX%08lX\r\n"
-                "Key2:%04X\r\n"
-                "Ser:%06lX\r\n"
-                "Btn:[%s] Cnt:%04lX\r\n"
-                "Type:%02X CRC:%02X\r\n"
-                "Sd:%06lX",
+                "Key:0x%08lX%08lX\r\n"
+                "SN:0x%lX Btn:%s\r\n"
+                "CRC:%02X Cnt:%04lX",
                 instance->base.protocol->name,
                 128,
                 instance->key1_high,
                 instance->key1_low,
-                key2_value,
                 instance->generic.serial,
                 psa_button_name(display_btn),
-                instance->generic.cnt,
-                instance->decrypted_type,
                 instance->decrypted_crc,
-                instance->decrypted_seed);
+                instance->generic.cnt);
         } else if(instance->decrypted_type == 0x36) {
             furi_string_printf(
                 output,
                 "%s %dbit\r\n"
-                "Key1:%08lX%08lX\r\n"
-                "Key2:%04X\r\n"
-                "Ser:%06lX\r\n"
-                "Btn:[%s] Cnt:%08lX\r\n"
-                "Type:%02X CRC:%02X\r\n"
-                "Sd:%06lX",
+                "Key:0x%08lX%08lX\r\n"
+                "SN:0x%lX Btn:%s\r\n"
+                "CRC:%02X Cnt:%08lX",
                 instance->base.protocol->name,
                 128,
                 instance->key1_high,
                 instance->key1_low,
-                key2_value,
                 instance->generic.serial,
                 psa_button_name(display_btn),
-                instance->generic.cnt,
-                instance->decrypted_type,
                 instance->decrypted_crc,
-                instance->decrypted_seed);
+                instance->generic.cnt);
         }
     } else {
         furi_string_printf(
             output,
             "%s %dbit\r\n"
-            "Key1:%08lX%08lX\r\n"
-            "Key2:%04X",
+            "Key:0x%08lX%08lX",
             instance->base.protocol->name,
             128,
             instance->key1_high,
-            instance->key1_low,
-            key2_value);
+            instance->key1_low);
     }
 }
 

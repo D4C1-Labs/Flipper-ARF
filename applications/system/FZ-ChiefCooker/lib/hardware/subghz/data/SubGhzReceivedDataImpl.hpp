@@ -20,7 +20,6 @@ public:
     }
 
     uint32_t GetHash() {
-        //return decoder->protocol->decoder->get_hash_data_long(decoder);
         return decoder->protocol->decoder->get_hash_data(decoder);
     }
 

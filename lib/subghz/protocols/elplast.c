@@ -305,18 +305,11 @@ void subghz_protocol_decoder_elplast_get_string(void* context, FuriString* outpu
     furi_assert(context);
     SubGhzProtocolDecoderElplast* instance = context;
 
-    uint64_t code_found_reverse = subghz_protocol_blocks_reverse_key(
-        instance->generic.data, instance->generic.data_count_bit);
-
-    uint32_t code_found_reverse_lo = code_found_reverse & 0x000003ffffffffff;
-
     furi_string_cat_printf(
         output,
-        "%s %db\r\n"
-        "Key: 0x%05lX\r\n"
-        "Yek: 0x%05lX",
+        "%s %dbit\r\n"
+        "Key:0x%05lX\r\n",
         instance->generic.protocol_name,
         instance->generic.data_count_bit,
-        (uint32_t)(instance->generic.data & 0xFFFFFF),
-        code_found_reverse_lo);
+        (uint32_t)(instance->generic.data & 0xFFFFFF));
 }

@@ -202,10 +202,6 @@ void subghz_protocol_decoder_ido_get_string(void* context, FuriString* output) {
     SubGhzProtocolDecoderIDo* instance = context;
 
     subghz_protocol_ido_check_remote_controller(&instance->generic);
-    uint64_t code_found_reverse = subghz_protocol_blocks_reverse_key(
-        instance->generic.data, instance->generic.data_count_bit);
-    uint32_t code_fix = code_found_reverse & 0xFFFFFF;
-    uint32_t code_hop = (code_found_reverse >> 24) & 0xFFFFFF;
 
     // push protocol data to global variable
     subghz_block_generic_global.btn_is_available = false;
@@ -217,15 +213,11 @@ void subghz_protocol_decoder_ido_get_string(void* context, FuriString* output) {
         output,
         "%s %dbit\r\n"
         "Key:0x%lX%08lX\r\n"
-        "Fix:%06lX \r\n"
-        "Hop:%06lX \r\n"
-        "Sn:%05lX Btn:%X\r\n",
+        "SN:0x%05lX Btn:%X",
         instance->generic.protocol_name,
         instance->generic.data_count_bit,
         (uint32_t)(instance->generic.data >> 32),
         (uint32_t)instance->generic.data,
-        code_fix,
-        code_hop,
         instance->generic.serial,
         instance->generic.btn);
 }

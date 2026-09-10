@@ -108,17 +108,6 @@ static uint8_t subaru_btn_to_custom(uint8_t btn_code) {
     }
 }
 
-static const char* subaru_get_button_name(uint8_t btn) {
-    switch(btn) {
-        case 0x01: return "Lock";
-        case 0x02: return "Unlock";
-        case 0x03: return "Trunk";
-        case 0x04: return "Panic";
-        case 0x08: return "0x08";
-        default: return "??";
-    }
-}
-
 static void subaru_decode_count(const uint8_t* KB, uint16_t* count) {
     uint8_t lo = 0;
     if((KB[4] & 0x40) == 0) lo |= 0x01;
@@ -473,17 +462,16 @@ void subghz_protocol_decoder_subaru_get_string(void* context, FuriString* output
     furi_string_cat_printf(
         output,
         "%s %dbit\r\n"
-        "Key:%08lX%08lX\r\n"
-        "Sn:%06lX Cnt:%04X\r\n"
-        "Btn:%X [%s]",
+        "Key:0x%08lX%08lX\r\n"
+        "SN:0x%lX Btn:%X\r\n"
+        "Cnt:%04X",
         instance->generic.protocol_name,
         instance->generic.data_count_bit,
         key_hi,
         key_lo,
         instance->serial,
-        instance->count,
         instance->button,
-        subaru_get_button_name(instance->button));
+        instance->count);
 }
 
 void* subghz_protocol_encoder_subaru_alloc(SubGhzEnvironment* environment) {

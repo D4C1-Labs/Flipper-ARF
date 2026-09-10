@@ -327,10 +327,9 @@ void subghz_protocol_decoder_hormann_get_string(void* context, FuriString* outpu
 
     furi_string_cat_printf(
         output,
-        "%s\r\n"
-        "%dbit\r\n"
+        "%s %dbit\r\n"
         "Key:0x%03lX%08lX\r\n"
-        "Btn:0x%01X\r\n",
+        "Btn:%X",
         instance->generic.protocol_name,
         instance->generic.data_count_bit,
         (uint32_t)(instance->generic.data >> 32),

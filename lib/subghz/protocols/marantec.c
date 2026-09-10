@@ -401,17 +401,16 @@ void subghz_protocol_decoder_marantec_get_string(void* context, FuriString* outp
 
     furi_string_cat_printf(
         output,
-        "%s %db\r\n"
-        "Key: 0x%lX%08lX\r\n"
-        "Sn: 0x%07lX \r\n"
-        "CRC: 0x%02X - %s\r\n"
-        "Btn: %X\r\n",
+        "%s %dbit\r\n"
+        "Key:0x%lX%08lX\r\n"
+        "SN:0x%07lX Btn:%X\r\n"
+        "CRC:0x%02X - %s\r\n",
         instance->generic.protocol_name,
         instance->generic.data_count_bit,
         (uint32_t)(instance->generic.data >> 32),
         (uint32_t)(instance->generic.data & 0xFFFFFFFF),
         instance->generic.serial,
+        instance->generic.btn,
         crc,
-        crc_ok ? "Valid" : "Invalid",
-        instance->generic.btn);
+        crc_ok ? "Valid" : "Invalid");
 }

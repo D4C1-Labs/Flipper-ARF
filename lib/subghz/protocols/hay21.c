@@ -417,25 +417,6 @@ void subghz_protocol_decoder_hay21_feed(void* context, bool level, volatile uint
  * Get button name.
  * @param btn Button number, 4 bit
  */
-static const char* subghz_protocol_hay21_get_button_name(uint8_t btn) {
-    const char* btn_name;
-    switch(btn) {
-    case 0x5A:
-        btn_name = "On/Off";
-        break;
-    case 0xC3:
-        btn_name = "Mode";
-        break;
-    case 0x88:
-        btn_name = "Hold";
-        break;
-    default:
-        btn_name = "Unknown";
-        break;
-    }
-    return btn_name;
-}
-
 uint8_t subghz_protocol_decoder_hay21_get_hash_data(void* context) {
     furi_assert(context);
     SubGhzProtocolDecoderHay21* instance = context;
@@ -479,16 +460,14 @@ void subghz_protocol_decoder_hay21_get_string(void* context, FuriString* output)
 
     furi_string_cat_printf(
         output,
-        "%s - %dbit\r\n"
+        "%s %dbit\r\n"
         "Key:0x%06lX\r\n"
-        "Serial:0x%02X\r\n"
-        "Btn:0x%01X - %s\r\n"
+        "SN:0x%02X Btn:%X\r\n"
         "Cnt:%01X\r\n",
         instance->generic.protocol_name,
         instance->generic.data_count_bit,
         (uint32_t)(instance->generic.data & 0xFFFFFFFF),
         (uint8_t)(instance->generic.serial & 0xFF),
         instance->generic.btn,
-        subghz_protocol_hay21_get_button_name(instance->generic.btn),
         (uint8_t)(instance->generic.cnt & 0xF));
 }

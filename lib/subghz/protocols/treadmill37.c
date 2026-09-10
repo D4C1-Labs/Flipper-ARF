@@ -330,9 +330,6 @@ void subghz_protocol_decoder_treadmill37_get_string(void* context, FuriString* o
 
     subghz_protocol_treadmill37_check_remote_controller(&instance->generic);
 
-    uint64_t code_found_reverse = subghz_protocol_blocks_reverse_key(
-        instance->generic.data, instance->generic.data_count_bit);
-
     // for future use
     // // push protocol data to global variable
     // subghz_block_generic_global.btn_is_available = false;
@@ -342,15 +339,12 @@ void subghz_protocol_decoder_treadmill37_get_string(void* context, FuriString* o
 
     furi_string_cat_printf(
         output,
-        "%s %db\r\n"
-        "Key: 0x%08llX\r\n"
-        "Yek: 0x%08llX\r\n"
-        "Serial: 0x%06lX\r\n"
-        "Btn: %04lX",
+        "%s %dbit\r\n"
+        "Key:0x%08llX\r\n"
+        "SN:0x%lX Btn:%lX",
         instance->generic.protocol_name,
         instance->generic.data_count_bit,
         (uint64_t)(instance->generic.data & 0xFFFFFFFFFF),
-        (code_found_reverse & 0xFFFFFFFFFF),
         instance->generic.serial,
         instance->generic.cnt);
 }

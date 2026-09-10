@@ -83,29 +83,6 @@ static void ford_v3_cell_process(SubGhzProtocolDecoderFordV3* instance);
 static void ford_v3_cell_feed(SubGhzProtocolDecoderFordV3* instance, bool level, uint32_t duration);
 static void
     ford_v3_manchester_feed(SubGhzProtocolDecoderFordV3* instance, bool level, uint32_t duration);
-static const char* ford_v3_button_name(uint8_t btn, uint8_t variant);
-
-static const char* ford_v3_button_name(uint8_t btn, uint8_t variant) {
-    if(variant == FORD_V3_VARIANT_US) {
-        switch(btn) {
-        case FORD_V3_BTN_LOCK:
-            return "Lock";
-        case FORD_V3_BTN_UNLOCK:
-            return "Unlock";
-        default:
-            return "?";
-        }
-    }
-
-    switch(btn) {
-    case FORD_V3_BTN_LOCK:
-        return "Lock";
-    case FORD_V3_BTN_UNLOCK:
-        return "Unlock";
-    default:
-        return "?";
-    }
-}
 
 static bool ford_v3_cell_frame_valid(const uint8_t* raw) {
     if(raw[0] != 0xFFU) {
@@ -484,9 +461,8 @@ void subghz_protocol_decoder_ford_v3_get_string(void* context, FuriString* outpu
         furi_string_cat_printf(
             output,
             "%s US %dbit\r\n"
-            "Key:%02X%02X%02X%02X%02X%02X%02X%02X%02X%02X%02X%02X%02X\r\n"
-            "Sn:%08lX\r\n"
-            "Btn:%02X %s\r\n"
+            "Key:%02X%02X%02X%02X%02X%02X\r\n"
+            "SN:0x%lX Btn:%02X\r\n"
             "Cnt:%04X\r\n",
             instance->generic.protocol_name,
             (int)instance->generic.data_count_bit,
@@ -496,16 +472,8 @@ void subghz_protocol_decoder_ford_v3_get_string(void* context, FuriString* outpu
             k[3],
             k[4],
             k[5],
-            k[6],
-            k[7],
-            k[8],
-            k[9],
-            k[10],
-            k[11],
-            k[12],
             (unsigned long)instance->generic.serial,
             instance->generic.btn,
-            ford_v3_button_name(instance->generic.btn, FORD_V3_VARIANT_US),
             (unsigned)instance->counter);
         return;
     }
@@ -513,9 +481,8 @@ void subghz_protocol_decoder_ford_v3_get_string(void* context, FuriString* outpu
     furi_string_cat_printf(
         output,
         "%s %dbit\r\n"
-        "Key:%02X%02X%02X%02X%02X%02X%02X%02X%02X%02X%02X%02X%02X\r\n"
-        "Sn:%08lX\r\n"
-        "Btn:%02X %s\r\n"
+        "Key:%02X%02X%02X%02X%02X%02X\r\n"
+        "SN:0x%lX Btn:%02X\r\n"
         "Cnt:%04X\r\n",
         instance->generic.protocol_name,
         (int)instance->generic.data_count_bit,
@@ -525,16 +492,8 @@ void subghz_protocol_decoder_ford_v3_get_string(void* context, FuriString* outpu
         k[3],
         k[4],
         k[5],
-        k[6],
-        k[7],
-        k[8],
-        k[9],
-        k[10],
-        k[11],
-        k[12],
         (unsigned long)instance->generic.serial,
         instance->generic.btn,
-        ford_v3_button_name(instance->generic.btn, FORD_V3_VARIANT_EU),
         (unsigned)instance->counter);
 }
 

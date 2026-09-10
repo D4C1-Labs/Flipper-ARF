@@ -49,7 +49,6 @@ typedef enum {
     FordV1DecoderStepData = 3,
 } FordV1DecoderStep;
 
-static const char* ford_v1_get_button_name(uint8_t btn);
 static void ford_v1_decode_with_flag(uint8_t* raw, size_t len, uint8_t flag_byte);
 static void ford_v1_decode(uint8_t* raw, size_t len);
 static void ford_v1_encode_inverse_block(uint8_t block[9]);
@@ -100,23 +99,6 @@ const SubGhzProtocol ford_protocol_v1 = {
 };
 
 #define ford_v1_crc16(data, len) subghz_protocol_blocks_crc16((data), (len), 0x1021, 0x0000)
-
-static const char* ford_v1_get_button_name(uint8_t btn) {
-    switch(btn) {
-    case 0:
-        return "Sync";
-    case 1:
-        return "Lock";
-    case 2:
-        return "Unlock";
-    case 4:
-        return "Trunk";
-    case 8:
-        return "Panic";
-    default:
-        return "??";
-    }
-}
 
 static void ford_v1_decode_with_flag(uint8_t* raw, size_t len, uint8_t flag_byte) {
     if(len < 9) return;
@@ -860,8 +842,6 @@ void subghz_protocol_decoder_ford_v1_get_string(void* context, FuriString* outpu
     uint16_t crc16 = crc & 0xFFFF;
 
     if(instance->encryption_supported) {
-        const char* btn_name = ford_v1_get_button_name(instance->generic.btn);
-
         uint16_t calc_crc = crc16;
 
         bool crc_ok;
@@ -876,21 +856,17 @@ void subghz_protocol_decoder_ford_v1_get_string(void* context, FuriString* outpu
         furi_string_cat_printf(
             output,
             "%s %dbit\r\n"
-            "%014llX%06llX\r\n"
-            "%010llX%04lX\r\n"
-            "Sn:%08lX Bt:%01X [%s]\r\n"
-            "Cnt:%05lX CRC:%04lX [%s]\r\n",
+            "Key:0x%014llX\r\n"
+            "SN:0x%lX Btn:%01X\r\n"
+            "CRC:%04lX Cnt:%05lX\r\n"
+            "[%s]\r\n",
             instance->generic.protocol_name,
             instance->generic.data_count_bit,
             (unsigned long long)key1,
-            (unsigned long long)(key2 >> 40),
-            (unsigned long long)(key2 & 0xFFFFFFFFFFULL),
-            (unsigned long)crc16,
             (unsigned long)instance->generic.serial,
             instance->generic.btn,
-            btn_name,
-            (unsigned long)instance->generic.cnt,
             (unsigned long)crc16,
+            (unsigned long)instance->generic.cnt,
             crc_ok ? "OK" : "ERR");
     } else {
         uint8_t raw[FORD_V1_DATA_BYTES];
@@ -907,17 +883,12 @@ void subghz_protocol_decoder_ford_v1_get_string(void* context, FuriString* outpu
         furi_string_cat_printf(
             output,
             "%s %dbit\r\n"
-            "%014llX%06llX\r\n"
-            "%010llX%04lX\r\n"
-            "Sn:%08lX\r\n"
-            "CRC:%04lX [%s]\r\n"
-            "Encryption not supported !\r\n",
+            "Key:0x%014llX\r\n"
+            "SN:0x%lX\r\n"
+            "CRC:%04lX [%s]\r\n",
             instance->generic.protocol_name,
             instance->generic.data_count_bit,
             (unsigned long long)key1,
-            (unsigned long long)(key2 >> 40),
-            (unsigned long long)(key2 & 0xFFFFFFFFFFULL),
-            (unsigned long)crc16,
             (unsigned long)device_id,
             (unsigned long)crc16,
             crc_ok ? "OK" : "ERR");

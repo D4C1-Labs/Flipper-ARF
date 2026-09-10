@@ -450,9 +450,9 @@ void subghz_protocol_decoder_intertechno_v3_get_string(void* context, FuriString
 
     furi_string_cat_printf(
         output,
-        "%.11s %db\r\n"
+        "%.11s %dbit\r\n"
         "Key:0x%08llX\r\n"
-        "Sn:%07lX\r\n",
+        "SN:0x%07lX",
         instance->generic.protocol_name,
         instance->generic.data_count_bit,
         instance->generic.data,
@@ -460,26 +460,9 @@ void subghz_protocol_decoder_intertechno_v3_get_string(void* context, FuriString
 
     if(instance->generic.data_count_bit ==
        subghz_protocol_intertechno_v3_const.min_count_bit_for_found) {
-        if(instance->generic.cnt >> 5) {
-            furi_string_cat_printf(
-                output, "Ch: All Btn:%s\r\n", (instance->generic.btn ? "On" : "Off"));
-            subghz_block_generic_global.btn_is_available = false;
-            subghz_block_generic_global.btn_length_bit = 1;
-        } else {
-            furi_string_cat_printf(
-                output,
-                "Ch:" CH_PATTERN " Btn:%s\r\n",
-                CNT_TO_CH(instance->generic.cnt),
-                (instance->generic.btn ? "On" : "Off"));
-            subghz_block_generic_global.btn_is_available = false;
-            subghz_block_generic_global.btn_length_bit = 1;
-        }
+        subghz_block_generic_global.btn_is_available = false;
+        subghz_block_generic_global.btn_length_bit = 1;
     } else if(instance->generic.data_count_bit == INTERTECHNO_V3_DIMMING_COUNT_BIT) {
-        furi_string_cat_printf(
-            output,
-            "Ch:" CH_PATTERN " Dimm:%d%%\r\n",
-            CNT_TO_CH(instance->generic.cnt),
-            (int)(6.67f * (float)instance->generic.btn));
         subghz_block_generic_global.btn_is_available = false;
         subghz_block_generic_global.btn_length_bit = 4;
     }

@@ -401,11 +401,13 @@ void subghz_protocol_decoder_mitsubishi_v0_get_string(void* context, FuriString*
     furi_string_cat_printf(
         output,
         "%s %dbit\r\n"
-        "Sn:%08lX Cnt:%04lX\r\n"
-        "Btn:%02X\r\n",
+        "Key:0x%llX\r\n"
+        "SN:0x%lX Btn:%X\r\n"
+        "Cnt:%04lX\r\n",
         instance->generic.protocol_name,
         instance->generic.data_count_bit,
+        (uint64_t)instance->generic.data,
         instance->generic.serial,
-        instance->generic.cnt,
-        instance->generic.btn);
+        instance->generic.btn,
+        instance->generic.cnt);
 }

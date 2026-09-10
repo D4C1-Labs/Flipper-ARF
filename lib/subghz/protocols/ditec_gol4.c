@@ -659,17 +659,15 @@ void subghz_protocol_decoder_ditec_gol4_get_string(void* context, FuriString* ou
 
     furi_string_cat_printf(
         output,
-        "%s %db\r\n"
+        "%s %dbit\r\n"
         "Key:0x%0lX%08lX\r\n"
-        "Serial:0x%08lX\r\n"
-        "Btn:%01X %s\r\n"
-        "Cnt:%04lX",
+        "SN:0x%08lX Btn:%X\r\n"
+        "Cnt:%04lX\r\n",
         instance->generic.protocol_name,
         instance->generic.data_count_bit,
         (uint32_t)(instance->generic.data >> 32),
         (uint32_t)(instance->generic.data & 0xFFFFFFFF),
         instance->generic.serial,
         instance->generic.btn,
-        (instance->generic.btn == 0x0) ? "- Prog" : "",
         instance->generic.cnt);
 }

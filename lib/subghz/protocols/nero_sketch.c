@@ -354,21 +354,12 @@ void subghz_protocol_decoder_nero_sketch_get_string(void* context, FuriString* o
     uint32_t code_found_hi = instance->generic.data >> 32;
     uint32_t code_found_lo = instance->generic.data & 0x00000000ffffffff;
 
-    uint64_t code_found_reverse = subghz_protocol_blocks_reverse_key(
-        instance->generic.data, instance->generic.data_count_bit);
-
-    uint32_t code_found_reverse_hi = code_found_reverse >> 32;
-    uint32_t code_found_reverse_lo = code_found_reverse & 0x00000000ffffffff;
-
     furi_string_cat_printf(
         output,
         "%s %dbit\r\n"
-        "Key:0x%lX%08lX\r\n"
-        "Yek:0x%lX%08lX\r\n",
+        "Key:0x%lX%08lX\r\n",
         instance->generic.protocol_name,
         instance->generic.data_count_bit,
         code_found_hi,
-        code_found_lo,
-        code_found_reverse_hi,
-        code_found_reverse_lo);
+        code_found_lo);
 }

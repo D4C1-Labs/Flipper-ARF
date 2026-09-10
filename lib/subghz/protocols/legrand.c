@@ -370,10 +370,8 @@ void subghz_protocol_decoder_legrand_get_string(void* context, FuriString* outpu
     furi_string_cat_printf(
         output,
         "%s %dbit\r\n"
-        "Key:0x%05lX\r\n"
-        "Te:%luus\r\n",
+        "Key:0x%05lX\r\n",
         instance->generic.protocol_name,
         instance->generic.data_count_bit,
-        (uint32_t)(instance->generic.data & 0xFFFFFF),
-        instance->te);
+        (uint32_t)(instance->generic.data & 0xFFFFFF));
 }

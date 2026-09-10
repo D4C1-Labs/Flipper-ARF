@@ -84,13 +84,6 @@ static const uint32_t PSA_BF1_KEY_SCHEDULE[4] = {
 #define PSA_BF2_START  0xF3000000U
 #define PSA_BF2_END    0xF4000000U
 
-static const uint32_t PSA_BF2_KEY_SCHEDULE[4] = {
-    0x4039C240U,
-    0xEDA92CABU,
-    0x4306C02AU,
-    0x02192A04U,
-};
-
 /* Validation nibble for mode23 XOR path */
 #define PSA_VALID_NIBBLE  0xA   /* (validation_field & 0xF) == 0xA  */
 
@@ -187,9 +180,6 @@ struct SubGhzProtocolEncoderPSA {
  * ========================================================= */
 
 static bool psa_direct_xor_decrypt(SubGhzProtocolDecoderPSA* instance);
-static bool psa_brute_force_decrypt_bf1(SubGhzProtocolDecoderPSA* instance);
-static bool psa_brute_force_decrypt_bf2(SubGhzProtocolDecoderPSA* instance);
-static void __attribute__((unused)) psa_decrypt_full(SubGhzProtocolDecoderPSA* instance);
 
 /* =========================================================
  * PROTOCOL DESCRIPTORS
@@ -228,15 +218,6 @@ const SubGhzProtocol subghz_protocol_psa2 = {
  * BUTTON HELPERS
  * ========================================================= */
 
-static const char* psa_button_name(uint8_t btn) {
-    switch(btn) {
-    case PSA_BTN_LOCK:   return "Lock";
-    case PSA_BTN_UNLOCK: return "Unlock";
-    case PSA_BTN_TRUNK:  return "Trunk";
-    default:             return "??";
-    }
-}
-
 static uint8_t psa_get_btn_code(void) {
     uint8_t custom_btn   = subghz_custom_btn_get();
     uint8_t original_raw = subghz_custom_btn_get_original();
@@ -271,38 +252,12 @@ static void psa_tea_encrypt(uint32_t* v0, uint32_t* v1, const uint32_t* key) {
     *v0 = a; *v1 = b;
 }
 
-static void psa_tea_decrypt(uint32_t* v0, uint32_t* v1, const uint32_t* key) {
-    uint32_t a = *v0, b = *v1;
-    uint32_t sum = TEA_DELTA * TEA_ROUNDS;
-    for(int i = 0; i < TEA_ROUNDS; i++) {
-        uint32_t t = key[(sum >> 11) & 3] + sum;
-        sum -= TEA_DELTA;
-        b -= t ^ ((a >> 5 ^ a << 4) + a);
-        t  = key[sum & 3] + sum;
-        a -= t ^ ((b >> 5 ^ b << 4) + b);
-    }
-    *v0 = a; *v1 = b;
-}
-
 /* FUN_08028e60 — simple byte-sum CRC over 7 bytes of TEA output */
 static uint8_t psa_calculate_tea_crc(uint32_t v0, uint32_t v1) {
     uint32_t crc = ((v0 >> 24) & 0xFF) + ((v0 >> 16) & 0xFF) +
                    ((v0 >>  8) & 0xFF) + ( v0        & 0xFF);
     crc += ((v1 >> 24) & 0xFF) + ((v1 >> 16) & 0xFF) + ((v1 >> 8) & 0xFF);
     return (uint8_t)(crc & 0xFF);
-}
-
-/* FUN_08029098 — CRC-16/BUYPASS (poly 0x8005, no reflection, init 0) */
-static uint16_t psa_calculate_crc16_bf2(const uint8_t* data, int len) {
-    uint16_t crc = 0;
-    for(int i = 0; i < len; i++) {
-        crc ^= (uint16_t)data[i] << 8;
-        for(int j = 0; j < 8; j++) {
-            if(crc & 0x8000) crc = (crc << 1) ^ 0x8005;
-            else             crc <<= 1;
-        }
-    }
-    return crc;
 }
 
 /* =========================================================
@@ -383,14 +338,6 @@ static void psa_second_stage_xor_encrypt(uint8_t* buf) {
     buf[2]=E0; buf[3]=E1; buf[4]=E2; buf[5]=E3; buf[6]=E4; buf[7]=E5;
 }
 
-/* FUN_08028f4c — pack buffer bytes into two TEA words */
-static void psa_prepare_tea_data(const uint8_t* buf, uint32_t* w0, uint32_t* w1) {
-    *w0 = ((uint32_t)buf[2] << 24) | ((uint32_t)buf[3] << 16) |
-          ((uint32_t)buf[4] <<  8) |  (uint32_t)buf[5];
-    *w1 = ((uint32_t)buf[6] << 24) | ((uint32_t)buf[7] << 16) |
-          ((uint32_t)buf[8] <<  8) |  (uint32_t)buf[9];
-}
-
 /* FUN_08028e88 — unpack TEA words back into buffer[2..9] */
 static void psa_unpack_tea_result(uint8_t* buf, uint32_t v0, uint32_t v1) {
     buf[2] = (v0 >> 24) & 0xFF;
@@ -439,16 +386,6 @@ static void psa_extract_fields_mode23(uint8_t* buf, SubGhzProtocolDecoderPSA* in
     inst->decrypted_seed    = inst->decrypted_serial;
 }
 
-static void psa_extract_fields_mode36(uint8_t* buf, SubGhzProtocolDecoderPSA* inst) {
-    inst->decrypted_button  = (buf[5] >> 4) & 0xF;
-    inst->decrypted_serial  = ((uint32_t)buf[2] << 16) | ((uint32_t)buf[3] << 8) | buf[4];
-    inst->decrypted_counter = ((uint32_t)buf[7] << 8) | ((uint32_t)buf[6] << 16) |
-                               (uint32_t)buf[8] | (((uint32_t)buf[5] & 0xF) << 24);
-    inst->decrypted_crc     = buf[9];
-    inst->decrypted_type    = PSA_MODE_36;
-    inst->decrypted_seed    = inst->decrypted_serial;
-}
-
 /* =========================================================
  * DECRYPTION PATHS
  * =========================================================
@@ -494,114 +431,6 @@ static bool psa_direct_xor_decrypt(SubGhzProtocolDecoderPSA* inst) {
     return false;
 }
 
-/* FUN_08028f94 — BF1 (range 0x23000000–0x24000000) */
-static bool psa_brute_force_decrypt_bf1(SubGhzProtocolDecoderPSA* inst) {
-    uint8_t buf[48] = {0};
-    psa_setup_byte_buffer(buf, inst->key1_low, inst->key1_high, inst->key2_low);
-    uint32_t w0, w1;
-    psa_prepare_tea_data(buf, &w0, &w1);
-
-    for(uint32_t counter = PSA_BF1_START; counter < PSA_BF1_END; counter++) {
-        /* Build working key — firmware does two TEA encrypts to derive it */
-        uint32_t wk2 = PSA_BF1_CONST_U4;
-        uint32_t wk3 = counter;
-        psa_tea_encrypt(&wk2, &wk3, PSA_BF1_KEY_SCHEDULE);
-
-        uint32_t wk0 = (counter << 8) | 0x0E;
-        uint32_t wk1 = PSA_BF1_CONST_U5;
-        psa_tea_encrypt(&wk0, &wk1, PSA_BF1_KEY_SCHEDULE);
-
-        uint32_t wkey[4] = {wk0, wk1, wk2, wk3};
-
-        uint32_t dv0 = w0, dv1 = w1;
-        psa_tea_decrypt(&dv0, &dv1, wkey);
-
-        /* Serial embedded in upper 24 bits of dv0 */
-        if((counter & 0xFFFFFF) == (dv0 >> 8)) {
-            uint8_t crc = psa_calculate_tea_crc(dv0, dv1);
-            if(crc == (dv1 & 0xFF)) {
-                psa_unpack_tea_result(buf, dv0, dv1);
-                psa_extract_fields_mode36(buf, inst);
-                inst->decrypted_seed = counter;
-                return true;
-            }
-        }
-    }
-    return false;
-}
-
-/* FUN_080290f8 — BF2 (range 0xF3000000–0xF4000000)
- *
- * CRITICAL DIFFERENCE vs your psa.c:
- *
- * In the firmware the CRC-16 input is packed as:
- *   crc_buf[0] = dv0 >> 24
- *   crc_buf[1] = (dv0 >> 8) >> 8   -- NOTE: this is (dv0>>16)&0xFF
- *   crc_buf[2] = (dv0 >> 16) >> 8  -- NOTE: this is (dv0>>8)&0xFF ← SWAPPED
- *   crc_buf[3] = dv0 & 0xFF
- *   crc_buf[4] = dv1 >> 24
- *   crc_buf[5] = (dv1 >> 16) & 0xFF
- *
- * Firmware code (FUN_080290f8):
- *   puVar2[0] = uVar8 >> 0x18          // byte0 = dv0[31:24]
- *   puVar2[1] = uVar6  (=(uVar8<<8)>>18)  // byte1 = dv0[23:16]  ← confirmed
- *   puVar2[2] = uVar10 (=(uVar8<<16)>>18) // byte2 = dv0[15:8]
- *   puVar2[3] = uVar8 & 0xFF           // byte3 = dv0[7:0]
- *   puVar2[4] = uVar11 >> 0x18         // byte4 = dv1[31:24]
- *   puVar2[5] = (uVar11<<8)>>18        // byte5 = dv1[23:16]
- *
- * Then expected CRC = (dv1 & 0xFF) | (((dv1>>16)&0xFF) << 8)
- *
- * Your psa.c has the bytes in the wrong order for the CRC buffer.
- * This is likely your main BF2 bug.
- */
-
-static bool psa_brute_force_decrypt_bf2(SubGhzProtocolDecoderPSA* inst) {
-    uint8_t buf[48] = {0};
-    psa_setup_byte_buffer(buf, inst->key1_low, inst->key1_high, inst->key2_low);
-    uint32_t w0, w1;
-    psa_prepare_tea_data(buf, &w0, &w1);
-
-    for(uint32_t counter = PSA_BF2_START; counter < PSA_BF2_END; counter++) {
-        uint32_t wkey[4] = {
-            PSA_BF2_KEY_SCHEDULE[0] ^ counter,
-            PSA_BF2_KEY_SCHEDULE[1] ^ counter,
-            PSA_BF2_KEY_SCHEDULE[2] ^ counter,
-            PSA_BF2_KEY_SCHEDULE[3] ^ counter,
-        };
-
-        uint32_t dv0 = w0, dv1 = w1;
-        psa_tea_decrypt(&dv0, &dv1, wkey);
-
-        if((counter & 0xFFFFFF) == (dv0 >> 8)) {
-            /* FIRMWARE CRC-16 input layout (confirmed from FUN_080290f8) */
-            uint8_t crc_buf[6] = {
-                (uint8_t)( dv0 >> 24),          /* byte 0 */
-                (uint8_t)((dv0 >> 16) & 0xFF),  /* byte 1 */
-                (uint8_t)((dv0 >>  8) & 0xFF),  /* byte 2 */
-                (uint8_t)( dv0        & 0xFF),  /* byte 3 */
-                (uint8_t)( dv1 >> 24),          /* byte 4 */
-                (uint8_t)((dv1 >> 16) & 0xFF),  /* byte 5 */
-            };
-            uint16_t crc16 = psa_calculate_crc16_bf2(crc_buf, 6);
-
-            /* FIRMWARE expected CRC encoding (confirmed from FUN_080290f8):
-             *   expected = (dv1 & 0xFF) | (((dv1>>16)&0xFF) << 8)
-             * Your psa.c used: ((dv1>>16)&0xFF)<<8 | (dv1&0xFF)  ← same, no bug here
-             */
-            uint16_t expected = (uint16_t)((dv1 & 0xFF) | (((dv1 >> 16) & 0xFF) << 8));
-
-            if(crc16 == expected) {
-                psa_unpack_tea_result(buf, dv0, dv1);
-                psa_extract_fields_mode36(buf, inst);
-                inst->decrypted_seed = counter;
-                return true;
-            }
-        }
-    }
-    return false;
-}
-
 /* =========================================================
  * MAIN DECRYPT ROUTER — FUN_080291c0
  *
@@ -616,62 +445,6 @@ static bool psa_brute_force_decrypt_bf2(SubGhzProtocolDecoderPSA* inst) {
  * The BF-attempted flag (+0x33 in struct) prevents re-running BF
  * on a packet that already failed brute force in this session.
  * ========================================================= */
-
-static void __attribute__((unused)) psa_decrypt_full(SubGhzProtocolDecoderPSA* inst) {
-    char mode = (char)inst->mode_serialize;
-
-    if(mode == PSA_MODE_23) {
-        if(psa_direct_xor_decrypt(inst)) {
-            inst->mode_serialize = PSA_MODE_23;
-            inst->decrypted = 0x50;
-        }
-        return;
-    }
-
-    if(mode == PSA_MODE_36) {
-        /* BF1 first, then BF2 */
-        if(psa_brute_force_decrypt_bf1(inst)) {
-            inst->mode_serialize = PSA_MODE_36;
-            inst->decrypted = 0x50;
-            return;
-        }
-        if(psa_brute_force_decrypt_bf2(inst)) {
-            inst->mode_serialize = PSA_MODE_36;
-            inst->decrypted = 0x50;
-        }
-        return;
-    }
-
-    /* mode == 0: try XOR first */
-    if(psa_direct_xor_decrypt(inst)) {
-        inst->mode_serialize = PSA_MODE_23;
-        inst->decrypted = 0x50;
-        return;
-    }
-
-    /* XOR failed — check BF-attempted flag before doing expensive BF */
-    if(inst->bf_attempted) {
-        /* already tried and failed — don't retry */
-        inst->decrypted = 0x00;
-        return;
-    }
-
-    /* Run BF */
-    if(psa_brute_force_decrypt_bf1(inst)) {
-        inst->mode_serialize = PSA_MODE_36;
-        inst->decrypted = 0x50;
-        return;
-    }
-    if(psa_brute_force_decrypt_bf2(inst)) {
-        inst->mode_serialize = PSA_MODE_36;
-        inst->decrypted = 0x50;
-        return;
-    }
-
-    /* All paths failed */
-    inst->bf_attempted = 1;
-    inst->decrypted    = 0x00;
-}
 
 /* Fast path (no BF) — used in feed callback */
 static void psa_decrypt_fast(SubGhzProtocolDecoderPSA* inst) {
@@ -1199,8 +972,6 @@ void subghz_protocol_decoder_psa2_get_string(void* context, FuriString* output) 
     furi_assert(context);
     SubGhzProtocolDecoderPSA* inst = context;
 
-    uint16_t key2_val = (uint16_t)(inst->key2_low & 0xFFFF);
-
     if(inst->decrypted == 0x50 && inst->decrypted_type != 0) {
         subghz_custom_btn_set_original(inst->generic.btn == 0 ? 0xFF : inst->generic.btn);
         subghz_custom_btn_set_max(4);
@@ -1209,42 +980,30 @@ void subghz_protocol_decoder_psa2_get_string(void* context, FuriString* output) 
         if(inst->decrypted_type == PSA_MODE_23) {
             furi_string_printf(output,
                 "%s %dbit\r\n"
-                "Key1:%08lX%08lX\r\n"
-                "Key2:%04X\r\n"
-                "Ser:%06lX\r\n"
-                "Btn:[%s] Cnt:%04lX\r\n"
-                "Type:%02X CRC:%02X\r\n"
-                "Sd:%06lX",
+                "Key:0x%08lX%08lX\r\n"
+                "SN:0x%lX Btn:%X\r\n"
+                "CRC:%02X Cnt:%04lX",
                 inst->base.protocol->name, 128,
                 inst->key1_high, inst->key1_low,
-                key2_val, inst->generic.serial,
-                psa_button_name(display_btn), inst->generic.cnt,
-                inst->decrypted_type, inst->decrypted_crc,
-                inst->decrypted_seed);
+                inst->generic.serial, display_btn,
+                inst->decrypted_crc, inst->generic.cnt);
         } else {
             furi_string_printf(output,
                 "%s %dbit\r\n"
-                "Key1:%08lX%08lX\r\n"
-                "Key2:%04X\r\n"
-                "Ser:%06lX\r\n"
-                "Btn:[%s] Cnt:%08lX\r\n"
-                "Type:%02X CRC:%04X\r\n"
-                "Sd:%06lX",
+                "Key:0x%08lX%08lX\r\n"
+                "SN:0x%lX Btn:%X\r\n"
+                "CRC:%04X Cnt:%08lX",
                 inst->base.protocol->name, 128,
                 inst->key1_high, inst->key1_low,
-                key2_val, inst->generic.serial,
-                psa_button_name(display_btn), inst->generic.cnt,
-                inst->decrypted_type, inst->decrypted_crc,
-                inst->decrypted_seed);
+                inst->generic.serial, display_btn,
+                inst->decrypted_crc, inst->generic.cnt);
         }
     } else {
         furi_string_printf(output,
             "%s %dbit\r\n"
-            "Key1:%08lX%08lX\r\n"
-            "Key2:%04X",
+            "Key:0x%08lX%08lX",
             inst->base.protocol->name, 128,
-            inst->key1_high, inst->key1_low,
-            key2_val);
+            inst->key1_high, inst->key1_low);
     }
 }
 

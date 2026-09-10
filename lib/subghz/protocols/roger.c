@@ -445,15 +445,12 @@ void subghz_protocol_decoder_roger_get_string(void* context, FuriString* output)
 
     furi_string_cat_printf(
         output,
-        "%s %db\r\n"
-        "Key: 0x%07lX\r\n"
-        "Serial: 0x%04lX\r\n"
-        "End: 0x%02lX\r\n"
-        "Btn: %01X",
+        "%s %dbit\r\n"
+        "Key:0x%07lX\r\n"
+        "SN:0x%lX Btn:%X",
         instance->generic.protocol_name,
         instance->generic.data_count_bit,
         (uint32_t)(instance->generic.data & 0xFFFFFFF),
         instance->generic.serial,
-        (uint32_t)(instance->generic.data & 0xFF),
         instance->generic.btn);
 }

@@ -209,19 +209,6 @@ static void mazda_xor_obfuscate(uint8_t* data) {
     }
 }
 
-static const char* mazda_get_btn_name(uint8_t btn) {
-    switch(btn) {
-    case 0x10:
-        return "Lock";
-    case 0x20:
-        return "Unlock";
-    case 0x40:
-        return "Trunk";
-    default:
-        return "Unknown";
-    }
-}
-
 // ============================================================================
 // Encoder
 // ============================================================================
@@ -571,31 +558,19 @@ void subghz_protocol_decoder_mazda_siemens_get_string(void* context, FuriString*
     subghz_block_generic_global.current_btn = instance->generic.btn;
     subghz_block_generic_global.btn_length_bit = 8;
 
-    uint8_t data[8];
-    for(int i = 0; i < 8; i++) {
-        data[i] = (instance->generic.data >> (56 - 8 * i)) & 0xFF;
-    }
+    const uint8_t chk = instance->generic.data & 0xFF;
 
     furi_string_cat_printf(
         output,
         "%s %dbit\r\n"
-        "Key:%02X %02X %02X %02X %02X %02X %02X %02X\r\n"
-        "Sn:%08lX\r\n"
-        "Btn:%s\r\n"
-        "Cnt:%04lX\r\n"
-        "Chk:%02X\r\n",
+        "Key:0x%llX\r\n"
+        "SN:0x%lX Btn:%X\r\n"
+        "CRC:%02X Cnt:%04lX\r\n",
         instance->generic.protocol_name,
         instance->generic.data_count_bit,
-        data[0],
-        data[1],
-        data[2],
-        data[3],
-        data[4],
-        data[5],
-        data[6],
-        data[7],
+        (uint64_t)instance->generic.data,
         (uint32_t)instance->generic.serial,
-        mazda_get_btn_name(instance->generic.btn),
-        (uint32_t)instance->generic.cnt,
-        data[7]);
+        instance->generic.btn,
+        chk,
+        (uint32_t)instance->generic.cnt);
 }

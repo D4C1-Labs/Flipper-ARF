@@ -276,21 +276,11 @@ void subghz_protocol_decoder_allstar_firefly_get_string(void* context, FuriStrin
     furi_assert(context);
     SubGhzProtocolDecoderAllstarFirefly* instance = context;
 
-    uint64_t code_found_reverse = subghz_protocol_blocks_reverse_key(
-        instance->generic.data, instance->generic.data_count_bit);
-
     furi_string_cat_printf(
         output,
-        "%s %db\r\n"
-        "Key:0x%05lX Yek:0x%05lX\r\n"
-        "  +:   " DIP_PATTERN "\r\n"
-        "  o:   " DIP_PATTERN "\r\n"
-        "  -:   " DIP_PATTERN "\r\n",
+        "%s %dbit\r\n"
+        "Key:0x%05lX\r\n",
         instance->generic.protocol_name,
         instance->generic.data_count_bit,
-        (uint32_t)(instance->generic.data & 0xFFFFF),
-        (uint32_t)(code_found_reverse & 0xFFFFF),
-        SHOW_DIP_P(instance->generic.data, DIP_P),
-        SHOW_DIP_P(instance->generic.data, DIP_O),
-        SHOW_DIP_P(instance->generic.data, DIP_N));
+        (uint32_t)(instance->generic.data & 0xFFFFF));
 }

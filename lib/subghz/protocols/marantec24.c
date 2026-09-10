@@ -340,10 +340,9 @@ void subghz_protocol_decoder_marantec24_get_string(void* context, FuriString* ou
 
     furi_string_cat_printf(
         output,
-        "%s %db\r\n"
-        "Key: 0x%06lX\r\n"
-        "Serial: 0x%05lX\r\n"
-        "Btn: %01X",
+        "%s %dbit\r\n"
+        "Key:0x%06lX\r\n"
+        "SN:0x%05lX Btn:%X",
         instance->generic.protocol_name,
         instance->generic.data_count_bit,
         (uint32_t)(instance->generic.data & 0xFFFFFF),

@@ -321,8 +321,8 @@ void subghz_protocol_decoder_gate_tx_get_string(void* context, FuriString* outpu
     furi_string_cat_printf(
         output,
         "%s %dbit\r\n"
-        "Key:%06lX\r\n"
-        "Sn:%05lX  Btn:%X\r\n",
+        "Key:0x%06lX\r\n"
+        "SN:0x%lX Btn:%X\r\n",
         instance->generic.protocol_name,
         instance->generic.data_count_bit,
         (uint32_t)(instance->generic.data & 0xFFFFFF),

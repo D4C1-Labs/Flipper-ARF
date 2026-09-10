@@ -404,34 +404,15 @@ void subghz_protocol_decoder_honeywell_get_string(void* context, FuriString* out
     uint32_t code_found_lo = instance->generic.data & 0x00000000ffffffff;
 
     instance->generic.serial = (instance->generic.data >> 24) & 0xFFFFF;
-    uint8_t sensor_status = (instance->generic.data >> 16) & 0xFF;
-
-    uint8_t channel = (instance->generic.data >> 44) & 0xF;
-    uint8_t contact = (sensor_status & 0x80) >> 7;
-    uint8_t tamper = (sensor_status & 0x40) >> 6;
-    uint8_t reed = (sensor_status & 0x20) >> 5;
-    uint8_t alarm = (sensor_status & 0x10) >> 4;
-    uint8_t battery_low = (sensor_status & 0x08) >> 3;
-    uint8_t heartbeat = (sensor_status & 0x04) >> 2;
 
     furi_string_cat_printf(
         output,
-        "%s\r\n%dbit  "
-        "Sn:%07lu  Ch:%u\r\n"
-        "LowBat:%d  HB: %d  Cont: %s\r\n"
+        "%s %dbit\r\n"
         "Key:%08lX%08lX\r\n"
-        "State: L1:%u  L2:%u  L3:%u  L4:%u",
+        "SN:%07lu",
         instance->generic.protocol_name,
         instance->generic.data_count_bit,
-        instance->generic.serial,
-        channel,
-        battery_low,
-        heartbeat,
-        contact ? "open" : "closed",
         code_found_hi,
         code_found_lo,
-        contact,
-        reed,
-        alarm,
-        tamper);
+        instance->generic.serial);
 }

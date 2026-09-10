@@ -404,27 +404,6 @@ void subghz_protocol_decoder_gangqi_feed(void* context, bool level, volatile uin
  * Get button name.
  * @param btn Button number, 4 bit
  */
-static const char* subghz_protocol_gangqi_get_button_name(uint8_t btn) {
-    const char* name_btn[16] = {
-        "Unknown",
-        "Exit settings",
-        "Volume setting",
-        "0x3",
-        "Vibro sens. setting",
-        "Settings mode",
-        "Ringtone setting",
-        "Ring", // D
-        "0x8",
-        "0x9",
-        "0xA",
-        "Alarm", // C
-        "0xC",
-        "Arm", // A
-        "Disarm", // B
-        "0xF"};
-    return btn <= 0xf ? name_btn[btn] : name_btn[0];
-}
-
 uint8_t subghz_protocol_decoder_gangqi_get_hash_data(void* context) {
     furi_assert(context);
     SubGhzProtocolDecoderGangQi* instance = context;
@@ -456,15 +435,6 @@ void subghz_protocol_decoder_gangqi_get_string(void* context, FuriString* output
     // Parse serial
     subghz_protocol_gangqi_remote_controller(&instance->generic);
 
-    // Get byte sum
-    uint16_t serial = (uint16_t)((instance->generic.data >> 18) & 0xFFFF);
-    uint8_t const_and_button = (uint8_t)(0xD0 | instance->generic.btn);
-    uint8_t serial_high = (uint8_t)(serial >> 8);
-    uint8_t serial_low = (uint8_t)(serial & 0xFF);
-    // Type 1 is what original remotes use, type 2 is "backdoor" sum that receiver accepts too
-    uint8_t sum_type1 = (uint8_t)(0xC8 - serial_high - serial_low - const_and_button);
-    uint8_t sum_type2 = (uint8_t)(0x02 + serial_high + serial_low + const_and_button);
-
     // push protocol data to global variable
     subghz_block_generic_global.btn_is_available = true;
     subghz_block_generic_global.current_btn = instance->generic.btn;
@@ -473,18 +443,13 @@ void subghz_protocol_decoder_gangqi_get_string(void* context, FuriString* output
 
     furi_string_cat_printf(
         output,
-        "%s %db\r\n"
-        "Key: 0x%X%08lX\r\n"
-        "Serial: 0x%05lX\r\n"
-        "Sum: 0x%02X   Sum2: 0x%02X\r\n"
-        "Btn: 0x%01X - %s\r\n",
+        "%s %dbit\r\n"
+        "Key:0x%X%08lX\r\n"
+        "SN:0x%lX Btn:%01X\r\n",
         instance->generic.protocol_name,
         instance->generic.data_count_bit,
         (uint8_t)(instance->generic.data >> 32),
         (uint32_t)(instance->generic.data & 0xFFFFFFFF),
         instance->generic.serial,
-        sum_type1,
-        sum_type2,
-        instance->generic.btn,
-        subghz_protocol_gangqi_get_button_name(instance->generic.btn));
+        instance->generic.btn);
 }

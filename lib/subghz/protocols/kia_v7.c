@@ -631,17 +631,16 @@ void kia_protocol_decoder_v7_get_string(void* context, FuriString* output) {
     furi_string_cat_printf(
         output,
         "%s %dbit\r\n"
-        "Key:%016llX\r\n"
-        "Sn:%07lX Cnt:%04lX\r\n"
-        "Btn:%01X [%s] CRC:%02X [%s]",
+        "Key:0x%llX\r\n"
+        "SN:0x%07lX Btn:%X\r\n"
+        "CRC:%02X Cnt:%04lX [%s]",
         instance->generic.protocol_name,
         instance->generic.data_count_bit,
         instance->generic.data,
         instance->generic.serial & 0x0FFFFFFFU,
-        instance->generic.cnt & 0xFFFFU,
         instance->decoded_button & 0x0FU,
-        kia_v7_get_button_name(instance->decoded_button),
         instance->crc_calculated,
+        instance->generic.cnt & 0xFFFFU,
         instance->crc_valid ? "OK" : "ERR");
 }
 

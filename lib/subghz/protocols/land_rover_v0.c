@@ -164,7 +164,6 @@ static uint16_t lr_encoder_read_repeat(FlipperFormat* ff, uint16_t default_val) 
  * Forward declarations for internal (static) helpers
  * ═════════════════════════════════════════════════════════════════════════*/
 static uint8_t     land_rover_v0_button_from_signature(uint32_t signature);
-static const char* land_rover_v0_button_name(uint8_t button);
 static uint8_t     land_rover_v0_calculate_check(uint32_t count);
 static bool        land_rover_v0_calculate_tail_msb(uint32_t count);
 static uint16_t    land_rover_v0_calculate_tail(uint32_t count);
@@ -246,14 +245,6 @@ static uint8_t land_rover_v0_button_from_signature(uint32_t signature) {
     if(signature == LAND_ROVER_V0_SIG_UNLOCK) return LAND_ROVER_V0_BTN_UNLOCK;
     if(signature == LAND_ROVER_V0_SIG_LOCK)   return LAND_ROVER_V0_BTN_LOCK;
     return LAND_ROVER_V0_BTN_UNKNOWN;
-}
-
-static const char* land_rover_v0_button_name(uint8_t button) {
-    switch(button) {
-    case LAND_ROVER_V0_BTN_LOCK:   return "Lock";
-    case LAND_ROVER_V0_BTN_UNLOCK: return "Unlock";
-    default:                        return "Unknown";
-    }
 }
 
 static uint8_t land_rover_v0_calculate_check(uint32_t count) {
@@ -759,25 +750,17 @@ void subghz_protocol_decoder_land_rover_v0_get_string(void* context, FuriString*
     furi_string_cat_printf(
         output,
         "%s %dbit\r\n"
-        "Key:%016llX\r\n"
-        "Sn:%06lX\r\n"
-        "Btn:%02X [%s]\r\n"
-        "BtnSig:%06lX\r\n"
-        "Cnt:%05lX\r\n"
-        "Chk:%02X [%s]\r\n"
-        "Tail:%05lX [%s]",
+        "Key:0x%llX\r\n"
+        "SN:0x%06lX Btn:%X\r\n"
+        "CRC:%02X Cnt:%05lX [%s]",
         instance->generic.protocol_name,
         instance->generic.data_count_bit,
         (unsigned long long)instance->key,
         (unsigned long)instance->serial,
         instance->button,
-        land_rover_v0_button_name(instance->button),
-        (unsigned long)instance->command_signature,
-        (unsigned long)instance->count,
         instance->check,
-        instance->check_ok ? "OK" : "BAD",
-        (unsigned long)(((instance->tail >> 15) & 1U) ? 0x1FFFFUL : 0x0FFFFUL),
-        instance->tail_ok ? "OK" : "BAD");
+        (unsigned long)instance->count,
+        instance->check_ok ? "OK" : "BAD");
 }
 
 /* ═══════════════════════════════════════════════════════════════════════════

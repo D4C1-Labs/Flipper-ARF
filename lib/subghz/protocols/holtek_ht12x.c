@@ -397,17 +397,12 @@ void subghz_protocol_decoder_holtek_th12x_get_string(void* context, FuriString* 
 
     furi_string_cat_printf(
         output,
-        "%s %db\r\n"
+        "%s %dbit\r\n"
         "Key:0x%03lX\r\n"
-        "Btn: ",
+        "Btn:",
         instance->generic.protocol_name,
         instance->generic.data_count_bit,
         (uint32_t)(instance->generic.data & 0xFFF));
     subghz_protocol_holtek_th12x_event_serialize(instance->generic.btn, output);
-    furi_string_cat_printf(
-        output,
-        "DIP:" DIP_PATTERN "\r\n"
-        "Te:%luus\r\n",
-        CNT_TO_DIP(instance->generic.cnt),
-        instance->te);
+    furi_string_cat_printf(output, "\r\n");
 }

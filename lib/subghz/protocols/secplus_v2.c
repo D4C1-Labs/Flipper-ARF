@@ -977,16 +977,12 @@ void subghz_protocol_decoder_secplus_v2_get_string(void* context, FuriString* ou
 
     furi_string_cat_printf(
         output,
-        "%s %db\r\n"
-        "Pk1:0x%lX%08lX\r\n"
-        "Pk2:0x%lX%08lX\r\n"
-        "Sn:0x%08lX  Btn:0x%01X\r\n"
-        "Cnt:%07lX\r\n",
-
+        "%s %dbit\r\n"
+        "Key:0x%lX%08lX\r\n"
+        "SN:0x%lX Btn:%X\r\n"
+        "Cnt:%07lX",
         instance->generic.protocol_name,
         instance->generic.data_count_bit,
-        (uint32_t)(instance->secplus_packet_1 >> 32),
-        (uint32_t)instance->secplus_packet_1,
         (uint32_t)(instance->generic.data >> 32),
         (uint32_t)instance->generic.data,
         instance->generic.serial,

@@ -125,24 +125,6 @@ static void scher_khan_pro_encrypt(
     }
 }
 
-static const char* scher_khan_btn_name(uint8_t btn) {
-    switch(btn) {
-    case 0x1: return "Lock";
-    case 0x2: return "Unlock";
-    case 0x3: return "Lock+Unlock";
-    case 0x4: return "Trunk";
-    case 0x5: return "Lock+Trunk";
-    case 0x6: return "Unlock+Trunk";
-    case 0x7: return "Lk+Ul+Tr";
-    case 0x8: return "Start";
-    case 0x9: return "Lock+Start";
-    case 0xA: return "Unlock+Start";
-    case 0xC: return "Trunk+Start";
-    case 0xF: return "All/Panic";
-    default:  return "?";
-    }
-}
-
 static uint8_t scher_khan_btn_to_custom(uint8_t btn) {
     switch(btn) {
     case 0x1: return SUBGHZ_CUSTOM_BTN_UP;
@@ -1043,15 +1025,13 @@ void subghz_protocol_decoder_scher_khan_get_string(void* context, FuriString* ou
         output,
         "%s %dbit\r\n"
         "Key:0x%lX%08lX\r\n"
-        "Sn:%07lX Btn:[%s]\r\n"
-        "Cntr:%04lX\r\n"
-        "Pt: %s\r\n",
+        "SN:0x%lX Btn:%X\r\n"
+        "Cnt:%04lX",
         instance->generic.protocol_name,
         instance->generic.data_count_bit,
         (uint32_t)(instance->generic.data >> 32),
         (uint32_t)instance->generic.data,
         instance->generic.serial,
-        scher_khan_btn_name(scher_khan_get_btn_code(instance->generic.btn)),
-        instance->generic.cnt,
-        instance->protocol_name);
+        instance->generic.btn,
+        instance->generic.cnt);
 }

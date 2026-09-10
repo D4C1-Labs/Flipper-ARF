@@ -904,18 +904,15 @@ void subghz_protocol_decoder_came_atomo_get_string(void* context, FuriString* ou
 
     furi_string_cat_printf(
         output,
-        "%s %db\r\n"
-        "Key:%08lX%08lX\r\n"
-        "Sn:0x%08lX       Btn:%01X\r\n"
-        "Cnt:%04lX\r\n"
-        "Btn_Cnt:0x%02X",
-
+        "%s %dbit\r\n"
+        "Key:0x%08lX%08lX\r\n"
+        "SN:0x%08lX Btn:%X\r\n"
+        "Cnt:%04lX\r\n",
         instance->generic.protocol_name,
         instance->generic.data_count_bit,
         code_found_hi,
         code_found_lo,
         instance->generic.serial,
         instance->generic.btn,
-        instance->generic.cnt,
-        instance->generic.cnt_2);
+        instance->generic.cnt);
 }

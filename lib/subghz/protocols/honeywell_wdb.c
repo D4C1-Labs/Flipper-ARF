@@ -373,17 +373,10 @@ void subghz_protocol_decoder_honeywell_wdb_get_string(void* context, FuriString*
         output,
         "%s %dbit\r\n"
         "Key:0x%lX%08lX\r\n"
-        "Sn:0x%05lX\r\n"
-        "DT:%s  Al:%s\r\n"
-        "SK:%01X R:%01X LBat:%01X\r\n",
+        "SN:0x%05lX",
         instance->generic.protocol_name,
         instance->generic.data_count_bit,
         (uint32_t)((instance->generic.data >> 32) & 0xFFFFFFFF),
         (uint32_t)(instance->generic.data & 0xFFFFFFFF),
-        instance->generic.serial,
-        instance->device_type,
-        instance->alert,
-        instance->secret_knock,
-        instance->relay,
-        instance->lowbat);
+        instance->generic.serial);
 }

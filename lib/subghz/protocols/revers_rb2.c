@@ -400,9 +400,9 @@ void subghz_protocol_decoder_revers_rb2_get_string(void* context, FuriString* ou
 
     furi_string_cat_printf(
         output,
-        "%s %db\r\n"
-        "Key:%lX%08lX\r\n"
-        "Sn:0x%08lX \r\n",
+        "%s %dbit\r\n"
+        "Key:0x%lX%08lX\r\n"
+        "SN:0x%lX",
         instance->generic.protocol_name,
         instance->generic.data_count_bit,
         (uint32_t)(instance->generic.data >> 32),

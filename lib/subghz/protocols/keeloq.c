@@ -1788,18 +1788,11 @@ void subghz_protocol_decoder_keeloq_get_string(void* context, FuriString* output
     furi_assert(context);
     SubGhzProtocolDecoderKeeloq* instance = context;
 
-    uint32_t hopdecrypt = 0;
-
-    hopdecrypt = subghz_protocol_keeloq_check_remote_controller(
+    subghz_protocol_keeloq_check_remote_controller(
         &instance->generic, instance->keystore, &instance->manufacture_name);
 
     uint32_t code_found_hi = instance->generic.data >> 32;
     uint32_t code_found_lo = instance->generic.data & 0x00000000ffffffff;
-
-    uint64_t code_found_reverse = subghz_protocol_blocks_reverse_key(
-        instance->generic.data, instance->generic.data_count_bit);
-    uint32_t code_found_reverse_hi = code_found_reverse >> 32;
-    uint32_t code_found_reverse_lo = code_found_reverse & 0x00000000ffffffff;
 
     if(strcmp(instance->manufacture_name, "BFT") == 0) {
         // push protocol data to global variable
@@ -1812,44 +1805,17 @@ void subghz_protocol_decoder_keeloq_get_string(void* context, FuriString* output
         subghz_block_generic_global.btn_length_bit = 4;
         //
 
-        ProgMode prog_mode = subghz_custom_btn_get_prog_mode();
-        if(prog_mode == PROG_MODE_KEELOQ_BFT) {
-            furi_string_cat_printf(
-                output,
-                "%s %dbit\r\n"
-                "Key:%08lX%08lX\r\n"
-                "Fix:0x%08lX    Cnt:%04lX\r\n"
-                "Hop:0x%08lX    Btn:%01X\r\n"
-                "MF:%s PRG Sd:%08lX",
-                instance->generic.protocol_name,
-                instance->generic.data_count_bit,
-                code_found_hi,
-                code_found_lo,
-                code_found_reverse_hi,
-                instance->generic.cnt,
-                code_found_reverse_lo,
-                instance->generic.btn,
-                instance->manufacture_name,
-                instance->generic.seed);
-        } else {
-            furi_string_cat_printf(
-                output,
-                "%s %dbit\r\n"
-                "Key:%08lX%08lX\r\n"
-                "Fix:0x%08lX    Cnt:%04lX\r\n"
-                "Hop:0x%08lX    Btn:%01X\r\n"
-                "MF:%s Sd:%08lX",
-                instance->generic.protocol_name,
-                instance->generic.data_count_bit,
-                code_found_hi,
-                code_found_lo,
-                code_found_reverse_hi,
-                instance->generic.cnt,
-                hopdecrypt,
-                instance->generic.btn,
-                instance->manufacture_name,
-                instance->generic.seed);
-        }
+        furi_string_cat_printf(
+            output,
+            "%s %dbit\r\n"
+            "Key:%08lX%08lX\r\n"
+            "Btn:%01X Cnt:%04lX",
+            instance->generic.protocol_name,
+            instance->generic.data_count_bit,
+            code_found_hi,
+            code_found_lo,
+            instance->generic.btn,
+            instance->generic.cnt);
     } else if(strcmp(instance->manufacture_name, "Unknown") == 0) {
         subghz_block_generic_global.btn_is_available = true;
         subghz_block_generic_global.current_btn = instance->generic.btn;
@@ -1859,17 +1825,12 @@ void subghz_protocol_decoder_keeloq_get_string(void* context, FuriString* output
             output,
             "%s %dbit\r\n"
             "Key:%08lX%08lX\r\n"
-            "Fix:0x%08lX    Cnt:????\r\n"
-            "Hop:0x%08lX    Btn:%01X\r\n"
-            "MF:%s",
+            "Btn:%01X Cnt:????",
             instance->generic.protocol_name,
             instance->generic.data_count_bit,
             code_found_hi,
             code_found_lo,
-            code_found_reverse_hi,
-            code_found_reverse_lo,
-            instance->generic.btn,
-            instance->manufacture_name);
+            instance->generic.btn);
     } else {
         subghz_block_generic_global.cnt_is_available = true;
         subghz_block_generic_global.cnt_length_bit = 16;
@@ -1884,36 +1845,26 @@ void subghz_protocol_decoder_keeloq_get_string(void* context, FuriString* output
                 output,
                 "%s %dbit\r\n"
                 "Key:%08lX%08lX\r\n"
-                "Fix:0x%08lX    Cnt:%04lX\r\n"
-                "Hop:0x%08lX  Btn:%lX(B%lu)\r\n"
-                "MF:%s",
+                "Btn:%lX(B%lu) Cnt:%04lX",
                 instance->generic.protocol_name,
                 instance->generic.data_count_bit,
                 code_found_hi,
                 code_found_lo,
-                code_found_reverse_hi,
-                instance->generic.cnt,
-                hopdecrypt,
                 (uint32_t)instance->generic.btn,
                 (uint32_t)btn_pos,
-                instance->manufacture_name);
+                instance->generic.cnt);
         } else {
             furi_string_cat_printf(
                 output,
                 "%s %dbit\r\n"
                 "Key:%08lX%08lX\r\n"
-                "Fix:0x%08lX    Cnt:%04lX\r\n"
-                "Hop:0x%08lX    Btn:%01X\r\n"
-                "MF:%s",
+                "Btn:%01X Cnt:%04lX",
                 instance->generic.protocol_name,
                 instance->generic.data_count_bit,
                 code_found_hi,
                 code_found_lo,
-                code_found_reverse_hi,
-                instance->generic.cnt,
-                hopdecrypt,
                 instance->generic.btn,
-                instance->manufacture_name);
+                instance->generic.cnt);
         }
     }
 }

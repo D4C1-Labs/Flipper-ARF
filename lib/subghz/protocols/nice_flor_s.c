@@ -961,27 +961,27 @@ void subghz_protocol_decoder_nice_flor_s_get_string(void* context, FuriString* o
             output,
             "%s %dbit\r\n"
             "Key:%013llX%llX\r\n"
-            "Sn:%05lX\r\n"
-            "Cnt:%04lX Btn:%02X\r\n",
+            "SN:0x%lX Btn:%X\r\n"
+            "Cnt:%04lX\r\n",
             NICE_ONE_NAME,
             instance->generic.data_count_bit,
             instance->generic.data,
             instance->generic.data_2,
             instance->generic.serial,
-            instance->generic.cnt,
-            instance->generic.btn);
+            instance->generic.btn,
+            instance->generic.cnt);
     } else {
         furi_string_cat_printf(
             output,
             "%s %dbit\r\n"
             "Key:0x%013llX\r\n"
-            "Sn:%05lX\r\n"
-            "Cnt:%04lX Btn:%02X\r\n",
+            "SN:0x%lX Btn:%X\r\n"
+            "Cnt:%04lX\r\n",
             instance->generic.protocol_name,
             instance->generic.data_count_bit,
             instance->generic.data,
             instance->generic.serial,
-            instance->generic.cnt,
-            instance->generic.btn);
+            instance->generic.btn,
+            instance->generic.cnt);
     }
 }

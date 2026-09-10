@@ -827,51 +827,25 @@ SubGhzProtocolStatus
     return ret;
 }
 
-static const char* subghz_protocol_kia_v5_get_name_button(uint8_t btn) {
-    switch(btn) {
-    case 0x01:
-        return "Unlock";
-    case 0x02:
-        return "Lock";
-    case 0x04:
-        return "Trunk";
-    case 0x08:
-        return "Horn";
-    default:
-        return "Unknown";
-    }
-}
-
 void subghz_protocol_decoder_kia_v5_get_string(void* context, FuriString* output) {
     furi_assert(context);
     SubGhzProtocolDecoderKiaV5* instance = context;
 
-    uint8_t kb[8];
-    for(int i = 0; i < 8; i++) {
-        kb[i] = (instance->generic.data >> ((7 - i) * 8)) & 0xFF;
-    }
-
     uint8_t calculated_crc = kia_v5_calculate_crc(instance->yek);
     bool crc_valid = (instance->crc == calculated_crc);
-
-    uint16_t seed = ((uint16_t)(instance->generic.btn & 0x0F) << 12) |
-                    (instance->generic.serial & 0x0FFF);
 
     furi_string_cat_printf(
         output,
         "%s %dbit\r\n"
-        "Key:%02X %02X %02X %02X %02X %02X %02X %02X\r\n"
-        "Sn:%07lX Cnt:%04lX\r\n"
-        "Btn:%02X [%s] Seed:%04X\r\n"
-        "CRC:%u %s",
+        "Key:0x%llX\r\n"
+        "SN:0x%07lX Btn:%X\r\n"
+        "CRC:%u Cnt:%04lX %s",
         instance->generic.protocol_name,
         instance->generic.data_count_bit,
-        kb[0], kb[1], kb[2], kb[3], kb[4], kb[5], kb[6], kb[7],
+        (unsigned long long)instance->generic.data,
         (unsigned long)instance->generic.serial,
-        (unsigned long)instance->generic.cnt,
         (unsigned)instance->generic.btn,
-        subghz_protocol_kia_v5_get_name_button(instance->generic.btn),
-        (unsigned)seed,
         (unsigned)instance->crc,
+        (unsigned long)instance->generic.cnt,
         crc_valid ? "(OK)" : "(FAIL)");
 }

@@ -456,15 +456,15 @@ void subghz_protocol_decoder_kia_v2_get_string(void* context, FuriString* output
     furi_string_cat_printf(
         output,
         "%s %dbit\r\n"
-        "Key:%013llX\r\n"
-        "Sn:%08lX Btn:%X\r\n"
-        "Cnt:%03lX CRC:%X - %s\r\n",
+        "Key:0x%013llX\r\n"
+        "SN:0x%lX Btn:%X\r\n"
+        "CRC:%X Cnt:%03lX - %s\r\n",
         instance->generic.protocol_name,
         instance->generic.data_count_bit,
         instance->generic.data,
         instance->generic.serial,
         instance->generic.btn,
-        instance->generic.cnt,
         crc,
+        instance->generic.cnt,
         crc_valid ? "OK" : "BAD");
 }

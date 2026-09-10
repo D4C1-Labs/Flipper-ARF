@@ -353,15 +353,11 @@ void subghz_protocol_decoder_mastercode_get_string(void* context, FuriString* ou
     furi_string_cat_printf(
         output,
         "%s %dbit\r\n"
-        "Key:%llX   Btn:%X\r\n"
-        "  +:   " DIP_PATTERN "\r\n"
-        "  o:   " DIP_PATTERN "\r\n"
-        "  -:   " DIP_PATTERN "\r\n",
+        "Key:0x%llX\r\n"
+        "SN:0x%lX Btn:%X\r\n",
         instance->generic.protocol_name,
         instance->generic.data_count_bit,
         (uint64_t)(instance->generic.data),
-        instance->generic.btn,
-        SHOW_DIP_P(instance->generic.serial, DIP_P),
-        SHOW_DIP_P(instance->generic.serial, DIP_O),
-        SHOW_DIP_P(instance->generic.serial, DIP_N));
+        instance->generic.serial,
+        instance->generic.btn);
 }

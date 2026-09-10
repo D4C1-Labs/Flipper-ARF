@@ -452,14 +452,12 @@ void subghz_protocol_decoder_came_twee_get_string(void* context, FuriString* out
 
     furi_string_cat_printf(
         output,
-        "%s %db\r\n"
+        "%s %dbit\r\n"
         "Key:0x%lX%08lX\r\n"
-        "Btn:%X\r\n"
-        "DIP:" DIP_PATTERN "\r\n",
+        "Btn:%X\r\n",
         instance->generic.protocol_name,
         instance->generic.data_count_bit,
         code_found_hi,
         code_found_lo,
-        instance->generic.btn,
-        CNT_TO_DIP(instance->generic.cnt));
+        instance->generic.btn);
 }

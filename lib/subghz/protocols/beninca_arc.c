@@ -662,8 +662,7 @@ void subghz_protocol_decoder_beninca_arc_get_string(void* context, FuriString* o
     furi_assert(context);
     SubGhzProtocolDecoderBenincaARC* instance = context;
 
-    uint64_t middle_bytes_dec =
-        subghz_protocol_beninca_arc_decrypt(&instance->generic, instance->keystore);
+    subghz_protocol_beninca_arc_decrypt(&instance->generic, instance->keystore);
 
     // push protocol data to global variable
     subghz_block_generic_global.cnt_is_available = true;
@@ -677,19 +676,14 @@ void subghz_protocol_decoder_beninca_arc_get_string(void* context, FuriString* o
 
     furi_string_printf(
         output,
-        "%s %db\r\n"
-        "Key1:%08llX\r\n"
-        "Key2:%08llX\r\n"
-        "Sn:%08lX Btn:%02X\r\n"
-        "Mc:%0lX Cnt:%0lX\r\n"
-        "Fx:%04lX",
+        "%s %dbit\r\n"
+        "Key:0x%08llX\r\n"
+        "SN:0x%08lX Btn:%X\r\n"
+        "Cnt:%0lX\r\n",
         instance->base.protocol->name,
         instance->generic.data_count_bit,
         instance->generic.data,
-        instance->generic.data_2,
         instance->generic.serial,
         instance->generic.btn,
-        (uint32_t)(middle_bytes_dec & 0xFFFFFFFF),
-        instance->generic.cnt,
-        instance->generic.seed & 0xFFFF);
+        instance->generic.cnt);
 }

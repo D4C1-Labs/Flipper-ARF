@@ -294,12 +294,8 @@ void subghz_protocol_decoder_bmw_cas4_get_string(void* context, FuriString* outp
     furi_string_cat_printf(
         output,
         "%s %dbit\r\n"
-        "Raw:%02X %02X%02X%02X%02X%02X %02X %02X\r\n",
+        "Key:0x%016llX\r\n",
         instance->generic.protocol_name,
         (int)instance->generic.data_count_bit,
-        instance->raw_data[0],
-        instance->raw_data[1], instance->raw_data[2],
-        instance->raw_data[3], instance->raw_data[4], instance->raw_data[5],
-        instance->raw_data[6],
-        instance->raw_data[7]);
+        (unsigned long long)instance->generic.data);
 }

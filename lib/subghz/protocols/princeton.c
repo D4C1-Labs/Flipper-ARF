@@ -591,8 +591,6 @@ void subghz_protocol_decoder_princeton_get_string(void* context, FuriString* out
     furi_assert(context);
     SubGhzProtocolDecoderPrinceton* instance = context;
     subghz_protocol_princeton_check_remote_controller(&instance->generic);
-    uint32_t data_rev = subghz_protocol_blocks_reverse_key(
-        instance->generic.data, instance->generic.data_count_bit);
 
     // push protocol data to global variable
     subghz_block_generic_global.btn_is_available = true;
@@ -606,35 +604,25 @@ void subghz_protocol_decoder_princeton_get_string(void* context, FuriString* out
             output,
             "%s %dbit\r\n"
             "Key:0x%08lX\r\n"
-            "Yek:0x%08lX\r\n"
-            "Sn:0x%05lX Btn:%02X (8b)\r\n"
-            "Te:%luus  GT:Te*%lu\r\n",
+            "SN:0x%lX Btn:%X\r\n",
             instance->generic.protocol_name,
             instance->generic.data_count_bit,
             (uint32_t)(instance->generic.data & 0xFFFFFF),
-            data_rev,
             instance->generic.serial,
             (instance->generic.btn == 0xF3 || instance->generic.btn == 0xFC) ?
                 instance->generic.btn & 0xF :
-                instance->generic.btn,
-            instance->te,
-            instance->guard_time);
+                instance->generic.btn);
     } else {
         subghz_block_generic_global.btn_length_bit = 4;
         furi_string_cat_printf(
             output,
             "%s %dbit\r\n"
             "Key:0x%08lX\r\n"
-            "Yek:0x%08lX\r\n"
-            "Sn:0x%05lX Btn:%01X (4b)\r\n"
-            "Te:%luus  GT:Te*%lu\r\n",
+            "SN:0x%lX Btn:%X\r\n",
             instance->generic.protocol_name,
             instance->generic.data_count_bit,
             (uint32_t)(instance->generic.data & 0xFFFFFF),
-            data_rev,
             instance->generic.serial,
-            instance->generic.btn,
-            instance->te,
-            instance->guard_time);
+            instance->generic.btn);
     }
 }

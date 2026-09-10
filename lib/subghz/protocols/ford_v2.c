@@ -132,23 +132,6 @@ static uint8_t ford_v2_uint8_parity(uint8_t value) {
     return parity;
 }
 
-static const char* ford_v2_button_name(uint8_t btn) {
-    switch(btn) {
-    case 0x10:
-        return "Lock";
-    case 0x11:
-        return "Unlock";
-    case 0x13:
-        return "Trunk";
-    case 0x14:
-        return "Panic";
-    case 0x15:
-        return "RemoteStart";
-    default:
-        return "Unknown";
-    }
-}
-
 static void ford_v2_decoder_extract_from_raw(SubGhzProtocolDecoderFordV2* instance) {
     const uint8_t* k = instance->raw_bytes;
 
@@ -786,11 +769,9 @@ void subghz_protocol_decoder_ford_v2_get_string(void* context, FuriString* outpu
     furi_string_cat_printf(
         output,
         "%s %dbit\r\n"
-        "Key:%02X%02X%02X%02X%02X%02X%02X%02X%02X%02X%02X\r\n"
-        "Sn:%08lX\r\n"
-        "Btn:%02X [%s]\r\n"
-        "Cnt:%u\r\n"
-        "Struct:%s\r\n",
+        "Key:%02X%02X%02X%02X%02X%02X\r\n"
+        "SN:0x%lX Btn:%02X\r\n"
+        "Cnt:%u\r\n",
         instance->generic.protocol_name,
         (int)instance->generic.data_count_bit,
         k[2],
@@ -799,16 +780,9 @@ void subghz_protocol_decoder_ford_v2_get_string(void* context, FuriString* outpu
         k[5],
         k[6],
         k[7],
-        k[8],
-        k[9],
-        k[10],
-        k[11],
-        k[12],
         (unsigned long)instance->generic.serial,
         instance->generic.btn,
-        ford_v2_button_name(instance->generic.btn),
-        (unsigned)instance->counter16,
-        instance->structure_ok ? "OK" : "BAD");
+        (unsigned)instance->counter16);
 }
 
 const SubGhzProtocolDecoder subghz_protocol_ford_v2_decoder = {

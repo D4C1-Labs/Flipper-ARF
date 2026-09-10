@@ -197,23 +197,6 @@ const SubGhzProtocol subghz_protocol_kia_v3_v4 = {
     .encoder = &subghz_protocol_kia_v3_v4_encoder,
 };
 
-static const char* subghz_protocol_kia_v3_v4_get_name_button(uint8_t btn) {
-    switch(btn) {
-    case 0x1:
-        return "Lock";
-    case 0x2:
-        return "Unlock";
-    case 0x3:
-        return "Trunk";
-    case 0x4:
-        return "Panic";
-    case 0x8:
-        return "Horn";
-    default:
-        return "Unknown";
-    }
-}
-
 // ============================================================================
 // ENCODER IMPLEMENTATION
 // ============================================================================
@@ -808,40 +791,25 @@ SubGhzProtocolStatus
     return ret;
 }
 
-static uint64_t compute_yek(uint64_t key) {
-    uint64_t yek = 0;
-    for(int i = 0; i < 64; i++) {
-        yek |= ((key >> i) & 1) << (63 - i);
-    }
-    return yek;
-}
-
 void subghz_protocol_decoder_kia_v3_v4_get_string(void* context, FuriString* output) {
     furi_assert(context);
     SubGhzProtocolDecoderKiaV3V4* instance = context;
 
-    uint64_t yek = compute_yek(instance->generic.data);
     uint32_t key_hi = (uint32_t)(instance->generic.data >> 32);
     uint32_t key_lo = (uint32_t)(instance->generic.data & 0xFFFFFFFF);
-    uint32_t yek_hi = (uint32_t)(yek >> 32);
-    uint32_t yek_lo = (uint32_t)(yek & 0xFFFFFFFF);
 
     furi_string_cat_printf(
         output,
         "%s %dbit\r\n"
-        "Key:%08lX%08lX\r\n"
-        "Yek:%08lX%08lX\r\n"
-        "Serial:%07lX Btn:%01X [%s]\r\n"
-        "Cnt:%04lX CRC:%01X\r\n",
+        "Key:0x%08lX%08lX\r\n"
+        "SN:0x%07lX Btn:%X\r\n"
+        "CRC:%01X Cnt:%04lX\r\n",
         kia_version_names[instance->version],
         instance->generic.data_count_bit,
         key_hi,
         key_lo,
-        yek_hi,
-        yek_lo,
         instance->generic.serial,
         instance->generic.btn,
-        subghz_protocol_kia_v3_v4_get_name_button(instance->generic.btn),
-        instance->generic.cnt,
-        instance->crc);
+        instance->crc,
+        instance->generic.cnt);
 }

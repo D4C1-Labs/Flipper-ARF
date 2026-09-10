@@ -669,14 +669,15 @@ void subghz_protocol_decoder_honda_static_get_string(void* context, FuriString* 
 
     furi_string_printf(
         output,
-        "%s\r\n"
+        "%s %dbit\r\n"
         "Key:%016llX\r\n"
-        "Btn:%s\r\n"
-        "Ser:%07lX Cnt:%06lX",
+        "SN:%07lX Btn:%s\r\n"
+        "Cnt:%06lX",
         instance->generic.protocol_name,
+        instance->generic.data_count_bit,
         (unsigned long long)instance->generic.data,
-        honda_static_button_name(decoded.button),
         (unsigned long)decoded.serial,
+        honda_static_button_name(decoded.button),
         (unsigned long)decoded.counter);
 }
 

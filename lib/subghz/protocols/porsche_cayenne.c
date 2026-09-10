@@ -433,26 +433,18 @@ void subghz_protocol_decoder_porsche_cayenne_get_string(void* context, FuriStrin
     }
     subghz_custom_btn_set_max(4);
 
-    uint8_t frame_type = (uint8_t)(instance->generic.data >> 56) & 0x07;
-    const char* ft_name = "??";
-    if(frame_type == 0b010) ft_name = "First";
-    else if(frame_type == 0b001) ft_name = "Cont";
-    else if(frame_type == 0b100) ft_name = "Final";
-
     furi_string_cat_printf(
         output,
         "%s 64bit\r\n"
-        "Sn:%06lX\r\n"
-        "Btn:%X\r\n"
-        "Cnt:%04lX FT:%s\r\n"
-        "Raw:%08lX%08lX",
+        "Key:0x%08lX%08lX\r\n"
+        "SN:0x%lX Btn:%X\r\n"
+        "Cnt:%04lX\r\n",
         instance->generic.protocol_name,
+        (unsigned long)(instance->generic.data >> 32),
+        (unsigned long)(instance->generic.data & 0xFFFFFFFF),
         (unsigned long)(instance->generic.serial & 0xFFFFFF),
         (unsigned int)instance->generic.btn,
-        (unsigned long)instance->generic.cnt,
-        ft_name,
-        (unsigned long)(instance->generic.data >> 32),
-        (unsigned long)(instance->generic.data & 0xFFFFFFFF));
+        (unsigned long)instance->generic.cnt);
 }
 
 // =============================================================================

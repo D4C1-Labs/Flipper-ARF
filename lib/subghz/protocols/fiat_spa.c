@@ -355,16 +355,13 @@ void subghz_protocol_decoder_fiat_spa_get_string(void* context, FuriString* outp
     furi_string_cat_printf(
         output,
         "%s %dbit\r\n"
-        "Key:%08lX%08lX\r\n"
-        "Fix:%08lX\r\n"
-        "Hop:%08lX\r\n"
-        "EndByte:%02X",
+        "Key:0x%08lX%08lX\r\n"
+        "SN:0x%lX Btn:%X\r\n",
         instance->generic.protocol_name,
         instance->generic.data_count_bit,
         (uint32_t)(instance->generic.data >> 32),
         (uint32_t)(instance->generic.data & 0xFFFFFFFF),
         instance->generic.serial,
-        instance->generic.cnt,
         instance->generic.btn);
 }
 

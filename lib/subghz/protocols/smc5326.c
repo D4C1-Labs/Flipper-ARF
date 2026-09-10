@@ -359,33 +359,15 @@ SubGhzProtocolStatus
     return ret;
 }
 
-static void subghz_protocol_smc5326_get_event_serialize(uint8_t event, FuriString* output) {
-    furi_string_cat_printf(
-        output,
-        "%s%s%s%s\r\n",
-        (((event >> 6) & 0x3) == 0x3 ? "B1 " : ""),
-        (((event >> 4) & 0x3) == 0x3 ? "B2 " : ""),
-        (((event >> 2) & 0x3) == 0x3 ? "B3 " : ""),
-        (((event >> 0) & 0x3) == 0x3 ? "B4 " : ""));
-}
-
 void subghz_protocol_decoder_smc5326_get_string(void* context, FuriString* output) {
     furi_assert(context);
     SubGhzProtocolDecoderSMC5326* instance = context;
-    uint32_t data = (uint32_t)((instance->generic.data >> 9) & 0xFFFF);
 
     furi_string_cat_printf(
         output,
         "%s %ubit\r\n"
-        "Key:%07lX         Te:%luus\r\n"
-        "  +:   " DIP_PATTERN "\r\n"
-        "  o:   " DIP_PATTERN "    ",
+        "Key:0x%07lX",
         instance->generic.protocol_name,
         instance->generic.data_count_bit,
-        (uint32_t)(instance->generic.data & 0x1FFFFFF),
-        instance->te,
-        SHOW_DIP_P(data, DIP_P),
-        SHOW_DIP_P(data, DIP_O));
-    subghz_protocol_smc5326_get_event_serialize(instance->generic.data >> 1, output);
-    furi_string_cat_printf(output, "  -:   " DIP_PATTERN "\r\n", SHOW_DIP_P(data, DIP_N));
+        (uint32_t)(instance->generic.data & 0x1FFFFFF));
 }

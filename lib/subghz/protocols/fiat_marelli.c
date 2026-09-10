@@ -662,59 +662,31 @@ SubGhzProtocolStatus subghz_protocol_decoder_fiat_marelli_deserialize(
     return ret;
 }
 
-static const char* fiat_marelli_button_name(uint8_t btn) {
-    switch(btn) {
-    case 0x7:
-        return "Lock";
-    case 0xB:
-        return "Unlock";
-    case 0xD:
-        return "Trunk";
-    default:
-        return "Unknown";
-    }
-}
-
 void subghz_protocol_decoder_fiat_marelli_get_string(void* context, FuriString* output) {
     furi_check(context);
     SubGhzProtocolDecoderFiatMarelli* instance = context;
 
-    uint8_t epoch = instance->raw_data[6] & 0xF;
     uint8_t counter = (instance->raw_data[7] >> 3) & 0x1F;
-    const char* variant = (instance->te_detected &&
-                           instance->te_detected < FIAT_MARELLI_TE_TYPE_AB_BOUNDARY)
-                              ? "B"
-                              : "A";
-    uint8_t scramble = (instance->raw_data[7] >> 1) & 0x3;
-    uint8_t fixed    =  instance->raw_data[7] & 0x1;
 
     const char* crc_str = "";
     if(instance->bit_count >= 104) {
         uint8_t calc = fiat_marelli_crc8(instance->raw_data, 12);
-        crc_str = (calc == instance->raw_data[12]) ? " CRC:OK" : " CRC:FAIL";
+        crc_str = (calc == instance->raw_data[12]) ? "OK" : "FAIL";
     }
 
     furi_string_cat_printf(
         output,
-        "%s %dbit%s\r\n"
-        "Enc:%02X%02X%02X%02X%02X Scr:%02X\r\n"
-        "Raw:%02X%02X Fixed:%X\r\n"
-        "Sn:%08X Cnt:%02X\r\n"
-        "Btn:%02X:[%s] Ep:%02X\r\n"
-        "Tp:%s\r\n",
+        "%s %dbit\r\n"
+        "Key:%02X%02X%02X%02X%02X\r\n"
+        "SN:0x%X Btn:%02X\r\n"
+        "CRC:%s Cnt:%02X\r\n",
         instance->generic.protocol_name,
         (int)instance->bit_count,
-        crc_str,
         instance->raw_data[8], instance->raw_data[9],
         instance->raw_data[10], instance->raw_data[11],
         instance->raw_data[12],
-        (unsigned)scramble,
-        instance->raw_data[6], instance->raw_data[7],
-        (unsigned)fixed,
         (unsigned int)instance->generic.serial,
-        (unsigned)counter,
         (unsigned)instance->generic.btn,
-        fiat_marelli_button_name(instance->generic.btn),
-        (unsigned)epoch,
-        variant);
+        crc_str,
+        (unsigned)counter);
 }

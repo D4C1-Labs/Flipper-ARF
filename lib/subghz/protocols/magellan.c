@@ -401,74 +401,6 @@ static void subghz_protocol_magellan_check_remote_controller(SubGhzBlockGeneric*
     instance->btn = (data_rev >> 16) & 0xFF;
 }
 
-static void subghz_protocol_magellan_get_event_serialize(uint8_t event, FuriString* output) {
-    const char* event_type;
-    const char* event_subtype;
-
-    switch((event >> 4) & 0x0F) {
-    case 0x00:
-        event_type = "Nothing";
-        break;
-    case 0x01:
-        event_type = "Door";
-        break;
-    case 0x02:
-        event_type = "Motion";
-        break;
-    case 0x03:
-        event_type = "Smoke Alarm";
-        break;
-    case 0x04:
-        event_type = "REM1";
-        break;
-    case 0x05:
-        event_type = "REM1";
-        event_subtype = "Off1";
-        furi_string_cat_printf(output, "%s - %s", event_type, event_subtype);
-        return;
-    case 0x06:
-        event_type = "REM2";
-        event_subtype = "Off1";
-        furi_string_cat_printf(output, "%s - %s", event_type, event_subtype);
-        return;
-    default:
-        event_type = "Unknown";
-        break;
-    }
-
-    switch(event & 0x0F) {
-    case 0x00:
-        event_subtype = (((event >> 4) & 0x0F) > 0x03) ? "Arm1" : "Sealed";
-        break;
-    case 0x01:
-        event_subtype = (((event >> 4) & 0x0F) > 0x03) ? "Btn1" : "Alarm";
-        break;
-    case 0x02:
-        event_subtype = (((event >> 4) & 0x0F) > 0x03) ? "Btn2" : "Tamper";
-        break;
-    case 0x03:
-        event_subtype = (((event >> 4) & 0x0F) > 0x03) ? "Btn3" : "Alarm + Tamper";
-        break;
-    case 0x08:
-        event_subtype = "Reset";
-        break;
-    case 0x09:
-        event_subtype = "LowBatt";
-        break;
-    case 0x0A:
-        event_subtype = "BattOk";
-        break;
-    case 0x0B:
-        event_subtype = "Learn";
-        break;
-    default:
-        event_subtype = "Unknown";
-        break;
-    }
-
-    furi_string_cat_printf(output, "%s - %s", event_type, event_subtype);
-}
-
 uint8_t subghz_protocol_decoder_magellan_get_hash_data(void* context) {
     furi_assert(context);
     SubGhzProtocolDecoderMagellan* instance = context;
@@ -510,14 +442,10 @@ void subghz_protocol_decoder_magellan_get_string(void* context, FuriString* outp
         output,
         "%s %dbit\r\n"
         "Key:0x%08lX\r\n"
-        "Sn:%03ld%03ld, Event:0x%02X\r\n"
-        "Stat:",
+        "SN:0x%lX Btn:%X\r\n",
         instance->generic.protocol_name,
         instance->generic.data_count_bit,
         (uint32_t)(instance->generic.data & 0xFFFFFFFF),
-        (instance->generic.serial >> 8) & 0xFF,
-        instance->generic.serial & 0xFF,
+        instance->generic.serial,
         instance->generic.btn);
-
-    subghz_protocol_magellan_get_event_serialize(instance->generic.btn, output);
 }

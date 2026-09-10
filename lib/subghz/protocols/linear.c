@@ -326,20 +326,11 @@ void subghz_protocol_decoder_linear_get_string(void* context, FuriString* output
     // only the display here is inverted (~) to show correct values.
     uint32_t code_found_lo = ~instance->generic.data & 0x00000000000003ff;
 
-    uint64_t code_found_reverse = subghz_protocol_blocks_reverse_key(
-        ~instance->generic.data, instance->generic.data_count_bit);
-
-    uint32_t code_found_reverse_lo = code_found_reverse & 0x00000000000003ff;
-
     furi_string_cat_printf(
         output,
         "%s %dbit\r\n"
-        "Key:0x%03lX\r\n"
-        "Yek:0x%03lX\r\n"
-        "DIP:" DIP_PATTERN "\r\n",
+        "Key:0x%03lX\r\n",
         instance->generic.protocol_name,
         instance->generic.data_count_bit,
-        code_found_lo,
-        code_found_reverse_lo,
-        DATA_TO_DIP(code_found_lo));
+        code_found_lo);
 }

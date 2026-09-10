@@ -337,9 +337,6 @@ void subghz_protocol_decoder_keyfinder_get_string(void* context, FuriString* out
 
     subghz_protocol_keyfinder_check_remote_controller(&instance->generic);
 
-    uint64_t code_found_reverse = subghz_protocol_blocks_reverse_key(
-        instance->generic.data, instance->generic.data_count_bit);
-
     // for future use
     // // push protocol data to global variable
     // subghz_block_generic_global.btn_is_available = false;
@@ -349,15 +346,12 @@ void subghz_protocol_decoder_keyfinder_get_string(void* context, FuriString* out
 
     furi_string_cat_printf(
         output,
-        "%s %db\r\n"
-        "Key: 0x%06lX\r\n"
-        "Yek: 0x%06lX\r\n"
-        "Serial: 0x%05lX\r\n"
-        "ID: 0x%0X",
+        "%s %dbit\r\n"
+        "Key:0x%06lX\r\n"
+        "SN:0x%05lX Btn:%X",
         instance->generic.protocol_name,
         instance->generic.data_count_bit,
         (uint32_t)(instance->generic.data & 0xFFFFFF),
-        (uint32_t)(code_found_reverse & 0xFFFFFF),
         instance->generic.serial,
         instance->generic.btn);
 }

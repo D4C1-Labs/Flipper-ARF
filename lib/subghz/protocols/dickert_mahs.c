@@ -77,52 +77,13 @@ const SubGhzProtocol subghz_protocol_dickert_mahs = {
 static void subghz_protocol_encoder_dickert_mahs_parse_buffer(
     SubGhzProtocolDecoderDickertMAHS* instance,
     FuriString* output) {
-    // We assume we have only decodes < 64 bit!
-    uint64_t data = instance->generic.data;
-    uint8_t bits[36] = {};
-
-    // Convert uint64_t into bit array
-    for(int i = 35; i >= 0; i--) {
-        if(data & 1) {
-            bits[i] = 1;
-        }
-        data >>= 1;
-    }
-
-    // Decode symbols
-    FuriString* code = furi_string_alloc();
-    for(size_t i = 0; i < 35; i += 2) {
-        uint8_t dip = (bits[i] << 1) + bits[i + 1];
-        //  PLUS  = 3, // 0b11
-        //  ZERO  = 1, // 0b01
-        //  MINUS = 0, // 0x00
-        if(dip == 0x01) {
-            furi_string_cat(code, "0");
-        } else if(dip == 0x00) {
-            furi_string_cat(code, "-");
-        } else if(dip == 0x03) {
-            furi_string_cat(code, "+");
-        } else {
-            furi_string_cat(code, "?");
-        }
-    }
-
-    FuriString* user_dips = furi_string_alloc();
-    FuriString* fact_dips = furi_string_alloc();
-    furi_string_set_n(user_dips, code, 0, 10);
-    furi_string_set_n(fact_dips, code, 10, 8);
-
     furi_string_cat_printf(
         output,
-        "%s\r\n"
-        "User-Dips:\t%s\r\n"
-        "Fac-Code:\t%s\r\n",
+        "%s %dbit\r\n"
+        "Key:0x%09llX\r\n",
         instance->generic.protocol_name,
-        furi_string_get_cstr(user_dips),
-        furi_string_get_cstr(fact_dips));
-    furi_string_free(user_dips);
-    furi_string_free(fact_dips);
-    furi_string_free(code);
+        instance->generic.data_count_bit,
+        (unsigned long long)instance->generic.data);
 }
 
 void* subghz_protocol_encoder_dickert_mahs_alloc(SubGhzEnvironment* environment) {

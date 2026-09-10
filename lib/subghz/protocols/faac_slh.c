@@ -723,25 +723,16 @@ void subghz_protocol_decoder_faac_slh_get_string(void* context, FuriString* outp
     SubGhzProtocolDecoderFaacSLH* instance = context;
     subghz_protocol_faac_slh_check_remote_controller(
         &instance->generic, instance->keystore, &instance->manufacture_name);
-    uint32_t code_fix = instance->generic.data >> 32;
-    uint32_t code_hop = instance->generic.data & 0xFFFFFFFF;
 
     if(faac_prog_mode == true) {
         furi_string_cat_printf(
             output,
             "%s %dbit\r\n"
-            "Master Remote Prog Mode\r\n"
-            "Ke:%lX%08lX\r\n"
-            "Kd:%lX%08lX\r\n"
-            "Seed:%08lX mCnt:%02X",
+            "Key:0x%lX%08lX\r\n",
             instance->generic.protocol_name,
             instance->generic.data_count_bit,
             (uint32_t)(instance->generic.data >> 32),
-            (uint32_t)instance->generic.data,
-            (uint32_t)(instance->generic.data_2 >> 32),
-            (uint32_t)instance->generic.data_2,
-            instance->generic.seed,
-            (uint8_t)(instance->generic.cnt & 0xFF));
+            (uint32_t)instance->generic.data);
     } else if((allow_zero_seed == false) && (instance->generic.seed == 0x0)) {
         // push protocol data to global variable
         subghz_block_generic_global.btn_is_available = true;
@@ -751,18 +742,14 @@ void subghz_protocol_decoder_faac_slh_get_string(void* context, FuriString* outp
         furi_string_cat_printf(
             output,
             "%s %dbit\r\n"
-            "Key:%lX%08lX\r\n"
-            "Fix:%08lX\r\n"
-            "Hop:%08lX    Btn:%X\r\n"
-            "Sn:%07lX Sd:Unknown",
+            "Key:0x%lX%08lX\r\n"
+            "SN:0x%lX Btn:%X\r\n",
             instance->generic.protocol_name,
             instance->generic.data_count_bit,
             (uint32_t)(instance->generic.data >> 32),
             (uint32_t)instance->generic.data,
-            code_fix,
-            code_hop,
-            instance->generic.btn,
-            instance->generic.serial);
+            instance->generic.serial,
+            instance->generic.btn);
     } else {
         // push protocol data to global variable
         subghz_block_generic_global.cnt_is_available = true;
@@ -777,19 +764,15 @@ void subghz_protocol_decoder_faac_slh_get_string(void* context, FuriString* outp
         furi_string_cat_printf(
             output,
             "%s %dbit\r\n"
-            "Key:%lX%08lX\r\n"
-            "Fix:%08lX    Cnt:%05lX\r\n"
-            "Hop:%08lX    Btn:%X\r\n"
-            "Sn:%07lX Sd:%08lX",
+            "Key:0x%lX%08lX\r\n"
+            "SN:0x%lX Btn:%X\r\n"
+            "Cnt:%05lX\r\n",
             instance->generic.protocol_name,
             instance->generic.data_count_bit,
             (uint32_t)(instance->generic.data >> 32),
             (uint32_t)instance->generic.data,
-            code_fix,
-            instance->generic.cnt,
-            code_hop,
-            instance->generic.btn,
             instance->generic.serial,
-            instance->generic.seed);
+            instance->generic.btn,
+            instance->generic.cnt);
     }
 }

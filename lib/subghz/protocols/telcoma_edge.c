@@ -182,10 +182,10 @@ void subghz_protocol_decoder_telcoma_edge_get_string(void* context, FuriString* 
     uint8_t channel = payload & 0x07;
     furi_string_cat_printf(
         output,
-        "Telcoma/Cardin\nEDGE %db\r\n"
+        "%s %dbit\r\n"
         "Key:0x%08lX\r\n"
-        "Serial:0x%05lX\r\n"
-        "Ch:0x%01X\r\n",
+        "SN:0x%lX Btn:%X",
+        instance->generic.protocol_name,
         instance->generic.data_count_bit,
         (unsigned long)data,
         (unsigned long)serial,

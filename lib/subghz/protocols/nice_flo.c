@@ -319,17 +319,12 @@ void subghz_protocol_decoder_nice_flo_get_string(void* context, FuriString* outp
     SubGhzProtocolDecoderNiceFlo* instance = context;
 
     uint32_t code_found_lo = instance->generic.data & 0x00000000ffffffff;
-    uint64_t code_found_reverse = subghz_protocol_blocks_reverse_key(
-        instance->generic.data, instance->generic.data_count_bit);
-    uint32_t code_found_reverse_lo = code_found_reverse & 0x00000000ffffffff;
 
     furi_string_cat_printf(
         output,
         "%s %dbit\r\n"
-        "Key:0x%08lX\r\n"
-        "Yek:0x%08lX\r\n",
+        "Key:0x%08lX\r\n",
         instance->generic.protocol_name,
         instance->generic.data_count_bit,
-        code_found_lo,
-        code_found_reverse_lo);
+        code_found_lo);
 }

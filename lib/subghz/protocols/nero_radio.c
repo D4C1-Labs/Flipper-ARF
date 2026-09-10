@@ -422,12 +422,6 @@ void subghz_protocol_decoder_nero_radio_get_string(void* context, FuriString* ou
     uint32_t code_found_hi = instance->generic.data >> 32;
     uint32_t code_found_lo = instance->generic.data & 0x00000000ffffffff;
 
-    uint64_t code_found_reverse = subghz_protocol_blocks_reverse_key(
-        instance->generic.data, instance->generic.data_count_bit);
-
-    uint32_t code_found_reverse_hi = code_found_reverse >> 32;
-    uint32_t code_found_reverse_lo = code_found_reverse & 0x00000000ffffffff;
-
     subghz_protocol_nero_radio_parse_data(&instance->generic);
 
     // push protocol data to global variable
@@ -440,17 +434,11 @@ void subghz_protocol_decoder_nero_radio_get_string(void* context, FuriString* ou
         output,
         "%s %dbit\r\n"
         "Key:0x%lX%08lX\r\n"
-        "Yek:0x%lX%08lX\r\n"
-        "Sn: 0x%llX \r\n"
-        "CRC?: 0x%02X\r\n"
-        "Btn: %X\r\n",
+        "SN:0x%llX Btn:%X\r\n",
         instance->generic.protocol_name,
         instance->generic.data_count_bit,
         code_found_hi,
         code_found_lo,
-        code_found_reverse_hi,
-        code_found_reverse_lo,
         instance->generic.data_2,
-        (uint8_t)(instance->generic.data & 0xFF),
         instance->generic.btn);
 }

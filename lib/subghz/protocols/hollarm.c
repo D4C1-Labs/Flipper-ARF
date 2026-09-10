@@ -416,27 +416,6 @@ void subghz_protocol_decoder_hollarm_feed(void* context, bool level, volatile ui
  * Get button name.
  * @param btn Button number, 4 bit
  */
-static const char* subghz_protocol_hollarm_get_button_name(uint8_t btn) {
-    const char* name_btn[16] = {
-        "Unknown",
-        "Disarm", // B (2)
-        "Arm", // A (1)
-        "0x3",
-        "Ringtone/Alarm", // C (3)
-        "0x5",
-        "0x6",
-        "0x7",
-        "Ring", // D (4)
-        "Settings mode",
-        "Exit settings",
-        "Vibro sens. setting",
-        "Not used\n(in settings)",
-        "Volume setting",
-        "0xE",
-        "0xF"};
-    return btn <= 0xf ? name_btn[btn] : name_btn[0];
-}
-
 uint8_t subghz_protocol_decoder_hollarm_get_hash_data(void* context) {
     furi_assert(context);
     SubGhzProtocolDecoderHollarm* instance = context;
@@ -467,10 +446,6 @@ void subghz_protocol_decoder_hollarm_get_string(void* context, FuriString* outpu
 
     // Parse serial
     subghz_protocol_hollarm_remote_controller(&instance->generic);
-    // Get byte sum
-    uint8_t bytesum =
-        ((instance->generic.data >> 32) & 0xFF) + ((instance->generic.data >> 24) & 0xFF) +
-        ((instance->generic.data >> 16) & 0xFF) + ((instance->generic.data >> 8) & 0xFF);
 
     // push protocol data to global variable
     subghz_block_generic_global.btn_is_available = true;
@@ -480,16 +455,13 @@ void subghz_protocol_decoder_hollarm_get_string(void* context, FuriString* outpu
 
     furi_string_cat_printf(
         output,
-        "%s %db\r\n"
-        "Key: 0x%02lX%08lX\r\n"
-        "Serial: 0x%06lX  Sum: %02X\r\n"
-        "Btn: 0x%01X - %s\r\n",
+        "%s %dbit\r\n"
+        "Key:0x%02lX%08lX\r\n"
+        "SN:0x%06lX Btn:%X\r\n",
         instance->generic.protocol_name,
         instance->generic.data_count_bit,
         (uint32_t)(instance->generic.data >> 32),
         (uint32_t)instance->generic.data,
         instance->generic.serial,
-        bytesum,
-        instance->generic.btn,
-        subghz_protocol_hollarm_get_button_name(instance->generic.btn));
+        instance->generic.btn);
 }

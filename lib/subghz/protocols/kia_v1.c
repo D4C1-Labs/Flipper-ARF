@@ -118,25 +118,6 @@ static void subghz_protocol_kia_v1_check_remote_controller(SubGhzProtocolDecoder
     instance->crc_check = (crc == (instance->generic.data & 0xF));
 }
 
-static const char* subghz_protocol_kia_v1_get_name_button(uint8_t btn) {
-    const char* name;
-    switch(btn) {
-    case 0x1:
-        name = "Close";
-        break;
-    case 0x2:
-        name = "Open";
-        break;
-    case 0x3:
-        name = "Boot";
-        break;
-    default:
-        name = "??";
-        break;
-    }
-    return name;
-}
-
 void* subghz_protocol_encoder_kia_v1_alloc(SubGhzEnvironment* environment) {
     UNUSED(environment);
     SubGhzProtocolEncoderKiaV1* instance = calloc(1, sizeof(SubGhzProtocolEncoderKiaV1));
@@ -500,18 +481,16 @@ void subghz_protocol_decoder_kia_v1_get_string(void* context, FuriString* output
     furi_string_cat_printf(
         output,
         "%s %dbit\r\n"
-        "Key:%06lX%08lX\r\n"
-        "Serial:%08lX\r\n"
-        "Cnt:%03lX CRC:%01X %s\r\n"
-        "Btn:%02X:%s\r\n",
+        "Key:0x%06lX%08lX\r\n"
+        "SN:0x%lX Btn:%X\r\n"
+        "CRC:%01X %s Cnt:%03lX\r\n",
         instance->generic.protocol_name,
         instance->generic.data_count_bit,
         code_found_hi,
         code_found_lo,
         instance->generic.serial,
-        instance->generic.cnt,
+        instance->generic.btn,
         instance->crc,
         instance->crc_check ? "OK" : "WRONG",
-        instance->generic.btn,
-        subghz_protocol_kia_v1_get_name_button(instance->generic.btn));
+        instance->generic.cnt);
 }

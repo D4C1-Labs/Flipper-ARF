@@ -755,27 +755,6 @@ static void subghz_protocol_somfy_keytis_check_remote_controller(SubGhzBlockGene
  * Get button name.
  * @param btn Button number, 4 bit
  */
-static const char* subghz_protocol_somfy_keytis_get_name_button(uint8_t btn) {
-    const char* name_btn[0x10] = {
-        "Unknown",
-        "0x01",
-        "0x02",
-        "Prog",
-        "Key_1",
-        "0x05",
-        "0x06",
-        "0x07",
-        "0x08",
-        "0x09",
-        "0x0A",
-        "0x0B",
-        "0x0C",
-        "0x0D",
-        "0x0E",
-        "0x0F"};
-    return btn <= 0xf ? name_btn[btn] : name_btn[0];
-}
-
 uint8_t subghz_protocol_decoder_somfy_keytis_get_hash_data(void* context) {
     furi_assert(context);
     SubGhzProtocolDecoderSomfyKeytis* instance = context;
@@ -850,19 +829,15 @@ void subghz_protocol_decoder_somfy_keytis_get_string(void* context, FuriString* 
 
     furi_string_cat_printf(
         output,
-        "%s %db\r\n"
-        "%lX%08lX%06lX\r\n"
-        "Sn:0x%06lX \r\n"
-        "Cnt:%04lX\r\n"
-        "Btn:%X - %s\r\n",
-
+        "%s %dbit\r\n"
+        "Key:0x%lX%08lX\r\n"
+        "SN:0x%lX Btn:%X\r\n"
+        "Cnt:%04lX",
         instance->generic.protocol_name,
         instance->generic.data_count_bit,
         (uint32_t)(instance->generic.data >> 32),
         (uint32_t)instance->generic.data,
-        instance->press_duration_counter,
         instance->generic.serial,
-        instance->generic.cnt,
         instance->generic.btn,
-        subghz_protocol_somfy_keytis_get_name_button(instance->generic.btn));
+        instance->generic.cnt);
 }

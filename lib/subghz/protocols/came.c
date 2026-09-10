@@ -358,11 +358,6 @@ void subghz_protocol_decoder_came_get_string(void* context, FuriString* output) 
 
     uint32_t code_found_lo = instance->generic.data & 0x000003ffffffffff;
 
-    uint64_t code_found_reverse = subghz_protocol_blocks_reverse_key(
-        instance->generic.data, instance->generic.data_count_bit);
-
-    uint32_t code_found_reverse_lo = code_found_reverse & 0x000003ffffffffff;
-
     const char* name = instance->generic.protocol_name;
     switch(instance->generic.data_count_bit) {
     case PRASTEL_25_COUNT_BIT:
@@ -377,10 +372,8 @@ void subghz_protocol_decoder_came_get_string(void* context, FuriString* output) 
     furi_string_cat_printf(
         output,
         "%s %dbit\r\n"
-        "Key:0x%08lX\r\n"
-        "Yek:0x%08lX\r\n",
+        "Key:0x%08lX\r\n",
         name,
         instance->generic.data_count_bit,
-        code_found_lo,
-        code_found_reverse_lo);
+        code_found_lo);
 }
