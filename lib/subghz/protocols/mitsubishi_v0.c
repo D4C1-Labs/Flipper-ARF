@@ -1,6 +1,8 @@
 #include "mitsubishi_v0.h"
 #include <inttypes.h>
 
+#include "../blocks/custom_btn_i.h"
+
 #define TAG                          "MitsubishiProtocolV0"
 #define MITSUBISHI_V0_PREAMBLE_COUNT 100
 #define MITSUBISHI_V0_BIT_TE         250
@@ -268,6 +270,15 @@ SubGhzProtocolStatus
         uint32_t btn_temp = 0;
         flipper_format_read_uint32(flipper_format, "Btn", &btn_temp, 1);
         instance->generic.btn = (uint8_t)btn_temp;
+
+        // Full D-pad: generic.btn is a genuine (full byte) button that is loaded
+        // above, so it is safe to read here. Mitsubishi V0 has no documented set of
+        // alternate button codes, so we only enable the D-pad and re-send the
+        // originally captured button for every direction.
+        if(subghz_custom_btn_get_original() == 0) {
+            subghz_custom_btn_set_original(instance->generic.btn);
+        }
+        subghz_custom_btn_set_max(4);
 
         subghz_protocol_encoder_mitsubishi_v0_get_upload(instance);
         instance->encoder.is_running = true;

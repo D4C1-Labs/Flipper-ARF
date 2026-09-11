@@ -7,6 +7,8 @@
 #include "../blocks/generic.h"
 #include "../blocks/math.h"
 
+#include "../blocks/custom_btn_i.h"
+
 #define TAG "SubGhzProtocolPowerSmart"
 
 #define POWER_SMART_PACKET_HEADER      0xFD000000AA000000
@@ -211,6 +213,14 @@ SubGhzProtocolStatus
             flipper_format, "Repeat", (uint32_t*)&instance->encoder.repeat, 1);
 
         subghz_protocol_power_smart_remote_controller(&instance->generic);
+
+        // The button (K1/K2) is spread across the 64-bit frame and mirrored by
+        // inverted copies protected by the check_valid() consistency test. Safely
+        // re-encoding a different button would require rebuilding those inverted
+        // fields, so we only enable the D-pad (each direction re-sends the
+        // originally captured button) without touching the frame contents.
+        subghz_custom_btn_set_max(4);
+
         subghz_protocol_encoder_power_smart_get_upload(instance);
         instance->encoder.front = 0; // reset before start
         instance->encoder.is_running = true;

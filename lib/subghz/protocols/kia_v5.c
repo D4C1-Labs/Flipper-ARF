@@ -505,7 +505,9 @@ LevelDuration subghz_protocol_encoder_kia_v5_yield(void* context) {
     LevelDuration ret = instance->encoder.upload[instance->encoder.front];
 
     if(++instance->encoder.front == instance->encoder.size_upload) {
-        instance->encoder.repeat--;
+        // Endless/breakless TX: while OK is held (endless_tx set by the transmit
+        // scene) do not consume repeats, so the signal loops until release.
+        if(!subghz_block_generic_global.endless_tx) instance->encoder.repeat--;
         instance->encoder.front = 0;
     }
 
@@ -784,10 +786,22 @@ SubGhzProtocolStatus
     furi_assert(context);
     SubGhzProtocolDecoderKiaV5* instance = context;
 
-    SubGhzProtocolStatus ret = subghz_block_generic_deserialize_check_count_bit(
-        &instance->generic,
-        flipper_format,
-        subghz_protocol_kia_v5_const.min_count_bit_for_found);
+    // Tolerant bit-count check: accept both the current 67-bit captures and
+    // legacy .sub files saved when min_count_bit_for_found was 64, so old
+    // captures still emulate instead of failing with "Error history parse.".
+    // Deserialize without the framework's strict equality, then accept a range
+    // and normalize to the canonical bit count.
+    SubGhzProtocolStatus ret =
+        subghz_block_generic_deserialize(&instance->generic, flipper_format);
+    if(ret == SubGhzProtocolStatusOk) {
+        const uint16_t want = subghz_protocol_kia_v5_const.min_count_bit_for_found; // 67
+        if(instance->generic.data_count_bit == 64 ||
+           instance->generic.data_count_bit == want) {
+            instance->generic.data_count_bit = want; // normalize legacy 64 -> 67
+        } else {
+            ret = SubGhzProtocolStatusErrorValueBitCount;
+        }
+    }
 
     if(ret == SubGhzProtocolStatusOk) {
         flipper_format_rewind(flipper_format);

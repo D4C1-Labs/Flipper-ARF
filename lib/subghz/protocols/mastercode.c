@@ -6,6 +6,8 @@
 #include "../blocks/generic.h"
 #include "../blocks/math.h"
 
+#include "../blocks/custom_btn_i.h"
+
 // protocol MASTERCODE Clemsa MV1/MV12
 #define TAG "SubGhzProtocolMastercode"
 
@@ -171,6 +173,11 @@ SubGhzProtocolStatus
         // Optional value
         flipper_format_read_uint32(
             flipper_format, "Repeat", (uint32_t*)&instance->encoder.repeat, 1);
+
+        // Mastercode uses DIP switches (btn is a fixed DIP code, not a pressable
+        // button). Enable the D-pad so the transmit view exposes it, but every
+        // direction re-sends the originally captured code unchanged.
+        subghz_custom_btn_set_max(4);
 
         if(!subghz_protocol_encoder_mastercode_get_upload(instance)) {
             ret = SubGhzProtocolStatusErrorEncoderGetUpload;

@@ -514,7 +514,9 @@ LevelDuration subghz_protocol_encoder_kia_v3_v4_yield(void* context) {
         instance->crc_iter = (uint8_t)((instance->crc_iter + 1U) & 0x0FU);
         subghz_protocol_encoder_kia_v3_v4_patch_crc(instance);
         instance->encoder.front = 0;
-        instance->encoder.repeat--;
+        // Endless/breakless TX: while OK is held (endless_tx set by the transmit
+        // scene) do not consume repeats, so the signal loops until release.
+        if(!subghz_block_generic_global.endless_tx) instance->encoder.repeat--;
         if(instance->bursts_sent < KIA_V3_V4_CRC_SWEEP_COUNT) {
             instance->bursts_sent++;
         }
@@ -706,8 +708,13 @@ SubGhzProtocolStatus subghz_protocol_decoder_kia_v3_v4_serialize(
             break;
         }
 
-        const char* version_name = (instance->version == 0) ? "Kia V4" : "Kia V3";
-        if(!flipper_format_write_string_cstr(flipper_format, "Protocol", version_name)) {
+        // Write the REGISTERED protocol name so the registry/receiver can find
+        // this decoder+encoder by name on load/emulate. The V3-vs-V4 distinction
+        // is preserved separately in the "KIAVersion" field below. Writing the
+        // human name "Kia V3"/"Kia V4" here made the registry lookup fail
+        // ("Error history parse." / "Error in protocol parameters").
+        if(!flipper_format_write_string_cstr(
+               flipper_format, "Protocol", SUBGHZ_PROTOCOL_KIA_V3_V4_NAME)) {
             break;
         }
 
@@ -764,8 +771,21 @@ SubGhzProtocolStatus
     furi_assert(context);
     SubGhzProtocolDecoderKiaV3V4* instance = context;
 
+    // Tolerant bit-count check: serialize writes 68, but legacy .sub files may
+    // carry 64 (stale min_count_bit_for_found). Accept both so old captures
+    // still emulate instead of failing with "Error history parse.". Deserialize
+    // without the framework's strict equality, then normalize to 68.
     SubGhzProtocolStatus ret =
-        subghz_block_generic_deserialize_check_count_bit(&instance->generic, flipper_format, 64);
+        subghz_block_generic_deserialize(&instance->generic, flipper_format);
+    if(ret == SubGhzProtocolStatusOk) {
+        const uint16_t want = subghz_protocol_kia_v3_v4_const.min_count_bit_for_found; // 68
+        if(instance->generic.data_count_bit == 64 ||
+           instance->generic.data_count_bit == want) {
+            instance->generic.data_count_bit = want; // normalize legacy 64 -> 68
+        } else {
+            ret = SubGhzProtocolStatusErrorValueBitCount;
+        }
+    }
 
     if(ret == SubGhzProtocolStatusOk) {
         uint32_t temp = 0;

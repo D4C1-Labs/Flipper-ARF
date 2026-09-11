@@ -5,6 +5,8 @@
 #include "../blocks/generic.h"
 #include "../blocks/math.h"
 
+#include "../blocks/custom_btn_i.h"
+
 #define TAG "SubGhzProtocolTreadmill37"
 
 static const SubGhzBlockConst subghz_protocol_treadmill37_const = {
@@ -156,6 +158,13 @@ SubGhzProtocolStatus
             flipper_format, "Repeat", (uint32_t*)&instance->encoder.repeat, 1);
 
         subghz_protocol_treadmill37_check_remote_controller(&instance->generic);
+
+        // Treadmill37 (QH-433) has no discrete button field (the frame carries a
+        // serial and a rolling/counter value, btn is always 0). Enable the D-pad
+        // so the transmit view exposes it, but every direction re-sends the
+        // originally captured code unchanged.
+        subghz_custom_btn_set_max(4);
+
         subghz_protocol_encoder_treadmill37_get_upload(instance);
         instance->encoder.is_running = true;
     } while(false);

@@ -5,6 +5,8 @@
 #include "../blocks/generic.h"
 #include "../blocks/math.h"
 
+#include "../blocks/custom_btn_i.h"
+
 #define TAG "SubGhzProtocolMarantec24"
 
 static const SubGhzBlockConst subghz_protocol_marantec24_const = {
@@ -140,6 +142,35 @@ static void
 static void subghz_protocol_marantec24_check_remote_controller(SubGhzBlockGeneric* instance) {
     instance->serial = instance->data >> 4;
     instance->btn = instance->data & 0xF;
+
+    // Save original button for later use
+    if(subghz_custom_btn_get_original() == 0) {
+        subghz_custom_btn_set_original(instance->btn);
+    }
+    subghz_custom_btn_set_max(4);
+}
+
+// Get custom button code
+// Marantec24 known buttons (from decoder samples): 0x8, 0x4, 0xC, 0x0
+static uint8_t subghz_protocol_marantec24_get_btn_code(void) {
+    uint8_t custom_btn_id = subghz_custom_btn_get();
+    uint8_t original_btn_code = subghz_custom_btn_get_original();
+    uint8_t btn = original_btn_code;
+
+    if((custom_btn_id == SUBGHZ_CUSTOM_BTN_OK) && (original_btn_code != 0)) {
+        // Restore original button code
+        btn = original_btn_code;
+    } else if(custom_btn_id == SUBGHZ_CUSTOM_BTN_UP) {
+        btn = 0x8;
+    } else if(custom_btn_id == SUBGHZ_CUSTOM_BTN_DOWN) {
+        btn = 0x4;
+    } else if(custom_btn_id == SUBGHZ_CUSTOM_BTN_LEFT) {
+        btn = 0xC;
+    } else if(custom_btn_id == SUBGHZ_CUSTOM_BTN_RIGHT) {
+        btn = 0x0;
+    }
+
+    return btn;
 }
 
 SubGhzProtocolStatus
@@ -159,7 +190,14 @@ SubGhzProtocolStatus
         flipper_format_read_uint32(
             flipper_format, "Repeat", (uint32_t*)&instance->encoder.repeat, 1);
 
+        // Parse serial/btn and enable D-pad custom buttons
         subghz_protocol_marantec24_check_remote_controller(&instance->generic);
+
+        // Re-encode key using custom or default button
+        instance->generic.btn = subghz_protocol_marantec24_get_btn_code();
+        instance->generic.data =
+            ((uint64_t)instance->generic.serial << 4) | (instance->generic.btn & 0xF);
+
         subghz_protocol_encoder_marantec24_get_upload(instance);
         instance->encoder.is_running = true;
     } while(false);

@@ -6,6 +6,8 @@
 #include "../blocks/generic.h"
 #include "../blocks/math.h"
 
+#include "../blocks/custom_btn_i.h"
+
 #define TAG "SubGhzProtocolMagellan"
 
 static const SubGhzBlockConst subghz_protocol_magellan_const = {
@@ -167,6 +169,12 @@ SubGhzProtocolStatus
         // Optional value
         flipper_format_read_uint32(
             flipper_format, "Repeat", (uint32_t*)&instance->encoder.repeat, 1);
+
+        // Magellan is a sensor frame protected by an embedded CRC8 that would
+        // need recomputation for a different event code. To keep decode/CRC
+        // untouched we only expose the D-pad; every direction re-sends the
+        // original captured frame.
+        subghz_custom_btn_set_max(4);
 
         if(!subghz_protocol_encoder_magellan_get_upload(instance)) {
             instance->encoder.front = 0; // reset before start
