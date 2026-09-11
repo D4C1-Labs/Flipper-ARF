@@ -1,0 +1,14 @@
+App(
+    appid="weather_editor",
+    name="Weather Editor",
+    apptype=FlipperAppType.EXTERNAL,
+    targets=["f7"],
+    entry_point="weather_station_app",
+    requires=["gui"],
+    stack_size=8 * 1024,
+    fap_description="Weather Editor 2.4 EN: 25 RX/TX, lightweight .ws capture/edit saving, saved-file deletion and sensor simulation.",
+    fap_version="2.4",
+    fap_icon="weather_station_10px.png",
+    fap_category="Sub-GHz",
+    fap_icon_assets="images",
+)
