@@ -78,6 +78,23 @@ uint8_t subghz_hitag2_bf_get_capture_count(const SubGhzHitag2Bf* instance);
 uint32_t subghz_hitag2_bf_get_uid(const SubGhzHitag2Bf* instance);
 
 /**
+ * Retrieve the fields of a single stored capture by index. Used to build the
+ * BLE compute-offload request. Returns false if index is out of range.
+ * @param index capture index (0 .. capture_count-1)
+ * @param uid_out optional output for the 32-bit UID
+ * @param control_out optional output for the 10-bit rolling counter
+ * @param button_out optional output for the 4-bit button
+ * @param hop_out optional output for the 32-bit observed auth
+ */
+bool subghz_hitag2_bf_get_capture(
+    const SubGhzHitag2Bf* instance,
+    uint8_t index,
+    uint32_t* uid_out,
+    uint16_t* control_out,
+    uint8_t* button_out,
+    uint32_t* hop_out);
+
+/**
  * Set which levels are enabled. Bitmask: (1<<L1)|(1<<L2)|... Default: all.
  */
 void subghz_hitag2_bf_set_levels(SubGhzHitag2Bf* instance, uint8_t levels_mask);

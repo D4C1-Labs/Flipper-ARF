@@ -27,7 +27,12 @@
 // L5 (Hitag2Hell): full L0 sweep is 2^20 slots. We split into chunks so we
 // can call progress + yield often, and also to allow the caller to cancel
 // promptly. Chunk size = 4096 slots ~= a few seconds each on Cortex-M4.
-#define SUBGHZ_HITAG2_BF_L5_CHUNK_SIZE 4096U
+// Small L5 chunk so cancel/progress are polled between kernel calls often
+// enough to keep BACK responsive (the outer loop re-checks instance->cancel per
+// chunk). 256 matches qUnleashed's work-stealing chunk. A big chunk (e.g. 4096)
+// could run for minutes on the M4 before the outer cancel check ran, freezing
+// the UI while BACK's furi_thread_join waited.
+#define SUBGHZ_HITAG2_BF_L5_CHUNK_SIZE 256U
 #define SUBGHZ_HITAG2_BF_L5_TOTAL_SLOTS (1UL << 20)
 
 struct SubGhzHitag2Bf {
@@ -104,6 +109,23 @@ uint8_t subghz_hitag2_bf_get_capture_count(const SubGhzHitag2Bf* instance) {
 uint32_t subghz_hitag2_bf_get_uid(const SubGhzHitag2Bf* instance) {
     furi_check(instance);
     return instance->capture_count > 0 ? instance->captures[0].uid : 0;
+}
+
+bool subghz_hitag2_bf_get_capture(
+    const SubGhzHitag2Bf* instance,
+    uint8_t index,
+    uint32_t* uid_out,
+    uint16_t* control_out,
+    uint8_t* button_out,
+    uint32_t* hop_out) {
+    furi_check(instance);
+    if(index >= instance->capture_count) return false;
+    const SubGhzHitag2BfCapture* cap = &instance->captures[index];
+    if(uid_out) *uid_out = cap->uid;
+    if(control_out) *control_out = cap->control;
+    if(button_out) *button_out = cap->button;
+    if(hop_out) *hop_out = cap->hop;
+    return true;
 }
 
 void subghz_hitag2_bf_set_levels(SubGhzHitag2Bf* instance, uint8_t levels_mask) {
@@ -569,7 +591,9 @@ static bool subghz_hitag2_bf_hell_progress(
             return false;
         }
     }
-    furi_delay_ms(1);
+    // No furi_delay_ms here: it throttled throughput (a forced 1ms sleep per
+    // progress tick). The worker thread already yields via the RTOS; the UI
+    // stays alive through the event loop, and cancel is polled above.
     return true;
 }
 
@@ -597,7 +621,10 @@ static bool subghz_hitag2_bf_try_hell_on_capture(
         Hitag2HellConfig cfg = {0};
         cfg.progress_cb = subghz_hitag2_bf_hell_progress;
         cfg.progress_ctx = &bridge;
-        cfg.timeout_ms = 0;
+        // Backstop: force the kernel to return within ~500ms even if it hasn't
+        // hit its internal 1024-slot progress checkpoint, so the outer loop
+        // re-checks instance->cancel and BACK stays responsive.
+        cfg.timeout_ms = 500;
         cfg.now_ms_cb = furi_get_tick;
         cfg.l0_start = chunk_start;
         cfg.l0_end = chunk_start + SUBGHZ_HITAG2_BF_L5_CHUNK_SIZE;
@@ -650,6 +677,18 @@ static bool subghz_hitag2_bf_run_l5(
     // attack on additional captures would multiply the wall time without much
     // gain (candidates from cap[0] already include the true key).
     if(instance->capture_count == 0) return false;
+    // Emit an initial L5 frame so the UI switches from "L4 100%" to
+    // "Hitag2Hell 0%" immediately, instead of appearing frozen on L4 during the
+    // first (minutes-long on M4) computation window before the kernel's own
+    // progress callback fires.
+    if(progress_cb) {
+        progress_cb(
+            SubGhzHitag2BfLevelHitag2Hell,
+            "Hitag2Hell",
+            0,
+            instance->keys_tested_total,
+            context);
+    }
     return subghz_hitag2_bf_try_hell_on_capture(
         instance, &instance->captures[0], progress_cb, context);
 }

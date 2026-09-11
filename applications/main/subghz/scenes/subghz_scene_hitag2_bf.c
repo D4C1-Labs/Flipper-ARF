@@ -13,6 +13,7 @@
 #include <furi.h>
 #include <storage/storage.h>
 #include <toolbox/path.h>
+#include <bt/bt_service/bt.h>
 
 #define TAG "SubGhzSceneHitag2Bf"
 
@@ -20,6 +21,16 @@
 
 // Maximum files to scan in the same directory when auto-loading captures
 #define HITAG2_BF_MAX_SCAN_FILES 64U
+
+// --- BLE compute-offload wire protocol (must match qUnleashed exactly) ---
+#define HT_MSG_BF_REQUEST  0x20 // Flipper -> phone
+#define HT_MSG_BF_PROGRESS 0x21 // phone -> Flipper
+#define HT_MSG_BF_RESULT   0x22 // phone -> Flipper
+#define HT_MSG_BF_CANCEL   0x23 // Flipper -> phone
+
+// Cap offloaded captures so the request fits BLE_SVC_SERIAL_CUSTOM_DATA_LEN_MAX
+// (64). Request = 14-byte header + 7 bytes/capture -> 7 captures = 63 bytes.
+#define HT_MSG_BF_MAX_OFFLOAD_CAPTURES 7U
 
 typedef struct {
     SubGhz* subghz;
@@ -32,6 +43,7 @@ typedef struct {
     uint8_t found_key[6];
     uint32_t found_epoch;
     uint8_t found_level;
+    bool ble_offload;
 } Hitag2BfCtx;
 
 // -----------------------------------------------------------------------------
@@ -176,6 +188,72 @@ static void hitag2_bf_write_key_to_fff(Hitag2BfCtx* ctx) {
         real_fff, "Hitag2 Epoch", &ctx->found_epoch, 1);
 }
 
+// Append the recovered key to the known-keys dictionary at
+// /ext/subghz/assets/hitag2 so the list grows over time and future attacks hit
+// it at L1/L3 instantly. Format: one 12-hex-char line per key (no spaces),
+// matching the file's convention. Deduplicates by scanning existing lines
+// first. Best-effort: any storage failure is silently ignored (the key is
+// already saved in the .sub). Used for BOTH local and offloaded finds.
+static void hitag2_bf_append_key_to_dict(Hitag2BfCtx* ctx) {
+    char key_hex[13];
+    snprintf(
+        key_hex,
+        sizeof(key_hex),
+        "%02X%02X%02X%02X%02X%02X",
+        ctx->found_key[0],
+        ctx->found_key[1],
+        ctx->found_key[2],
+        ctx->found_key[3],
+        ctx->found_key[4],
+        ctx->found_key[5]);
+
+    Storage* storage = furi_record_open(RECORD_STORAGE);
+
+    // Ensure the assets directory exists (mirrors the keeloq keystore pattern).
+    storage_simply_mkdir(storage, EXT_PATH("subghz/assets"));
+
+    const char* path = EXT_PATH("subghz/assets/hitag2");
+
+    // Dedup: scan the existing file for this key (case-insensitive-ish; the
+    // file uses uppercase, and we write uppercase, so a plain substring match
+    // over the whole content is sufficient and cheap for a small dictionary).
+    bool already_present = false;
+    File* rf = storage_file_alloc(storage);
+    if(storage_file_open(rf, path, FSAM_READ, FSOM_OPEN_EXISTING)) {
+        char buf[256];
+        FuriString* content = furi_string_alloc();
+        size_t n;
+        while((n = storage_file_read(rf, buf, sizeof(buf))) > 0) {
+            furi_string_cat_str(content, ""); // ensure alloc
+            for(size_t i = 0; i < n; i++) {
+                furi_string_push_back(content, buf[i]);
+            }
+        }
+        if(furi_string_search_str(content, key_hex, 0) != FURI_STRING_FAILURE) {
+            already_present = true;
+        }
+        furi_string_free(content);
+    }
+    storage_file_close(rf);
+    storage_file_free(rf);
+
+    if(!already_present) {
+        File* wf = storage_file_alloc(storage);
+        // Open for append (create if missing).
+        if(storage_file_open(wf, path, FSAM_WRITE, FSOM_OPEN_APPEND)) {
+            char line[16];
+            int len = snprintf(line, sizeof(line), "%s\n", key_hex);
+            if(len > 0) {
+                storage_file_write(wf, line, (size_t)len);
+            }
+        }
+        storage_file_close(wf);
+        storage_file_free(wf);
+    }
+
+    furi_record_close(RECORD_STORAGE);
+}
+
 // -----------------------------------------------------------------------------
 // Progress callback (from worker thread)
 // -----------------------------------------------------------------------------
@@ -219,6 +297,108 @@ static bool hitag2_bf_progress_cb(
 
     return true;
 }
+
+// -----------------------------------------------------------------------------
+// BLE compute-offload (Flipper offloads the heavy attack to a connected phone)
+// -----------------------------------------------------------------------------
+
+static void hitag2_ble_data_received(uint8_t* data, uint16_t size, void* context) {
+    Hitag2BfCtx* ctx = context;
+    if(size < 1 || ctx->cancel) return;
+
+    if(data[0] == HT_MSG_BF_PROGRESS && size >= 10) {
+        uint8_t pct = data[1];
+        uint64_t slots_done = 0;
+        memcpy(&slots_done, data + 2, 8);
+
+        uint32_t elapsed_sec = (furi_get_tick() - ctx->start_tick) / 1000U;
+
+        subghz_view_hitag2_bf_update_stats(
+            ctx->subghz->subghz_hitag2_bf,
+            SubGhzHitag2BfLevelHitag2Hell,
+            "H2H",
+            pct,
+            slots_done,
+            0,
+            elapsed_sec,
+            0,
+            subghz_hitag2_bf_get_capture_count(ctx->bf));
+
+    } else if(data[0] == HT_MSG_BF_RESULT && size >= 12) {
+        uint8_t found = data[1];
+
+        if(found) {
+            memcpy(ctx->found_key, data + 2, 6);
+            memcpy(&ctx->found_epoch, data + 8, 4);
+            ctx->found_level = SubGhzHitag2BfLevelHitag2Hell;
+            ctx->success = true;
+        }
+
+        view_dispatcher_send_custom_event(
+            ctx->subghz->view_dispatcher, HITAG2_BF_EVENT_DONE);
+    }
+}
+
+static void hitag2_ble_cleanup(Hitag2BfCtx* ctx) {
+    if(!ctx->ble_offload) return;
+    Bt* bt = furi_record_open(RECORD_BT);
+    bt_set_custom_data_callback(bt, NULL, NULL);
+    furi_record_close(RECORD_BT);
+    ctx->ble_offload = false;
+}
+
+static bool hitag2_ble_start_offload(Hitag2BfCtx* ctx) {
+    Bt* bt = furi_record_open(RECORD_BT);
+    if(!bt_is_connected(bt)) {
+        furi_record_close(RECORD_BT);
+        return false;
+    }
+
+    // Register callback for incoming data (progress/result)
+    bt_set_custom_data_callback(bt, hitag2_ble_data_received, ctx);
+
+    // Build the BF request from the captures already loaded in ctx.
+    // Cap at HT_MSG_BF_MAX_OFFLOAD_CAPTURES to stay within the 64-byte limit.
+    uint8_t cap_total = subghz_hitag2_bf_get_capture_count(ctx->bf);
+    uint8_t cap_count = (cap_total > HT_MSG_BF_MAX_OFFLOAD_CAPTURES) ?
+                            (uint8_t)HT_MSG_BF_MAX_OFFLOAD_CAPTURES :
+                            cap_total;
+
+    uint32_t uid = subghz_hitag2_bf_get_uid(ctx->bf);
+    uint32_t l0_start = 0;
+    uint32_t l0_end = 0;
+
+    uint8_t req[BLE_SVC_SERIAL_CUSTOM_DATA_LEN_MAX];
+    uint16_t off = 0;
+    req[off++] = HT_MSG_BF_REQUEST; // [0]
+    memcpy(req + off, &uid, 4); // [1..4] uid LE
+    off += 4;
+    memcpy(req + off, &l0_start, 4); // [5..8] l0_start LE
+    off += 4;
+    memcpy(req + off, &l0_end, 4); // [9..12] l0_end LE
+    off += 4;
+    req[off++] = cap_count; // [13] capture_count
+
+    for(uint8_t i = 0; i < cap_count; i++) {
+        uint16_t control = 0;
+        uint8_t button = 0;
+        uint32_t hop = 0;
+        subghz_hitag2_bf_get_capture(ctx->bf, i, NULL, &control, &button, &hop);
+        req[off++] = button; // btn:1
+        memcpy(req + off, &control, 2); // cnt:2 LE
+        off += 2;
+        memcpy(req + off, &hop, 4); // hop:4 LE
+        off += 4;
+    }
+
+    bt_custom_data_tx(bt, req, off);
+
+    furi_record_close(RECORD_BT);
+    ctx->ble_offload = true;
+    return true;
+}
+
+// -----------------------------------------------------------------------------
 
 static int32_t hitag2_bf_thread(void* context) {
     Hitag2BfCtx* ctx = context;
@@ -293,8 +473,13 @@ void subghz_scene_hitag2_bf_on_enter(void* context) {
     view_dispatcher_switch_to_view(subghz->view_dispatcher, SubGhzViewIdHitag2Bf);
 
     ctx->start_tick = furi_get_tick();
-    ctx->thread = furi_thread_alloc_ex("Hitag2BF", 4096, hitag2_bf_thread, ctx);
-    furi_thread_start(ctx->thread);
+
+    // Try BLE offload first, fall back to the local worker thread if no phone
+    // is connected.
+    if(!hitag2_ble_start_offload(ctx)) {
+        ctx->thread = furi_thread_alloc_ex("Hitag2BF", 4096, hitag2_bf_thread, ctx);
+        furi_thread_start(ctx->thread);
+    }
 }
 
 bool subghz_scene_hitag2_bf_on_event(void* context, SceneManagerEvent event) {
@@ -305,6 +490,7 @@ bool subghz_scene_hitag2_bf_on_event(void* context, SceneManagerEvent event) {
 
     if(event.type == SceneManagerEventTypeCustom) {
         if(event.event == HITAG2_BF_EVENT_DONE) {
+            hitag2_ble_cleanup(ctx);
             if(ctx->thread) {
                 furi_thread_join(ctx->thread);
                 furi_thread_free(ctx->thread);
@@ -312,8 +498,12 @@ bool subghz_scene_hitag2_bf_on_event(void* context, SceneManagerEvent event) {
             }
 
             if(ctx->success) {
-                // Persist key into the file
+                // Persist key into the .sub file
                 hitag2_bf_write_key_to_fff(ctx);
+                // ...and grow the known-keys dictionary so it's found instantly
+                // next time. Fires for both local finds and offloaded (phone)
+                // finds, since both converge on this DONE handler.
+                hitag2_bf_append_key_to_dict(ctx);
                 subghz_save_protocol_to_file(
                     subghz,
                     subghz_txrx_get_fff_data(subghz->txrx),
@@ -366,6 +556,14 @@ bool subghz_scene_hitag2_bf_on_event(void* context, SceneManagerEvent event) {
             return true;
 
         } else if(event.event == SubGhzCustomEventViewTransmitterBack) {
+            if(ctx->ble_offload) {
+                // Tell the phone to stop the offloaded attack
+                Bt* bt = furi_record_open(RECORD_BT);
+                uint8_t cancel_msg = HT_MSG_BF_CANCEL;
+                bt_custom_data_tx(bt, &cancel_msg, 1);
+                furi_record_close(RECORD_BT);
+                hitag2_ble_cleanup(ctx);
+            }
             if(ctx->thread) {
                 ctx->cancel = true;
                 furi_thread_join(ctx->thread);
@@ -390,6 +588,7 @@ void subghz_scene_hitag2_bf_on_exit(void* context) {
         subghz->scene_manager, SubGhzSceneHitag2Bf);
 
     if(ctx) {
+        hitag2_ble_cleanup(ctx);
         if(ctx->thread) {
             ctx->cancel = true;
             furi_thread_join(ctx->thread);

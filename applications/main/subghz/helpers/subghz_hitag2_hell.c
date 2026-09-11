@@ -20,6 +20,13 @@
 
 #include <string.h>
 
+// The firmware is built at -Og by default (debug-friendly). This bitslice
+// kernel is the single hottest integer loop in the app; force -O3 + loop
+// unrolling on it alone so the M4 runs it at full speed (empirically ~2-4x vs
+// -Og) without changing the rest of the firmware's build. Pure integer
+// AND/OR/XOR/shift work, no FPU, so this is safe and deterministic.
+#pragma GCC optimize("O3", "unroll-loops")
+
 // ---------------------------------------------------------------------------
 // Bitslice type (32-way SIMD across 32 lanes of a uint32_t)
 // ---------------------------------------------------------------------------
@@ -53,6 +60,14 @@ typedef uint32_t bitslice_t;
 // Extra slack because state[47+r-p] can index up to 47+31-0 = 78; last accessed
 // index is state[77] (in round 31 filter with p=1 -> 47+31-1 = 77).
 #define STATE_ARR_LEN 80U
+
+// Per-round specialized filter/LFSR kernels with compile-time-constant state[]
+// indices (bit-identical to the runtime-index bs_filter_at/bs_lfsr_at below).
+// Ported from qUnleashed; requires bitslice_t, STATE_ARR_LEN and the f_*_bs
+// macros above, which are byte-identical between the two trees. Using these at
+// the hot call sites replaces per-call index arithmetic + non-inlined dispatch
+// with immediate-offset loads, a further speedup on top of -O3.
+#include "hell_kernels_gen.h"
 
 // ---------------------------------------------------------------------------
 // Layer 0 mask & layer new-bit tables (see gen_kernel.py)
@@ -172,49 +187,11 @@ static void emit_candidate(Hitag2HellResult* result, uint64_t state31) {
 // after layer 8).
 // ---------------------------------------------------------------------------
 
-// Compute filter output at round r, given fully-populated state[0..N] bitslices.
-static bitslice_t bs_filter_at(const bitslice_t state[STATE_ARR_LEN], uint8_t r) {
-    // Group bit-positions per round r (position p in S_r maps to state[p-r] or
-    // state[47+r-p]). This mirrors the scalar hitag2_fiat_filter.
-    static const int8_t group_pos[5][4] = {
-        {41, 42, 44, 45},
-        {32, 33, 35, 39},
-        {21, 24, 26, 30},
-        {14, 16, 18, 19},
-        { 1,  3,  4, 13},
-    };
-    static const bool is_fa[5] = {true, false, false, false, true};
-
-    bitslice_t g[5];
-    for(uint8_t gi = 0; gi < 5U; gi++) {
-        uint8_t idx[4];
-        for(uint8_t k = 0; k < 4U; k++) {
-            int8_t p = group_pos[gi][k];
-            idx[k] = (uint8_t)((p >= r) ? (p - r) : (47 + r - p));
-        }
-        // truth(fa or fb, fi(bit[idx0],...,bit[idx3])) == f_x_bs(bit[idx3],...,bit[idx0])
-        bitslice_t a = state[idx[3]];
-        bitslice_t b = state[idx[2]];
-        bitslice_t c = state[idx[1]];
-        bitslice_t d = state[idx[0]];
-        g[gi] = is_fa[gi] ? f_a_bs(a, b, c, d) : f_b_bs(a, b, c, d);
-    }
-    return f_c_bs(g[0], g[1], g[2], g[3], g[4]);
-}
-
-// Compute state[48+r] = LFSR feedback at round r (deterministic once all the
-// input state[] bits are known).
-static bitslice_t bs_lfsr_at(const bitslice_t state[STATE_ARR_LEN], uint8_t r) {
-    // LFSR taps in state at round r: positions {0,1,4,5,6,17,21,24,25,31,39,40,41,44,45,47}.
-    static const uint8_t taps[16] = {0, 1, 4, 5, 6, 17, 21, 24, 25, 31, 39, 40, 41, 44, 45, 47};
-    bitslice_t v = 0;
-    for(uint8_t i = 0; i < 16U; i++) {
-        uint8_t p = taps[i];
-        uint8_t idx = (uint8_t)((p >= r) ? (p - r) : (47 + r - p));
-        v ^= state[idx];
-    }
-    return v;
-}
+// The former runtime-index bs_filter_at(state, r) / bs_lfsr_at(state, r) were
+// replaced by the compile-time-constant per-round kernels in hell_kernels_gen.h
+// (bs_filter_at_rN / bs_lfsr_at_rN), which are bit-identical but far faster on
+// the M4 (immediate-offset loads, fully inlined). All call sites now use the
+// specialized kernels, so the runtime versions were removed.
 
 // ---------------------------------------------------------------------------
 // Deep search: enters with state[] populated with L0+L1(spread+scalar) bits.
@@ -232,7 +209,7 @@ static bool deep_search(
         for(uint8_t k = 0; k < 5U; k++) {
             state[k_layer2_bits[k]] = bs_from_bit((i2 >> k) & 1U);
         }
-        bitslice_t f2 = bs_filter_at(state, 2);
+        bitslice_t f2 = bs_filter_at_r2(state);
         bitslice_t alive2 = alive_mask & ~(f2 ^ ctx->keystream[2]);
         if(alive2 == 0) continue;
 
@@ -241,7 +218,7 @@ static bool deep_search(
             for(uint8_t k = 0; k < 4U; k++) {
                 state[k_layer3_bits[k]] = bs_from_bit((i3 >> k) & 1U);
             }
-            bitslice_t f3 = bs_filter_at(state, 3);
+            bitslice_t f3 = bs_filter_at_r3(state);
             bitslice_t alive3 = alive2 & ~(f3 ^ ctx->keystream[3]);
             if(alive3 == 0) continue;
 
@@ -250,7 +227,7 @@ static bool deep_search(
                 for(uint8_t k = 0; k < 2U; k++) {
                     state[k_layer4_bits[k]] = bs_from_bit((i4 >> k) & 1U);
                 }
-                bitslice_t f4 = bs_filter_at(state, 4);
+                bitslice_t f4 = bs_filter_at_r4(state);
                 bitslice_t alive4 = alive3 & ~(f4 ^ ctx->keystream[4]);
                 if(alive4 == 0) continue;
 
@@ -258,7 +235,7 @@ static bool deep_search(
                     for(uint8_t k = 0; k < 2U; k++) {
                         state[k_layer5_bits[k]] = bs_from_bit((i5 >> k) & 1U);
                     }
-                    bitslice_t f5 = bs_filter_at(state, 5);
+                    bitslice_t f5 = bs_filter_at_r5(state);
                     bitslice_t alive5 = alive4 & ~(f5 ^ ctx->keystream[5]);
                     if(alive5 == 0) continue;
 
@@ -266,7 +243,7 @@ static bool deep_search(
                         for(uint8_t k = 0; k < 2U; k++) {
                             state[k_layer6_bits[k]] = bs_from_bit((i6 >> k) & 1U);
                         }
-                        bitslice_t f6 = bs_filter_at(state, 6);
+                        bitslice_t f6 = bs_filter_at_r6(state);
                         bitslice_t alive6 = alive5 & ~(f6 ^ ctx->keystream[6]);
                         if(alive6 == 0) continue;
 
@@ -274,7 +251,7 @@ static bool deep_search(
                             for(uint8_t k = 0; k < 2U; k++) {
                                 state[k_layer7_bits[k]] = bs_from_bit((i7 >> k) & 1U);
                             }
-                            bitslice_t f7 = bs_filter_at(state, 7);
+                            bitslice_t f7 = bs_filter_at_r7(state);
                             bitslice_t alive7 = alive6 & ~(f7 ^ ctx->keystream[7]);
                             if(alive7 == 0) continue;
 
@@ -282,7 +259,7 @@ static bool deep_search(
                                 for(uint8_t k = 0; k < 2U; k++) {
                                     state[k_layer8_bits[k]] = bs_from_bit((i8 >> k) & 1U);
                                 }
-                                bitslice_t f8 = bs_filter_at(state, 8);
+                                bitslice_t f8 = bs_filter_at_r8(state);
                                 bitslice_t alive8 = alive7 & ~(f8 ^ ctx->keystream[8]);
                                 if(alive8 == 0) continue;
 
@@ -320,22 +297,75 @@ static bool deep_search(
                                 // Now state[0..54] all set.
                                 // Verify LFSR consistency for rounds 2..6 (state[50..54]).
                                 // Any lane inconsistent means the guesses were wrong.
-                                for(uint8_t r = 2; r < 7U; r++) {
-                                    bitslice_t expected = bs_lfsr_at(state, r);
-                                    alive8 &= ~(expected ^ state[48 + r]);
-                                    if(alive8 == 0) break;
-                                }
+                                // Unrolled with compile-time-constant kernels.
+#define HELL_LFSR_VERIFY(R)                                       \
+    alive8 &= ~(bs_lfsr_at_r##R(state) ^ state[48 + (R)]);        \
+    if(alive8 == 0) goto lfsr_verify_done;
+                                HELL_LFSR_VERIFY(2)
+                                HELL_LFSR_VERIFY(3)
+                                HELL_LFSR_VERIFY(4)
+                                HELL_LFSR_VERIFY(5)
+                                HELL_LFSR_VERIFY(6)
+#undef HELL_LFSR_VERIFY
+                                lfsr_verify_done:
                                 if(alive8 == 0) continue;
                                 // Compute state[55..79] via LFSR (deterministic).
-                                for(uint8_t r = 7; r < 32U; r++) {
-                                    state[48 + r] = bs_lfsr_at(state, r);
-                                }
+#define HELL_LFSR_COMPUTE(R) state[48 + (R)] = bs_lfsr_at_r##R(state);
+                                HELL_LFSR_COMPUTE(7)
+                                HELL_LFSR_COMPUTE(8)
+                                HELL_LFSR_COMPUTE(9)
+                                HELL_LFSR_COMPUTE(10)
+                                HELL_LFSR_COMPUTE(11)
+                                HELL_LFSR_COMPUTE(12)
+                                HELL_LFSR_COMPUTE(13)
+                                HELL_LFSR_COMPUTE(14)
+                                HELL_LFSR_COMPUTE(15)
+                                HELL_LFSR_COMPUTE(16)
+                                HELL_LFSR_COMPUTE(17)
+                                HELL_LFSR_COMPUTE(18)
+                                HELL_LFSR_COMPUTE(19)
+                                HELL_LFSR_COMPUTE(20)
+                                HELL_LFSR_COMPUTE(21)
+                                HELL_LFSR_COMPUTE(22)
+                                HELL_LFSR_COMPUTE(23)
+                                HELL_LFSR_COMPUTE(24)
+                                HELL_LFSR_COMPUTE(25)
+                                HELL_LFSR_COMPUTE(26)
+                                HELL_LFSR_COMPUTE(27)
+                                HELL_LFSR_COMPUTE(28)
+                                HELL_LFSR_COMPUTE(29)
+                                HELL_LFSR_COMPUTE(30)
+                                HELL_LFSR_COMPUTE(31)
+#undef HELL_LFSR_COMPUTE
                                 // Filter rounds 9..31 check.
-                                for(uint8_t r = 9; r < 32U; r++) {
-                                    bitslice_t fr = bs_filter_at(state, r);
-                                    alive8 &= ~(fr ^ ctx->keystream[r]);
-                                    if(alive8 == 0) break;
-                                }
+#define HELL_FILTER_CHECK(R)                                      \
+    alive8 &= ~(bs_filter_at_r##R(state) ^ ctx->keystream[R]);    \
+    if(alive8 == 0) goto filter_check_done;
+                                HELL_FILTER_CHECK(9)
+                                HELL_FILTER_CHECK(10)
+                                HELL_FILTER_CHECK(11)
+                                HELL_FILTER_CHECK(12)
+                                HELL_FILTER_CHECK(13)
+                                HELL_FILTER_CHECK(14)
+                                HELL_FILTER_CHECK(15)
+                                HELL_FILTER_CHECK(16)
+                                HELL_FILTER_CHECK(17)
+                                HELL_FILTER_CHECK(18)
+                                HELL_FILTER_CHECK(19)
+                                HELL_FILTER_CHECK(20)
+                                HELL_FILTER_CHECK(21)
+                                HELL_FILTER_CHECK(22)
+                                HELL_FILTER_CHECK(23)
+                                HELL_FILTER_CHECK(24)
+                                HELL_FILTER_CHECK(25)
+                                HELL_FILTER_CHECK(26)
+                                HELL_FILTER_CHECK(27)
+                                HELL_FILTER_CHECK(28)
+                                HELL_FILTER_CHECK(29)
+                                HELL_FILTER_CHECK(30)
+                                HELL_FILTER_CHECK(31)
+#undef HELL_FILTER_CHECK
+                                filter_check_done:
                                 if(alive8 == 0) continue;
 
                                 // Any surviving lanes are candidates.
@@ -388,7 +418,10 @@ bool hitag2_hell_recover(
         }
     }
     const uint32_t l0_total = l0_end - l0_start;
-    const uint32_t progress_step = 1024U;
+    // Poll progress/cancel/timeout every 128 L0 slots. Small enough that a 256-
+    // slot L5 chunk gets at least one in-kernel checkpoint (so BACK is honored
+    // and progress advances mid-chunk), without adding meaningful overhead.
+    const uint32_t progress_step = 128U;
     uint32_t next_progress = l0_start + progress_step;
     uint32_t t_start = 0;
     if(config && config->timeout_ms > 0 && config->now_ms_cb) {
@@ -431,7 +464,7 @@ bool hitag2_hell_recover(
             }
 
             // Round-1 filter check.
-            bitslice_t f1 = bs_filter_at(state, 1);
+            bitslice_t f1 = bs_filter_at_r1(state);
             bitslice_t alive = ~(f1 ^ keystream[1]);
             if(alive == 0) continue;
 
