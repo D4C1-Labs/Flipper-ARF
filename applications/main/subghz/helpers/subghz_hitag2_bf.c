@@ -557,7 +557,13 @@ typedef struct {
     void* outer_ctx;
     uint32_t chunk_base;   // L0 base index of this chunk (0..2^20 in steps of CHUNK_SIZE)
     uint64_t keys_before_l5; // [BUGFIX] snapshot of keys_tested_total when L5 started
+    uint32_t last_emit_tick; // wall-clock tick of the last UI update (for time-based cadence)
 } Hitag2HellBridge;
+
+// Update the UI / yield the CPU at most this often (ms). Matches PSA's smooth
+// feel: a fixed wall-clock cadence regardless of how many L0 slots were
+// processed (deep_search makes per-slot time wildly variable).
+#define SUBGHZ_HITAG2_BF_UI_INTERVAL_MS 200U
 
 static bool subghz_hitag2_bf_hell_progress(
     uint8_t pct_within_chunk, uint64_t states_tested, void* ctx) {
@@ -568,7 +574,19 @@ static bool subghz_hitag2_bf_hell_progress(
     // the L1..L4 work that already happened.
     b->instance->keys_tested_total = b->keys_before_l5 + states_tested;
 
+    // Cancel is polled on EVERY callback (cheap) so BACK is honored promptly.
     if(b->instance->cancel) return false;
+
+    // Throttle UI updates + the CPU yield to a fixed wall-clock cadence. This
+    // keeps the progress bar smooth (like PSA) and, crucially, guarantees the
+    // single-core M4's UI/input threads get CPU time regardless of how long a
+    // deep_search burst runs — without the yield the equal-priority worker
+    // starves the UI and BACK freezes.
+    uint32_t now = furi_get_tick();
+    if((now - b->last_emit_tick) < SUBGHZ_HITAG2_BF_UI_INTERVAL_MS) {
+        return true;
+    }
+    b->last_emit_tick = now;
 
     if(b->outer_cb) {
         // Global percent = (chunk_base + pct_within_chunk/100 * CHUNK) / TOTAL
@@ -591,9 +609,10 @@ static bool subghz_hitag2_bf_hell_progress(
             return false;
         }
     }
-    // No furi_delay_ms here: it throttled throughput (a forced 1ms sleep per
-    // progress tick). The worker thread already yields via the RTOS; the UI
-    // stays alive through the event loop, and cancel is polled above.
+    // Yield the CPU so the equal-priority UI/input service threads run and the
+    // event loop can process BACK and repaint. This is exactly what keeps PSA
+    // responsive; removing it was the regression that re-froze L5.
+    furi_delay_ms(1);
     return true;
 }
 
@@ -609,6 +628,7 @@ static bool subghz_hitag2_bf_try_hell_on_capture(
     // [BUGFIX] Snapshot keys_tested_total so L5's states_tested is added on top
     // of L1..L4 work rather than clobbering it.
     bridge.keys_before_l5 = instance->keys_tested_total;
+    bridge.last_emit_tick = furi_get_tick();
 
     // Sweep the layer-0 space in chunks
     for(uint32_t chunk_start = 0;

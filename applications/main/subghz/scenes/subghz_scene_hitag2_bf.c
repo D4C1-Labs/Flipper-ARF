@@ -478,6 +478,10 @@ void subghz_scene_hitag2_bf_on_enter(void* context) {
     // is connected.
     if(!hitag2_ble_start_offload(ctx)) {
         ctx->thread = furi_thread_alloc_ex("Hitag2BF", 4096, hitag2_bf_thread, ctx);
+        // Run below the UI/input services (Normal=16) so the compute loop can
+        // never starve them on the single-core M4 — BACK stays responsive even
+        // during a long deep_search burst.
+        furi_thread_set_priority(ctx->thread, FuriThreadPriorityLow);
         furi_thread_start(ctx->thread);
     }
 }
