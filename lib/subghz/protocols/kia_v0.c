@@ -431,12 +431,12 @@ static const char* kia_v0_button_name(uint8_t button, uint8_t type) {
 
 // [PROTOPIRATE_PORT] custom_btn D-pad -> per-subtype button code mapping.
 // Codes taken from kia_v0_button_name():
-//   KIA:    Lock=0x01, Unlock=0x02, Trunk=0x03
-//   SUZUKI: Lock=0x03, Unlock=0x04, Trunk=0x02
+//   KIA:    Lock=0x01, Unlock=0x02, Trunk=0x03 (set_max=4)
+//   SUZUKI: Lock=0x03, Unlock=0x04, Trunk=0x02 (set_max=4)
 //   HONDA:  index into kia_v0_honda_button_names[]: Unlock=1, Trunk=2,
-//           Lock2=3, Unlock2=4, Trunk2=5, Unlock3=6, Trunk3=7 (no plain Lock)
-// UP=Lock, DOWN=Unlock, LEFT=Trunk, RIGHT=Panic/Horn (unused here). OK/unknown
-// replays the captured button.
+//           Lock2=3, Unlock2=4, Trunk2=5, Unlock3=6, Trunk3=7 (no plain Lock;
+//           set_max=7 so IDs 1..7 are all cycled and mapped 1:1 below).
+// OK/unknown replays the captured button.
 static uint8_t kia_v0_custom_to_btn(uint8_t custom_btn_id, uint8_t type, uint8_t original_btn) {
     if(type == KIA_V0_TYPE_SUZUKI) {
         switch(custom_btn_id) {
@@ -447,12 +447,20 @@ static uint8_t kia_v0_custom_to_btn(uint8_t custom_btn_id, uint8_t type, uint8_t
         }
     }
     if(type == KIA_V0_TYPE_HONDA) {
+        // Honda exposes 7 distinct buttons (set_max=7 @887/@1011). Map the D-pad plus
+        // the higher cycled IDs (5,6,7) so every Honda code 1..7 is reachable and no two
+        // directions collide. Honda has no plain "Lock"; UP uses Unlock and DOWN uses
+        // Lock2 as the closest analog. Codes must be 1..7 so kia_v0_honda_header(btn&7)
+        // yields a valid header.
         switch(custom_btn_id) {
-        // Honda has no plain "Lock"; map UP to the closest analog (Unlock).
-        case SUBGHZ_CUSTOM_BTN_UP:   return 0x01U; // Unlock
-        case SUBGHZ_CUSTOM_BTN_DOWN: return 0x01U; // Unlock
-        case SUBGHZ_CUSTOM_BTN_LEFT: return 0x02U; // Trunk
-        default:                     return original_btn;
+        case SUBGHZ_CUSTOM_BTN_UP:    return 0x01U; // Unlock
+        case SUBGHZ_CUSTOM_BTN_DOWN:  return 0x03U; // Lock2 (distinct from UP)
+        case SUBGHZ_CUSTOM_BTN_LEFT:  return 0x02U; // Trunk
+        case SUBGHZ_CUSTOM_BTN_RIGHT: return 0x04U; // Unlock2
+        case 5U:                      return 0x05U; // Trunk2
+        case 6U:                      return 0x06U; // Unlock3
+        case 7U:                      return 0x07U; // Trunk3
+        default:                      return original_btn; // OK/unknown replays capture
         }
     }
     // KIA classic
@@ -565,20 +573,59 @@ static size_t kia_v0_append_data_pairs(
     return index;
 }
 
-static void kia_v0_build_honda_upload(SubGhzProtocolEncoderKIA* instance, uint64_t raw) {
+// [PROTOPIRATE_PORT] Honda upload builder.
+//
+// The decoder captures a KIA-family 61-bit on-air frame and, in
+// kia_v0_decoder_finish_kia_or_honda_at_gap() (@1020-1041) / kia_v0_decoder_try_honda()
+// (@1043-1060), derives the stored 72-bit Honda key via:
+//     raw = decode_data & 0x0FFFFFFFFFFFFFFF;   // clears the TOP NIBBLE (bits 60..57)
+//     key = kia_v0_honda_transform(raw);        // per-byte bit reverse (self-inverse)
+//
+// To transmit a frame that re-decodes to the SAME key, we must reproduce the exact
+// 61 on-air bits. Since kia_v0_honda_transform() is self-inverse per byte, the on-air
+// raw is simply the inverse transform of the key:
+//     raw_onair = kia_v0_honda_transform(key);
+//
+// A valid Honda key always has byte[0] == 0xF0 (see kia_v0_build_honda_key @337-351 and
+// kia_v0_honda_key_valid @353-356), so transform(key) yields byte[0] == 0x0F, i.e.
+// on-air bit[60] == 0 and bits[59..56] == 0b1111.
+//
+// This matches how the decoder's preamble->data handoff works (feed @1081-1103):
+//   * bit[60] == 0 -> the first data pair is a SHORT/SHORT pair, which the decoder
+//     simply counts as one more preamble pair (harmless; preamble is already > 14).
+//   * bit[59] == 1 -> the following LONG/LONG pair is the transition trigger. The
+//     decoder seeds TWO '1' bits (feed lines 1094-1095) representing decode positions
+//     [60] and [59], then accumulates the remaining emitted bits [58..0] to reach
+//     exactly KIA_V0_BIT_COUNT_KIA (=61) bits.
+//   * The finish path masks bits [60..57] to 0 before transform, so the seeded 1s and
+//     bits [58..57] are discarded; transform(raw_masked) reproduces the key byte-exact.
+//
+// IMPORTANT: we must NOT force bit[60] to 1. Doing so would make the first emitted data
+// pair LONG/LONG, triggering the transition one pair early and yielding a 62-bit count,
+// which the decoder rejects (count != 61). transform(key) already provides the correct
+// bit[59] == 1 trigger with bit[60] == 0.
+//
+// Framing mirrors kia_v0_build_kia_upload (@588-604) so the frame both re-decodes and
+// repeats like a real fob: SYNC + short preamble + data + mid-gap + tail preamble +
+// repeated data + KIA gap. The mid-gap's 1500us HIGH pulse is a valid KIA gap
+// (kia_v0_is_kia_gap) which triggers the decoder's finish at 61 bits.
+static void kia_v0_build_honda_upload(SubGhzProtocolEncoderKIA* instance, uint64_t key) {
     size_t index = 0;
-    const uint64_t transformed = kia_v0_honda_transform(raw);
 
-    index = kia_v0_append_short_pairs(instance->encoder.upload, index, 40);
+    // Reconstruct the 61-bit on-air raw from the stored 72-bit key (inverse transform).
+    const uint64_t raw_onair = kia_v0_honda_transform(key);
 
-    for(size_t pair = 0; pair < 4; pair++) {
-        instance->encoder.upload[index++] =
-            level_duration_make(true, (uint32_t)subghz_protocol_kia_const.te_long);
-        instance->encoder.upload[index++] =
-            level_duration_make(false, (uint32_t)subghz_protocol_kia_const.te_long);
-    }
-
-    index = kia_v0_append_data_pairs(instance->encoder.upload, index, transformed, 56);
+    instance->encoder.upload[index++] = level_duration_make(true, KIA_V0_TYPE1_SYNC);
+    instance->encoder.upload[index++] = level_duration_make(false, KIA_V0_TYPE1_SYNC);
+    index =
+        kia_v0_append_short_pairs(instance->encoder.upload, index, KIA_V0_TYPE1_PREAMBLE_PAIRS);
+    index = kia_v0_append_data_pairs(
+        instance->encoder.upload, index, raw_onair, KIA_V0_BIT_COUNT_KIA);
+    instance->encoder.upload[index++] = level_duration_make(true, 1500);
+    instance->encoder.upload[index++] = level_duration_make(false, 1500);
+    index = kia_v0_append_short_pairs(instance->encoder.upload, index, KIA_V0_TAIL_PREAMBLE_PAIRS);
+    index = kia_v0_append_data_pairs(
+        instance->encoder.upload, index, raw_onair, KIA_V0_BIT_COUNT_KIA);
     instance->encoder.upload[index++] = level_duration_make(true, KIA_V0_KIA_GAP);
 
     instance->encoder.front = 0;
@@ -637,6 +684,8 @@ static void kia_v0_encoder_apply_fields(SubGhzProtocolEncoderKIA* instance) {
             instance->fields.serial, instance->fields.button & 0x07U, instance->fields.counter);
         instance->generic.data_count_bit = KIA_V0_BIT_COUNT_HONDA;
         kia_v0_parse_data(&instance->generic, instance->type, &instance->fields, NULL);
+        // Pass the stored 72-bit key; build_honda_upload reconstructs the 61-bit on-air
+        // raw internally (raw_onair = transform(key)) so the emitted frame re-decodes.
         kia_v0_build_honda_upload(instance, instance->generic.data);
     } else if(instance->type == KIA_V0_TYPE_SUZUKI) {
         instance->fields.crc = kia_v0_suzuki_crc8_from_fields(

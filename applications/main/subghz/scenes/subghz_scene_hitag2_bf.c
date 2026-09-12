@@ -10,6 +10,8 @@
 #include "../helpers/subghz_hitag2_bf.h"
 
 #include <lib/subghz/protocols/fiat_v1.h>
+#include <lib/subghz/protocols/fiat_v2.h>
+#include <lib/subghz/protocols/renault_v1.h>
 #include <furi.h>
 #include <storage/storage.h>
 #include <toolbox/path.h>
@@ -23,14 +25,48 @@
 #define HITAG2_BF_MAX_SCAN_FILES 64U
 
 // --- BLE compute-offload wire protocol (must match qUnleashed exactly) ---
-#define HT_MSG_BF_REQUEST  0x20 // Flipper -> phone
-#define HT_MSG_BF_PROGRESS 0x21 // phone -> Flipper
-#define HT_MSG_BF_RESULT   0x22 // phone -> Flipper
-#define HT_MSG_BF_CANCEL   0x23 // Flipper -> phone
+// HT_MSG_BF_REQUEST (0x20) is the LEGACY Flipper->phone request. The firmware no
+// longer emits it — it now always sends the combo/slice-aware V2 request (0x24).
+// The define is retained only as documentation of the legacy opcode value so the
+// two protocol families never collide; it is intentionally unused in firmware.
+#define HT_MSG_BF_REQUEST    0x20 // (legacy, no longer emitted; kept for reference)
+#define HT_MSG_BF_PROGRESS   0x21 // phone -> Flipper (reused unchanged by V2)
+#define HT_MSG_BF_RESULT     0x22 // phone -> Flipper (reused unchanged by V2)
+#define HT_MSG_BF_CANCEL     0x23 // Flipper -> phone (reused unchanged by V2)
+#define HT_MSG_BF_REQUEST_V2 0x24 // Flipper -> phone, combo/slice-aware
 
-// Cap offloaded captures so the request fits BLE_SVC_SERIAL_CUSTOM_DATA_LEN_MAX
-// (64). Request = 14-byte header + 7 bytes/capture -> 7 captures = 63 bytes.
-#define HT_MSG_BF_MAX_OFFLOAD_CAPTURES 7U
+// -----------------------------------------------------------------------------
+// REQUEST V2 (0x24) wire format — MUST match qUnleashed's parser EXACTLY.
+// -----------------------------------------------------------------------------
+//   [0]      = 0x24  (HT_MSG_BF_REQUEST_V2)
+//   [1]      = proto : 0=Fiat V1, 1=Fiat V2, 2=Renault V1
+//   [2..5]   = uid LE (uint32)
+//   [6..9]   = l0_start LE (uint32)
+//   [10..13] = l0_end LE (uint32)
+//   [14]     = capture_count
+// then per capture, size depends on proto:
+//   proto 0 (Fiat V1):    btn(1) + cnt(2 LE) + hop(4 LE)                 =  7 bytes
+//   proto 1 (Fiat V2):    raw[14]                                        = 14 bytes
+//   proto 2 (Renault V1): payload42(6 bytes LE) + button(1) + counter(1) =  8 bytes
+//
+// payload42 is 42 bits -> serialized as 6 bytes little-endian; only the low 42
+// bits are meaningful (the top 6 bits of byte[5] are zero).
+//
+// Header is 15 bytes. Budget = BLE_SVC_SERIAL_CUSTOM_DATA_LEN_MAX (64) -> 49
+// payload bytes. Hence: Fiat V1 max 7 (7*7=49), Fiat V2 max 3 (3*14=42),
+// Renault V1 max 6 (6*8=48).
+// -----------------------------------------------------------------------------
+#define HT_MSG_BF_REQUEST_V2_HEADER_LEN 15U
+
+// Per-proto capture caps so the request fits BLE_SVC_SERIAL_CUSTOM_DATA_LEN_MAX.
+#define HT_MSG_BF_MAX_OFFLOAD_CAPTURES_V1  7U // 7B each
+#define HT_MSG_BF_MAX_OFFLOAD_CAPTURES_V2  3U // 14B each
+#define HT_MSG_BF_MAX_OFFLOAD_CAPTURES_RV1 6U // 8B each
+
+// Wire proto codes (byte [1] of the V2 request).
+#define HT_MSG_BF_PROTO_FIAT_V1    0U
+#define HT_MSG_BF_PROTO_FIAT_V2    1U
+#define HT_MSG_BF_PROTO_RENAULT_V1 2U
 
 typedef struct {
     SubGhz* subghz;
@@ -44,28 +80,115 @@ typedef struct {
     uint32_t found_epoch;
     uint8_t found_level;
     bool ble_offload;
+    bool is_fiat_v2;    // [HITAG2_BF] primary capture is Fiat V2
+    bool is_renault_v1; // [HITAG2_BF] primary capture is Renault V1
+    uint8_t iv_combo;   // [HITAG2_BF] resolved IV combo (0..3) for V2/RV1 write-back
+    uint8_t hop_slice;  // [HITAG2_BF] resolved hop slice (0..2) for RV1 write-back
+    uint64_t rv1_payload42; // [HITAG2_BF] Renault V1 primary payload for Hop write-back
 } Hitag2BfCtx;
 
 // -----------------------------------------------------------------------------
 // Helpers to parse a Fiat V1 .sub file
 // -----------------------------------------------------------------------------
 
+// Extract a Hitag2-BF capture from a Fiat V1 / Fiat V2 / Renault V1 .sub.
+//   - Fiat V1: the IV (control, button) is read directly.
+//   - Fiat V2: the IV is unknown (one of 4 combos) so only the 14-byte Raw
+//     frame + uid + hop are extracted; control/button are derived per-combo.
+//   - Renault V1: BOTH the hop bit-slice AND the IV combo are unknown; the
+//     42-bit payload + uid + raw button/counter are extracted and the attack
+//     searches slice x combo.
+// @param raw_out       14-byte buffer to receive the V2 raw frame (untouched otherwise)
+// @param is_v2_out     set to true if this is a Fiat V2 capture
+// @param is_rv1_out    set to true if this is a Renault V1 capture
+// @param payload42_out receives the Renault V1 42-bit payload (RV1 only)
+// @param rv1_btn_out   receives the Renault V1 raw 8-bit button (RV1 only)
+// @param rv1_cnt_out   receives the Renault V1 raw 8-bit counter (RV1 only)
 static bool hitag2_bf_extract_capture(
     FlipperFormat* fff,
     uint32_t* uid_out,
     uint16_t* control_out,
     uint8_t* button_out,
-    uint32_t* hop_out) {
-    // Verify Protocol == "Fiat V1"
+    uint32_t* hop_out,
+    uint8_t raw_out[14],
+    bool* is_v2_out,
+    bool* is_rv1_out,
+    uint64_t* payload42_out,
+    uint8_t* rv1_btn_out,
+    uint8_t* rv1_cnt_out) {
+    // Determine protocol: accept "Fiat V1", "Fiat V2" or "Renault V1".
     FuriString* proto = furi_string_alloc();
     bool is_fiat_v1 = false;
+    bool is_fiat_v2 = false;
+    bool is_renault_v1 = false;
     flipper_format_rewind(fff);
     if(flipper_format_read_string(fff, "Protocol", proto)) {
         is_fiat_v1 = furi_string_equal_str(proto, FIAT_V1_PROTOCOL_NAME);
+        is_fiat_v2 = furi_string_equal_str(proto, FIAT_V2_PROTOCOL_NAME);
+        is_renault_v1 = furi_string_equal_str(proto, RENAULT_PROTOCOL_V1_NAME);
     }
     furi_string_free(proto);
-    if(!is_fiat_v1) return false;
+    if(!is_fiat_v1 && !is_fiat_v2 && !is_renault_v1) return false;
 
+    if(is_renault_v1) {
+        // Renault V1: read the generic 64-bit "Key" (8 bytes big-endian) and the
+        // 18-bit "Key2". Derive serial/button/counter from `data` exactly as
+        // renault_v1_parse_fields() does, then build uid + payload42.
+        uint8_t key_data[8] = {0};
+        flipper_format_rewind(fff);
+        if(!flipper_format_read_hex(fff, "Key", key_data, sizeof(key_data))) return false;
+        uint64_t data = 0;
+        for(size_t i = 0; i < sizeof(key_data); i++) {
+            data = (data << 8) | key_data[i];
+        }
+
+        uint32_t key2 = 0;
+        flipper_format_rewind(fff);
+        if(!flipper_format_read_uint32(fff, "Key2", &key2, 1)) return false;
+
+        uint32_t serial = (uint32_t)(data >> 40);
+        uint8_t button = (uint8_t)((data >> 32) & 0xFFU);
+        uint8_t counter = (uint8_t)((data >> 24) & 0xFFU);
+
+        *uid_out = serial & 0xFFFFFFUL;
+        *payload42_out = subghz_protocol_renault_v1_payload42(data, key2);
+        *rv1_btn_out = button;
+        *rv1_cnt_out = counter;
+        // control/button/hop are unused for Renault V1 (slice/combo derived).
+        *control_out = 0;
+        *button_out = 0;
+        *hop_out = 0;
+        *is_v2_out = false;
+        *is_rv1_out = true;
+        return true;
+    }
+
+    *is_rv1_out = false;
+
+    if(is_fiat_v2) {
+        // Fiat V2: read the 14-byte Raw frame; derive uid + hop from fields.
+        uint8_t raw[14] = {0};
+        flipper_format_rewind(fff);
+        if(!flipper_format_read_hex(fff, "Raw", raw, 14)) return false;
+
+        uint32_t serial = 0, hop = 0;
+        flipper_format_rewind(fff);
+        if(!flipper_format_read_uint32(fff, "Serial", &serial, 1)) return false;
+        flipper_format_rewind(fff);
+        if(!flipper_format_read_uint32(fff, "Hop", &hop, 1)) return false;
+
+        *uid_out = serial;
+        *hop_out = hop;
+        // control/button are placeholders; the real IV combo is resolved during
+        // the attack. Fill with combo-0 values for completeness.
+        *control_out = subghz_protocol_fiat_v2_iv_control_for_combo(raw, 0);
+        *button_out = subghz_protocol_fiat_v2_iv_button_for_combo(raw, 0);
+        memcpy(raw_out, raw, 14);
+        *is_v2_out = true;
+        return true;
+    }
+
+    // Fiat V1 (unchanged behavior).
     uint32_t serial = 0, cnt = 0, btn = 0, hop = 0;
     flipper_format_rewind(fff);
     if(!flipper_format_read_uint32(fff, "Serial", &serial, 1)) return false;
@@ -80,6 +203,7 @@ static bool hitag2_bf_extract_capture(
     *control_out = (uint16_t)(cnt & 0x03FFU);
     *button_out = (uint8_t)(btn & 0x0FU);
     *hop_out = hop;
+    *is_v2_out = false;
     return true;
 }
 
@@ -128,13 +252,42 @@ static uint8_t hitag2_bf_scan_directory_for_captures(
                 uint16_t control;
                 uint8_t button;
                 uint32_t hop;
-                if(hitag2_bf_extract_capture(fff, &uid, &control, &button, &hop)) {
+                uint8_t raw[14];
+                bool is_v2 = false;
+                bool is_rv1 = false;
+                uint64_t payload42 = 0;
+                uint8_t rv1_btn = 0;
+                uint8_t rv1_cnt = 0;
+                if(hitag2_bf_extract_capture(
+                       fff,
+                       &uid,
+                       &control,
+                       &button,
+                       &hop,
+                       raw,
+                       &is_v2,
+                       &is_rv1,
+                       &payload42,
+                       &rv1_btn,
+                       &rv1_cnt)) {
+                    // Renault V1 matches siblings on uid = serial & 0xFFFFFF
+                    // (already masked inside the extractor for RV1).
                     if(uid == target_uid) {
-                        if(subghz_hitag2_bf_add_capture(bf, uid, control, button, hop)) {
+                        bool ok;
+                        if(is_rv1) {
+                            ok = subghz_hitag2_bf_add_capture_renault_v1(
+                                bf, uid, payload42, rv1_btn, rv1_cnt);
+                        } else if(is_v2) {
+                            ok = subghz_hitag2_bf_add_capture_v2(bf, uid, hop, raw);
+                        } else {
+                            ok = subghz_hitag2_bf_add_capture(bf, uid, control, button, hop);
+                        }
+                        if(ok) {
                             added++;
                             FURI_LOG_I(
                                 TAG,
-                                "Added capture from %s: cnt=%u btn=%02X hop=%08lX",
+                                "Added %s capture from %s: cnt=%u btn=%02X hop=%08lX",
+                                is_rv1 ? "RV1" : (is_v2 ? "V2" : "V1"),
                                 name_buf,
                                 control,
                                 button,
@@ -186,6 +339,30 @@ static void hitag2_bf_write_key_to_fff(Hitag2BfCtx* ctx) {
     flipper_format_rewind(real_fff);
     flipper_format_insert_or_update_uint32(
         real_fff, "Hitag2 Epoch", &ctx->found_epoch, 1);
+
+    // [HITAG2_BF] For Fiat V2, also persist which of the 4 IV combos validated
+    // so the encoder/decoder knows how to derive (button, control) for the hop.
+    if(ctx->is_fiat_v2) {
+        uint32_t iv_combo = ctx->iv_combo;
+        flipper_format_rewind(real_fff);
+        flipper_format_insert_or_update_uint32(real_fff, "Hitag2 IV", &iv_combo, 1);
+    }
+
+    // [HITAG2_BF] For Renault V1, persist the resolved IV combo AND hop slice, plus
+    // the concrete "Hop" derived from (payload42, slice) so the .sub carries the
+    // resolved values. The renault_v1 deserialize reads Hitag2 Key/IV/Slice back.
+    if(ctx->is_renault_v1) {
+        uint32_t iv_combo = ctx->iv_combo;
+        uint32_t slice = ctx->hop_slice;
+        uint32_t hop = subghz_protocol_renault_v1_candidate_hop(
+            ctx->rv1_payload42, ctx->hop_slice);
+        flipper_format_rewind(real_fff);
+        flipper_format_insert_or_update_uint32(real_fff, "Hitag2 IV", &iv_combo, 1);
+        flipper_format_rewind(real_fff);
+        flipper_format_insert_or_update_uint32(real_fff, "Hitag2 Slice", &slice, 1);
+        flipper_format_rewind(real_fff);
+        flipper_format_insert_or_update_uint32(real_fff, "Hop", &hop, 1);
+    }
 }
 
 // Append the recovered key to the known-keys dictionary at
@@ -332,6 +509,28 @@ static void hitag2_ble_data_received(uint8_t* data, uint16_t size, void* context
             memcpy(&ctx->found_epoch, data + 8, 4);
             ctx->found_level = SubGhzHitag2BfLevelHitag2Hell;
             ctx->success = true;
+
+            // For Fiat V2 / Renault V1 the phone ALSO resolves the IV combo (and,
+            // for RV1, the hop slice). Rather than trusting a value packed into
+            // the epoch field over the wire, re-resolve it LOCALLY from the
+            // returned key using the same verifier the local worker uses. This
+            // is cheap (a 4-way or 12-way check) and stamps iv_combo/hop_slice
+            // into ctx->bf's capture[0], which the DONE handler reads back to
+            // write the .sub (Hitag2 IV / Hitag2 Slice). V2/RV1 always resolve
+            // against epoch 0 (their Fiat epoch is fixed 0); the phone's epoch
+            // field carries combo/slice metadata that we intentionally ignore.
+            if(ctx->is_fiat_v2 || ctx->is_renault_v1) {
+                if(subghz_hitag2_bf_verify_multi_resolve_key(ctx->bf, ctx->found_key, 0)) {
+                    // Re-verified locally; force the persisted epoch to 0 so the
+                    // packed slice/combo bits never leak into "Hitag2 Epoch".
+                    ctx->found_epoch = 0;
+                } else {
+                    // The returned key does not validate our captures — reject
+                    // it so we fall through to the "not found" UI instead of
+                    // writing a bogus key to the .sub.
+                    ctx->success = false;
+                }
+            }
         }
 
         view_dispatcher_send_custom_event(
@@ -357,12 +556,27 @@ static bool hitag2_ble_start_offload(Hitag2BfCtx* ctx) {
     // Register callback for incoming data (progress/result)
     bt_set_custom_data_callback(bt, hitag2_ble_data_received, ctx);
 
-    // Build the BF request from the captures already loaded in ctx.
-    // Cap at HT_MSG_BF_MAX_OFFLOAD_CAPTURES to stay within the 64-byte limit.
+    // Determine the wire proto from the (already-parsed) primary-capture flags.
+    // The firmware ALWAYS sends the combo/slice-aware 0x24 request; Fiat V1 is
+    // just proto 0 (one code path for all three protocols).
+    uint8_t proto;
+    uint8_t cap_cap; // per-proto max captures that fit the 64-byte budget
+    if(ctx->is_fiat_v2) {
+        proto = HT_MSG_BF_PROTO_FIAT_V2;
+        cap_cap = HT_MSG_BF_MAX_OFFLOAD_CAPTURES_V2;
+    } else if(ctx->is_renault_v1) {
+        proto = HT_MSG_BF_PROTO_RENAULT_V1;
+        cap_cap = HT_MSG_BF_MAX_OFFLOAD_CAPTURES_RV1;
+    } else {
+        proto = HT_MSG_BF_PROTO_FIAT_V1;
+        cap_cap = HT_MSG_BF_MAX_OFFLOAD_CAPTURES_V1;
+    }
+
+    // Build the BF request from the captures already loaded in ctx. Cap the
+    // capture count to the per-proto maximum so the request stays within
+    // BLE_SVC_SERIAL_CUSTOM_DATA_LEN_MAX (64).
     uint8_t cap_total = subghz_hitag2_bf_get_capture_count(ctx->bf);
-    uint8_t cap_count = (cap_total > HT_MSG_BF_MAX_OFFLOAD_CAPTURES) ?
-                            (uint8_t)HT_MSG_BF_MAX_OFFLOAD_CAPTURES :
-                            cap_total;
+    uint8_t cap_count = (cap_total > cap_cap) ? cap_cap : cap_total;
 
     uint32_t uid = subghz_hitag2_bf_get_uid(ctx->bf);
     uint32_t l0_start = 0;
@@ -370,25 +584,47 @@ static bool hitag2_ble_start_offload(Hitag2BfCtx* ctx) {
 
     uint8_t req[BLE_SVC_SERIAL_CUSTOM_DATA_LEN_MAX];
     uint16_t off = 0;
-    req[off++] = HT_MSG_BF_REQUEST; // [0]
-    memcpy(req + off, &uid, 4); // [1..4] uid LE
+    req[off++] = HT_MSG_BF_REQUEST_V2; // [0]
+    req[off++] = proto; // [1]
+    memcpy(req + off, &uid, 4); // [2..5] uid LE
     off += 4;
-    memcpy(req + off, &l0_start, 4); // [5..8] l0_start LE
+    memcpy(req + off, &l0_start, 4); // [6..9] l0_start LE
     off += 4;
-    memcpy(req + off, &l0_end, 4); // [9..12] l0_end LE
+    memcpy(req + off, &l0_end, 4); // [10..13] l0_end LE
     off += 4;
-    req[off++] = cap_count; // [13] capture_count
+    req[off++] = cap_count; // [14] capture_count
+    // off == HT_MSG_BF_REQUEST_V2_HEADER_LEN (15) here.
 
     for(uint8_t i = 0; i < cap_count; i++) {
-        uint16_t control = 0;
-        uint8_t button = 0;
-        uint32_t hop = 0;
-        subghz_hitag2_bf_get_capture(ctx->bf, i, NULL, &control, &button, &hop);
-        req[off++] = button; // btn:1
-        memcpy(req + off, &control, 2); // cnt:2 LE
-        off += 2;
-        memcpy(req + off, &hop, 4); // hop:4 LE
-        off += 4;
+        if(proto == HT_MSG_BF_PROTO_FIAT_V2) {
+            // raw[14]
+            uint8_t raw[14];
+            subghz_hitag2_bf_get_capture_raw(ctx->bf, i, raw);
+            memcpy(req + off, raw, 14);
+            off += 14;
+        } else if(proto == HT_MSG_BF_PROTO_RENAULT_V1) {
+            // payload42 (6 bytes LE) + button(1) + counter(1)
+            uint64_t payload42 = 0;
+            uint8_t button = 0;
+            uint8_t counter = 0;
+            subghz_hitag2_bf_get_capture_rv1(ctx->bf, i, &payload42, &button, &counter);
+            for(uint8_t b = 0; b < 6; b++) {
+                req[off++] = (uint8_t)((payload42 >> (8U * b)) & 0xFFU);
+            }
+            req[off++] = button;
+            req[off++] = counter;
+        } else {
+            // Fiat V1: btn(1) + cnt(2 LE) + hop(4 LE)
+            uint16_t control = 0;
+            uint8_t button = 0;
+            uint32_t hop = 0;
+            subghz_hitag2_bf_get_capture(ctx->bf, i, NULL, &control, &button, &hop);
+            req[off++] = button; // btn:1
+            memcpy(req + off, &control, 2); // cnt:2 LE
+            off += 2;
+            memcpy(req + off, &hop, 4); // hop:4 LE
+            off += 4;
+        }
     }
 
     bt_custom_data_tx(bt, req, off);
@@ -438,10 +674,27 @@ void subghz_scene_hitag2_bf_on_enter(void* context) {
     uint16_t control = 0;
     uint8_t button = 0;
     uint32_t hop = 0;
+    uint8_t raw[14];
+    bool is_v2 = false;
+    bool is_rv1 = false;
+    uint64_t payload42 = 0;
+    uint8_t rv1_btn = 0;
+    uint8_t rv1_cnt = 0;
 
-    if(!hitag2_bf_extract_capture(fff, &uid, &control, &button, &hop)) {
+    if(!hitag2_bf_extract_capture(
+           fff,
+           &uid,
+           &control,
+           &button,
+           &hop,
+           raw,
+           &is_v2,
+           &is_rv1,
+           &payload42,
+           &rv1_btn,
+           &rv1_cnt)) {
         subghz_view_hitag2_bf_set_result(
-            subghz->subghz_hitag2_bf, false, "Not a Fiat V1 signal");
+            subghz->subghz_hitag2_bf, false, "Not a Fiat V1/V2/Renault V1 signal");
         // Still install a valid ctx so on_exit / on_event cleanup works
         scene_manager_set_scene_state(
             subghz->scene_manager, SubGhzSceneHitag2Bf, (uint32_t)(uintptr_t)ctx);
@@ -452,7 +705,16 @@ void subghz_scene_hitag2_bf_on_enter(void* context) {
         return;
     }
 
-    subghz_hitag2_bf_add_capture(ctx->bf, uid, control, button, hop);
+    ctx->is_fiat_v2 = is_v2;
+    ctx->is_renault_v1 = is_rv1;
+    if(is_rv1) {
+        ctx->rv1_payload42 = payload42;
+        subghz_hitag2_bf_add_capture_renault_v1(ctx->bf, uid, payload42, rv1_btn, rv1_cnt);
+    } else if(is_v2) {
+        subghz_hitag2_bf_add_capture_v2(ctx->bf, uid, hop, raw);
+    } else {
+        subghz_hitag2_bf_add_capture(ctx->bf, uid, control, button, hop);
+    }
 
     // Auto-scan same directory for additional captures with the same UID
     uint8_t added = hitag2_bf_scan_directory_for_captures(
@@ -475,7 +737,12 @@ void subghz_scene_hitag2_bf_on_enter(void* context) {
     ctx->start_tick = furi_get_tick();
 
     // Try BLE offload first, fall back to the local worker thread if no phone
-    // is connected.
+    // is connected. All three protocols (Fiat V1, Fiat V2, Renault V1) are now
+    // offloadable: the combo/slice-aware 0x24 request carries the raw frame
+    // (Fiat V2) or the 42-bit payload + button + counter (Renault V1) so the
+    // phone can perform the same combo/slice search the local worker would. On
+    // an offloaded find the firmware locally re-resolves slice/combo from the
+    // returned key before writing the .sub (see hitag2_ble_data_received).
     if(!hitag2_ble_start_offload(ctx)) {
         ctx->thread = furi_thread_alloc_ex("Hitag2BF", 4096, hitag2_bf_thread, ctx);
         // Run below the UI/input services (Normal=16) so the compute loop can
@@ -502,6 +769,23 @@ bool subghz_scene_hitag2_bf_on_event(void* context, SceneManagerEvent event) {
             }
 
             if(ctx->success) {
+                // For Fiat V2, pull the IV combo that validated the found key
+                // (resolved into the capture during verification) so it can be
+                // persisted alongside the key. Whether the key came from the
+                // local worker or from an offloaded (phone) find, bf holds the
+                // resolved combo: the local worker resolves it during the attack,
+                // and the offload RESULT handler re-resolves it from the returned
+                // key before signalling DONE.
+                if(ctx->is_fiat_v2 && ctx->bf) {
+                    ctx->iv_combo = subghz_hitag2_bf_get_capture_iv_combo(ctx->bf, 0);
+                }
+                // For Renault V1, pull the resolved IV combo AND hop slice from
+                // capture 0. As with V2, bf holds the resolved params for both
+                // local and offloaded finds (offload re-resolves from the key).
+                if(ctx->is_renault_v1 && ctx->bf) {
+                    ctx->iv_combo = subghz_hitag2_bf_get_capture_iv_combo(ctx->bf, 0);
+                    ctx->hop_slice = subghz_hitag2_bf_get_capture_hop_slice(ctx->bf, 0);
+                }
                 // Persist key into the .sub file
                 hitag2_bf_write_key_to_fff(ctx);
                 // ...and grow the known-keys dictionary so it's found instantly

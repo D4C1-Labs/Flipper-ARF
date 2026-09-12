@@ -133,6 +133,13 @@ static const SubGhzProtocolTiming protocol_timings[] = {
         .min_count_bit = 82,
     },
     {
+        .name = "Renault V1",
+        .te_short = 125,
+        .te_long = 250,
+        .te_delta = 60,
+        .min_count_bit = 82,
+    },
+    {
         .name = "Mazda V0",
         .te_short = 250,
         .te_long = 500,

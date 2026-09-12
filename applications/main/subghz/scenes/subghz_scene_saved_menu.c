@@ -23,7 +23,7 @@ void subghz_scene_saved_menu_on_enter(void* context) {
     bool is_psa_encrypted = false;
     bool has_signal_editor = false;
     bool has_counter = false;
-    bool is_fiat_v1_no_key = false; // [HITAG2_BF]
+    bool is_fiat_bf_candidate = false; // [HITAG2_BF] Fiat V1 or V2 without a key
     if(fff) {
         FuriString* proto = furi_string_alloc();
         flipper_format_rewind(fff);
@@ -39,13 +39,16 @@ void subghz_scene_saved_menu_on_enter(void* context) {
                 }
                 furi_string_free(type_str);
             }
-            // [HITAG2_BF] Show Hitag2 BF button when protocol is Fiat V1 and
-            // there is no "Hitag2 Key" field (i.e. the sig wasn't cracked yet)
-            if(furi_string_equal_str(proto, "Fiat V1")) {
+            // [HITAG2_BF] Show Hitag2 BF button when protocol is Fiat V1,
+            // Fiat V2 or Renault V1 and there is no "Hitag2 Key" field (i.e. not
+            // cracked yet)
+            if(furi_string_equal_str(proto, "Fiat V1") ||
+               furi_string_equal_str(proto, "Fiat V2") ||
+               furi_string_equal_str(proto, "Renault V1")) {
                 uint8_t key_buf[6];
                 flipper_format_rewind(fff);
                 if(!flipper_format_read_hex(fff, "Hitag2 Key", key_buf, 6)) {
-                    is_fiat_v1_no_key = true;
+                    is_fiat_bf_candidate = true;
                 }
             }
         }
@@ -117,8 +120,8 @@ void subghz_scene_saved_menu_on_enter(void* context) {
             subghz);
     }
 
-    // [HITAG2_BF] Show Hitag2 BF button for uncracked Fiat V1 signals
-    if(is_fiat_v1_no_key) {
+    // [HITAG2_BF] Show Hitag2 BF button for uncracked Fiat V1/V2 signals
+    if(is_fiat_bf_candidate) {
         submenu_add_item(
             subghz->submenu,
             "Hitag2 BF",

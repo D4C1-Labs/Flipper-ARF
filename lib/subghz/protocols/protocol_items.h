@@ -67,6 +67,7 @@
 #include "fiat_v1.h"
 #include "fiat_v2.h"
 #include "renault_v0.h"
+#include "renault_v1.h"
 #include "bmw_cas4.h"
 #include "subaru.h"
 #include "kia_generic.h"

