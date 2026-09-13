@@ -6,6 +6,8 @@
 #include <lib/subghz/blocks/encoder.h>
 #include <lib/subghz/blocks/generic.h>
 #include <lib/subghz/blocks/math.h>
+// [PROTOPIRATE_PORT] custom_btn support (full D-pad emulation)
+#include <lib/subghz/blocks/custom_btn_i.h>
 #include <string.h>
 
 #define TAG "FiatProtocolV2"
@@ -255,6 +257,44 @@ static void fiat_v2_patch_hop(uint8_t raw[FIAT_V2_WIRE_BYTES], uint32_t hop) {
     }
 }
 
+// Write a new button selector (1/2/3) into raw[7] bits 7:6, preserving the
+// counter high bits in raw[7] bits 5:0.
+static void fiat_v2_patch_button(uint8_t raw[FIAT_V2_WIRE_BYTES], uint8_t selector) {
+    raw[7] = (uint8_t)((raw[7] & 0x3FU) | ((selector & 0x03U) << FIAT_V2_BTN_SHIFT));
+}
+
+// Write a new counter back into the wire bytes. This is the exact inverse of
+// fiat_v2_counter for both variants (verified below), so that decoding the
+// resulting frame with fiat_v2_counter() yields exactly `counter`.
+//
+//   non-FCA (11-bit): fiat_v2_counter returns
+//       raw_cnt = ((raw[7]&0x3F)<<5) | (raw[8]>>3);  ret = (~raw_cnt)&0x7FF
+//     Inverse: raw_cnt = (~counter)&0x7FF; then split raw_cnt (11 bits) as
+//       raw[7] bits5:0 = raw_cnt>>5 (top 6), raw[8] bits7:3 = raw_cnt&0x1F (low 5).
+//     Round-trip: ((raw_cnt>>5)<<5)|(raw_cnt&0x1F)==raw_cnt, and
+//       (~((~counter)&0x7FF))&0x7FF == counter&0x7FF.  OK.
+//
+//   FCA (14-bit): fiat_v2_counter returns
+//       raw_cnt = (raw[8]<<6) | (raw[9]>>2);  ret = (~raw_cnt)&0x3FFF
+//     Inverse: raw_cnt = (~counter)&0x3FFF; then
+//       raw[8] = raw_cnt>>6 (top 8), raw[9] bits7:2 = raw_cnt&0x3F (low 6).
+//     Round-trip: ((raw_cnt>>6)<<6)|(raw_cnt&0x3F)==raw_cnt, and
+//       (~((~counter)&0x3FFF))&0x3FFF == counter&0x3FFF.  OK.
+//
+// Only the counter bits are touched; the button selector (raw[7] bits 7:6),
+// the FCA type nibble, markers and all other bytes are preserved.
+static void fiat_v2_patch_counter(uint8_t raw[FIAT_V2_WIRE_BYTES], uint32_t counter) {
+    if(fiat_v2_is_fca(raw)) {
+        const uint32_t raw_cnt = (~counter) & 0x3FFFU;
+        raw[8] = (uint8_t)((raw_cnt >> 6U) & 0xFFU);
+        raw[9] = (uint8_t)((raw[9] & 0x03U) | ((raw_cnt & 0x3FU) << 2U));
+    } else {
+        const uint32_t raw_cnt = (~counter) & 0x7FFU;
+        raw[7] = (uint8_t)((raw[7] & 0xC0U) | ((raw_cnt >> 5U) & 0x3FU));
+        raw[8] = (uint8_t)((raw[8] & 0x07U) | ((raw_cnt & 0x1FU) << FIAT_V2_CNT_SHIFT));
+    }
+}
+
 // Public API wrappers (used by the BF scene which drives the same search).
 uint8_t subghz_protocol_fiat_v2_iv_button_for_combo(const uint8_t* raw, uint8_t combo) {
     return fiat_v2_iv_button(raw, combo);
@@ -294,6 +334,18 @@ static void fiat_v2_decode_fields(SubGhzProtocolDecoderFiatV2* instance) {
     instance->decoder.decode_data = instance->generic.data;
     instance->decoder.decode_count_bit = instance->generic.data_count_bit;
     fiat_v2_verify_hitag2_key(instance);
+
+    // [PROTOPIRATE_PORT] custom_btn support
+    // Fiat V2 full D-pad: OK=captured selector, Up=3 (Unlock), Down=2 (Lock),
+    // Left=1 (Trunk). All mapped selectors are in the valid {1,2,3} set so the
+    // re-encoded frame round-trips through this decoder. The original selector
+    // (2-bit value in raw[7] bits 7:6) is always nonzero for a valid capture, so
+    // the D-pad UI stays enabled.
+    if(subghz_custom_btn_get_original() == 0) {
+        subghz_custom_btn_set_original(
+            (uint8_t)((instance->raw_data[7] >> FIAT_V2_BTN_SHIFT) & 0x03U));
+    }
+    subghz_custom_btn_set_max(3);
 }
 
 // [HITAG2_BF] Try all 8 known keys × 4 IV combos; on first match store the key,
@@ -705,6 +757,27 @@ LevelDuration subghz_protocol_encoder_fiat_v2_yield(void* context) {
     return ret;
 }
 
+// Map a pressed custom_btn id to a Fiat V2 selector value (1/2/3). Only used
+// when a key is available; OK / RIGHT / anything else falls back to the
+// captured (original) selector so the emit is replay-equivalent. Never returns
+// an invalid selector.
+static uint8_t
+    fiat_v2_dpad_selector(uint8_t custom_btn_id, uint8_t original_selector) {
+    switch(custom_btn_id) {
+    case SUBGHZ_CUSTOM_BTN_UP:
+        return FIAT_V2_BUTTON_UNLOCK; // 3
+    case SUBGHZ_CUSTOM_BTN_DOWN:
+        return FIAT_V2_BUTTON_LOCK; // 2
+    case SUBGHZ_CUSTOM_BTN_LEFT:
+        return FIAT_V2_BUTTON_TRUNK; // 1
+    case SUBGHZ_CUSTOM_BTN_RIGHT:
+    case SUBGHZ_CUSTOM_BTN_OK:
+    default:
+        // OK / RIGHT / unknown -> captured selector (byte-identical replay).
+        return original_selector;
+    }
+}
+
 SubGhzProtocolStatus
     subghz_protocol_encoder_fiat_v2_deserialize(void* context, FlipperFormat* flipper_format) {
     furi_check(context);
@@ -744,6 +817,17 @@ SubGhzProtocolStatus
     instance->generic.cnt = fiat_v2_counter(instance->raw_data);
     instance->epoch = 0U;
 
+    // [PROTOPIRATE_PORT] custom_btn support (consistent with the decoder).
+    // Captured 2-bit selector (raw[7] bits 7:6); always nonzero for a valid
+    // frame so the D-pad UI stays enabled. set_max(3): Trunk/Lock/Unlock.
+    const uint8_t original_selector =
+        (uint8_t)((instance->raw_data[7] >> FIAT_V2_BTN_SHIFT) & 0x03U);
+    if(subghz_custom_btn_get_original() == 0) {
+        subghz_custom_btn_set_original(original_selector);
+    }
+    subghz_custom_btn_set_max(3);
+    const uint8_t custom_btn_id = subghz_custom_btn_get();
+
     // Read optional key + IV combo. If absent, auto-discover from known keys.
     uint8_t key[6] = {0};
     bool have_key = false;
@@ -778,13 +862,45 @@ SubGhzProtocolStatus
     }
 
     if(have_key) {
-        // Recompute hop from the recovered key using the matched combo's IV
-        // fields, then patch the hop bytes back. For the captured button/counter
-        // this is byte-identical to the replay; the machinery is in place to
-        // advance the counter (fiat_v2_patch_hop uses the same hop position).
+        // KEY PRESENT: full D-pad support. Start from a COPY of the captured raw
+        // so every non-button/counter/hop field (markers, UID, FCA type nibble)
+        // is preserved. Apply the pressed D-pad selector and, for a non-OK
+        // press, advance the rolling counter; then recompute the hop from the
+        // NEW raw and patch it. OK (or RIGHT/unknown) keeps the captured
+        // selector and captured counter, reproducing the captured hop
+        // byte-identically (OK == replay of capture).
         memcpy(instance->hitag2_key, key, 6U);
         instance->iv_combo = combo;
 
+        const uint8_t new_selector =
+            fiat_v2_dpad_selector(custom_btn_id, original_selector);
+        const bool dpad_changed =
+            (custom_btn_id != SUBGHZ_CUSTOM_BTN_OK) && (new_selector != original_selector);
+
+        // Compute the new counter. OK / no-change -> captured counter untouched
+        // (exact replay). Otherwise advance the rolling counter, honoring an
+        // explicit framework override if present (mirrors PSA / Fiat V1).
+        uint32_t new_counter = instance->generic.cnt;
+        if(dpad_changed) {
+            uint32_t override_cnt = 0U;
+            if(subghz_block_generic_global_counter_override_get(&override_cnt)) {
+                new_counter = override_cnt;
+            } else {
+                new_counter += (uint32_t)furi_hal_subghz_get_rolling_counter_mult();
+            }
+        }
+
+        // Write the new button selector and counter into the raw. In non-FCA the
+        // selector (raw[7] bits 7:6) shares raw[7] with the counter high bits
+        // (5:0); each helper masks its own bits so order does not matter.
+        fiat_v2_patch_button(instance->raw_data, new_selector);
+        fiat_v2_patch_counter(instance->raw_data, new_counter);
+
+        instance->generic.btn = instance->raw_data[7];
+        instance->generic.cnt = fiat_v2_counter(instance->raw_data);
+
+        // Recompute the hop from the NEW raw (new button + new counter) using
+        // the matched combo's IV derivation, then patch the hop bytes back.
         const uint32_t uid = fiat_v2_uid(instance->raw_data);
         const uint8_t iv_btn = fiat_v2_iv_button(instance->raw_data, combo);
         const uint16_t iv_ctrl = fiat_v2_iv_control(instance->raw_data, combo);
@@ -794,9 +910,11 @@ SubGhzProtocolStatus
 
         FURI_LOG_I(
             TAG,
-            "TX(hop-recompute) UID:%08lX Combo:%u Hop:%08lX",
+            "TX(hop-recompute) UID:%08lX Combo:%u Sel:%u Cnt:%04lX Hop:%08lX",
             (unsigned long)uid,
             (unsigned)combo,
+            (unsigned)new_selector,
+            (unsigned long)instance->generic.cnt,
             (unsigned long)hop);
     } else {
         // No key: byte-identical replay of the captured Raw.

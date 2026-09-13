@@ -1000,15 +1000,38 @@ SubGhzProtocolStatus
         }
 
         // [PROTOPIRATE_PORT] custom_btn support (replay-only, byte-identical).
-        // V1 has no re-encode, so a remapped D-pad button cannot produce a new
-        // valid frame; OK reproduces the captured button exactly. We still call
-        // set_max so the D-pad UI is available; only OK is guaranteed valid.
+        //
+        // Renault V1 is REPLAY-ONLY. It cannot yet re-encode a new button or
+        // counter into a valid frame because:
+        //   - the 32-bit hop's slice within the 42-bit payload is not validated
+        //     against a real capture,
+        //   - the IV combo is likewise unvalidated,
+        //   - there is no payload/counter writer and no checksum re-fixer.
+        //
+        // Therefore we DISABLE the directional D-pad by calling set_max(0).
+        // subghz_custom_btn_is_allowed() returns (custom_btn_max_btns != 0), so
+        // max==0 makes is_allowed()==false. The transmitter view gates the
+        // Up/Down/Left/Right handling behind is_allowed() (see
+        // applications/main/subghz/views/transmitter.c), so with max==0 the UI
+        // no longer offers directional buttons that silently do nothing — only
+        // OK is presented, which replays the captured frame exactly. This makes
+        // the UX honest: OK == replay captured button, nothing misleading.
+        //
+        // set_original is still recorded for the (currently inert) directional
+        // path and is harmless when disabled; keeping it avoids touching the
+        // OK/replay path.
+        //
+        // TODO(renault_v1): once the hop slice within the 42-bit payload and the
+        // IV combo are validated against a real capture, implement a full
+        // re-encoder (write new button + counter into the payload and re-fix the
+        // checksum) and restore set_max(4) to expose the D-pad for real
+        // button/counter selection.
         {
             const uint8_t original_btn = captured_button;
             if(subghz_custom_btn_get_original() == 0) {
                 subghz_custom_btn_set_original(original_btn);
             }
-            subghz_custom_btn_set_max(4);
+            subghz_custom_btn_set_max(0);
         }
 
         // Replay only: reproduce the captured frame byte-identically.

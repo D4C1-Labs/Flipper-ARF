@@ -268,12 +268,13 @@ static void fiat_v1_decode_fields(SubGhzProtocolDecoderFiatV1* instance) {
     fiat_v1_verify_hitag2_key(instance);
 
     // [PROTOPIRATE_PORT] custom_btn support
-    // Fiat V1 mapping: Up=0x8 (Unlock), OK=0x0, Down=0xD → 3 custom buttons.
-    // Note: btn is a raw 4-bit code, not restricted to {1,2,4,8} in custom_btn mode.
+    // Fiat V1 full D-pad: OK=captured button, Up=0x8 (Unlock), Down=0x4 (Lock),
+    // Left=0x2 (Trunk), Right=0x1 (Close). All mapped codes are in the valid
+    // {1,2,4,8} set so the re-encrypted frame round-trips through this decoder.
     if(subghz_custom_btn_get_original() == 0) {
         subghz_custom_btn_set_original(instance->generic.btn);
     }
-    subghz_custom_btn_set_max(3);
+    subghz_custom_btn_set_max(4);
 }
 
 static bool fiat_v1_commit(
@@ -685,37 +686,25 @@ SubGhzProtocolStatus
     flipper_format_read_uint32(flipper_format, "Cnt", &control, 1);
 
     // [PROTOPIRATE_PORT] custom_btn support
-    // Fiat V1 mapping (4-bit codes, may be outside the {1,2,4,8} valid set):
-    //   OK (default) → replay original captured button (do NOT rewrite to 0x0
-    //                  or the hitag2 authenticator will produce a different
-    //                  hop and the receiver will reject the frame)
+    // Fiat V1 full D-pad (only meaningful WHEN A HITAG2 KEY IS AVAILABLE, so a
+    // fresh authenticator can be computed for the changed button):
+    //   OK (default) → captured button, byte-identical replay of the capture
     //   Up           → 0x8 (Unlock)
-    //   Down         → 0xD (special code)
-    //   Left/Right   → unsupported, keep original
-    {
-        const uint8_t original_btn = (uint8_t)(button & 0x0FU);
-        if(subghz_custom_btn_get_original() == 0) {
-            subghz_custom_btn_set_original(original_btn);
-        }
-        subghz_custom_btn_set_max(3);
-        uint8_t custom_btn_id = subghz_custom_btn_get();
-        switch(custom_btn_id) {
-        case SUBGHZ_CUSTOM_BTN_UP:
-            button = 0x8U;
-            break;
-        case SUBGHZ_CUSTOM_BTN_DOWN:
-            button = 0xDU;
-            break;
-        case SUBGHZ_CUSTOM_BTN_OK:
-        default:
-            // [BUGFIX] OK is the default state after loading a .sub; the old
-            // code overwrote the button with 0x0 unconditionally, which broke
-            // the hitag2 authenticator (receiver rejected the frame). Replay
-            // the captured button instead.
-            button = original_btn;
-            break;
-        }
+    //   Down         → 0x4 (Lock)
+    //   Left         → 0x2 (Trunk)
+    //   Right        → 0x1 (Close)
+    // All codes are in the valid {1,2,4,8} set so fiat_v1_button_valid() passes
+    // and the receiver accepts the frame. The actual remap + counter increment
+    // is applied below, gated on key_loaded (see the key-present branch); the
+    // no-key path keeps replaying the captured button/frame untouched.
+    const uint8_t original_btn = (uint8_t)(button & 0x0FU);
+    // Ensure the transmitter gate sees a nonzero original button so the D-pad UI
+    // stays enabled (Fiat captured buttons are always nonzero, in {1,2,4,8}).
+    if(subghz_custom_btn_get_original() == 0) {
+        subghz_custom_btn_set_original(original_btn);
     }
+    subghz_custom_btn_set_max(4);
+    const uint8_t custom_btn_id = subghz_custom_btn_get();
 
     /* Skip strict validity check when the (possibly custom) button is any 4-bit code.
      * Only reject if serial is missing/invalid. */
@@ -769,6 +758,53 @@ SubGhzProtocolStatus
                 key_loaded = true;
                 FURI_LOG_I(TAG, "TX: auto-discovered known key %u", i);
                 break;
+            }
+        }
+    }
+
+    // WHEN A KEY IS AVAILABLE: apply the full D-pad remap and advance the
+    // rolling counter so each direction press synthesizes a fresh valid frame
+    // (mirrors PSA). WHEN NO KEY: leave button/control at the captured values so
+    // the no-key branch below can replay the captured frame byte-for-byte.
+    if(key_loaded) {
+        bool dpad_changed = false;
+        switch(custom_btn_id) {
+        case SUBGHZ_CUSTOM_BTN_UP:
+            button = 0x8U; // Unlock
+            dpad_changed = true;
+            break;
+        case SUBGHZ_CUSTOM_BTN_DOWN:
+            button = 0x4U; // Lock
+            dpad_changed = true;
+            break;
+        case SUBGHZ_CUSTOM_BTN_LEFT:
+            button = 0x2U; // Trunk
+            dpad_changed = true;
+            break;
+        case SUBGHZ_CUSTOM_BTN_RIGHT:
+            button = 0x1U; // Close
+            dpad_changed = true;
+            break;
+        case SUBGHZ_CUSTOM_BTN_OK:
+        default:
+            // OK = re-emit the ORIGINAL captured frame (button + captured
+            // counter + captured hop), byte-identical, so OK == replay of the
+            // capture. Do not advance the counter.
+            button = original_btn;
+            break;
+        }
+
+        // Advance the 10-bit rolling counter for D-pad-driven emulation so each
+        // press sends a NEW counter the car will accept. Honor an explicit
+        // framework counter override if present; otherwise step by the rolling
+        // counter multiplier (like PSA). The captured-button (OK) path keeps the
+        // captured counter so it is an exact replay of the capture.
+        if(dpad_changed) {
+            uint32_t override_cnt = 0U;
+            if(subghz_block_generic_global_counter_override_get(&override_cnt)) {
+                control = override_cnt;
+            } else {
+                control += (uint32_t)furi_hal_subghz_get_rolling_counter_mult();
             }
         }
     }
