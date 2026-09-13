@@ -109,6 +109,15 @@ static inline bool subghz_last_settings_protocol_filter_append_token(
     return true;
 }
 
+/** Enable ALL protocols in one shot by clearing the OFF list.
+ * @return true if the filter changed (was non-empty). */
+static inline bool subghz_last_settings_protocol_filter_clear(SubGhzLastSettings* instance) {
+    if(instance == NULL) return false;
+    if(instance->protocol_filter[0] == '\0') return false;
+    instance->protocol_filter[0] = '\0';
+    return true;
+}
+
 static inline bool subghz_last_settings_protocol_filter_contains(
     const SubGhzLastSettings* instance,
     const char* protocol) {
