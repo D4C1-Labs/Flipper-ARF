@@ -335,15 +335,6 @@ SubGhzTxRxStartTxState subghz_txrx_tx_start(SubGhzTxRx* instance, FlipperFormat*
         }
 
         SubGhzRadioPreset* preset = instance->preset;
-        // [KIA_V3_V4 TX FIX] Legacy captures / history entries may carry the
-        // human names "Kia V3"/"Kia V4", but the protocol is REGISTERED under
-        // "KIA/HYU V3/V4". The registry lookup below is an exact strcmp, so those
-        // legacy names would return NULL -> "Error in protocol parameters
-        // description". Resolve them to the registered name before alloc. Scoped
-        // to Kia V3/V4 only to avoid affecting any other protocol.
-        if(strcmp(protocol_name, "Kia V3") == 0 || strcmp(protocol_name, "Kia V4") == 0) {
-            protocol_name = SUBGHZ_PROTOCOL_KIA_V3_V4_NAME; // "KIA/HYU V3/V4"
-        }
         instance->transmitter =
             subghz_transmitter_alloc_init(instance->environment, protocol_name);
 

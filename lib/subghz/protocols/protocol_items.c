@@ -195,7 +195,6 @@ static const SubGhzProtocolCatalogAlias subghz_protocol_catalog_aliases[] = {
     {"Kia V4", "Kia V3/V4"},
     {"KIA/HYU V3", "Kia V3/V4"},
     {"KIA/HYU V4", "Kia V3/V4"},
-    {"KIA/HYU V3/V4", "Kia V3/V4"},
     {"Suzuki", "Kia V0"},
     {"Suzuki V0", "Kia V0"},
     {"Honda V0", "Kia V0"},

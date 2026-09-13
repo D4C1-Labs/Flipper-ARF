@@ -696,72 +696,56 @@ SubGhzProtocolStatus subghz_protocol_decoder_kia_v3_v4_serialize(
     furi_assert(context);
     SubGhzProtocolDecoderKiaV3V4* instance = context;
 
-    SubGhzProtocolStatus ret = SubGhzProtocolStatusError;
+    // Serialize via the standard generic block FIRST. This writes the mandatory
+    // Flipper file header (Filetype/Version) + Frequency + Preset + Protocol
+    // (from generic.protocol_name = "KIA/HYU V3/V4") + Bit + Key, EXACTLY like the
+    // working Kia siblings (kia_v5/kia_v2). The previous hand-rolled writer omitted
+    // the header, which made saved files unloadable ("Cannot parse file") and broke
+    // full-D-pad emulate ("Protocol not found!") and transmit. Then append the extra
+    // Kia V3/V4 fields the deserialize reads.
+    SubGhzProtocolStatus ret =
+        subghz_block_generic_serialize(&instance->generic, flipper_format, preset);
 
-    do {
-        if(!flipper_format_write_uint32(flipper_format, "Frequency", &preset->frequency, 1)) {
-            break;
+    if(ret == SubGhzProtocolStatusOk) {
+        uint32_t serial_tmp = instance->generic.serial;
+        if(!flipper_format_write_uint32(flipper_format, "Serial", &serial_tmp, 1)) {
+            ret = SubGhzProtocolStatusErrorParserOthers;
         }
-
-        if(!flipper_format_write_string_cstr(
-               flipper_format, "Preset", furi_string_get_cstr(preset->name))) {
-            break;
-        }
-
-        // Write the REGISTERED protocol name so the registry/receiver can find
-        // this decoder+encoder by name on load/emulate. The V3-vs-V4 distinction
-        // is preserved separately in the "KIAVersion" field below. Writing the
-        // human name "Kia V3"/"Kia V4" here made the registry lookup fail
-        // ("Error history parse." / "Error in protocol parameters").
-        if(!flipper_format_write_string_cstr(
-               flipper_format, "Protocol", SUBGHZ_PROTOCOL_KIA_V3_V4_NAME)) {
-            break;
-        }
-
-        uint32_t bits = instance->generic.data_count_bit;
-        if(!flipper_format_write_uint32(flipper_format, "Bit", &bits, 1)) {
-            break;
-        }
-
-        char key_str[20];
-        snprintf(key_str, sizeof(key_str), "%016llX", (unsigned long long)instance->generic.data);
-        if(!flipper_format_write_string_cstr(flipper_format, "Key", key_str)) {
-            break;
-        }
-
-        if(!flipper_format_write_uint32(
-               flipper_format, "Serial", &instance->generic.serial, 1)) {
-            break;
-        }
+    }
+    if(ret == SubGhzProtocolStatusOk) {
         uint32_t btn_tmp = instance->generic.btn;
         if(!flipper_format_write_uint32(flipper_format, "Btn", &btn_tmp, 1)) {
-            break;
+            ret = SubGhzProtocolStatusErrorParserOthers;
         }
-        if(!flipper_format_write_uint32(
-               flipper_format, "Cnt", &instance->generic.cnt, 1)) {
-            break;
+    }
+    if(ret == SubGhzProtocolStatusOk) {
+        uint32_t cnt_tmp = instance->generic.cnt;
+        if(!flipper_format_write_uint32(flipper_format, "Cnt", &cnt_tmp, 1)) {
+            ret = SubGhzProtocolStatusErrorParserOthers;
         }
-
+    }
+    if(ret == SubGhzProtocolStatusOk) {
         if(!flipper_format_write_uint32(flipper_format, "Encrypted", &instance->encrypted, 1)) {
-            break;
+            ret = SubGhzProtocolStatusErrorParserOthers;
         }
-
+    }
+    if(ret == SubGhzProtocolStatusOk) {
         if(!flipper_format_write_uint32(flipper_format, "Decrypted", &instance->decrypted, 1)) {
-            break;
+            ret = SubGhzProtocolStatusErrorParserOthers;
         }
-
-        uint32_t temp = instance->version;
-        if(!flipper_format_write_uint32(flipper_format, "KIAVersion", &temp, 1)) {
-            break;
+    }
+    if(ret == SubGhzProtocolStatusOk) {
+        uint32_t version_tmp = instance->version;
+        if(!flipper_format_write_uint32(flipper_format, "KIAVersion", &version_tmp, 1)) {
+            ret = SubGhzProtocolStatusErrorParserOthers;
         }
-
-        temp = instance->crc;
-        if(!flipper_format_write_uint32(flipper_format, "CRC", &temp, 1)) {
-            break;
+    }
+    if(ret == SubGhzProtocolStatusOk) {
+        uint32_t crc_tmp = instance->crc;
+        if(!flipper_format_write_uint32(flipper_format, "CRC", &crc_tmp, 1)) {
+            ret = SubGhzProtocolStatusErrorParserOthers;
         }
-
-        ret = SubGhzProtocolStatusOk;
-    } while(false);
+    }
 
     return ret;
 }
