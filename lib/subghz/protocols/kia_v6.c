@@ -443,7 +443,8 @@ const SubGhzProtocolEncoder subghz_protocol_kia_v6_encoder = {
 const SubGhzProtocol subghz_protocol_kia_v6 = {
     .name = SUBGHZ_PROTOCOL_KIA_V6_NAME,
     .type = SubGhzProtocolTypeDynamic,
-    .flag = SubGhzProtocolFlag_433 | SubGhzProtocolFlag_FM | SubGhzProtocolFlag_Decodable |
+    .flag = SubGhzProtocolFlag_315 | SubGhzProtocolFlag_433 | SubGhzProtocolFlag_FM |
+            SubGhzProtocolFlag_Decodable |
             SubGhzProtocolFlag_Save | SubGhzProtocolFlag_Load | SubGhzProtocolFlag_Send,
     .decoder = &subghz_protocol_kia_v6_decoder,
     .encoder = &subghz_protocol_kia_v6_encoder,

@@ -78,7 +78,7 @@ const SubGhzProtocolEncoder subghz_protocol_mazda_siemens_encoder = {
 const SubGhzProtocol subghz_protocol_mazda_siemens = {
     .name = SUBGHZ_PROTOCOL_MAZDA_SIEMENS_NAME,
     .type = SubGhzProtocolTypeStatic,
-    .flag = SubGhzProtocolFlag_433 | SubGhzProtocolFlag_FM |
+    .flag = SubGhzProtocolFlag_315 | SubGhzProtocolFlag_433 | SubGhzProtocolFlag_FM |
             SubGhzProtocolFlag_Decodable | SubGhzProtocolFlag_Load |
             SubGhzProtocolFlag_Save | SubGhzProtocolFlag_Send,
 

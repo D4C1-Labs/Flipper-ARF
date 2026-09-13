@@ -436,7 +436,8 @@ const SubGhzProtocolEncoder subghz_protocol_vag_encoder = {
 const SubGhzProtocol subghz_protocol_vag = {
     .name = VAG_PROTOCOL_NAME,
     .type = SubGhzProtocolTypeDynamic,
-    .flag = SubGhzProtocolFlag_433 | SubGhzProtocolFlag_AM | SubGhzProtocolFlag_Decodable |
+    .flag = SubGhzProtocolFlag_315 | SubGhzProtocolFlag_433 | SubGhzProtocolFlag_AM |
+            SubGhzProtocolFlag_Decodable |
             SubGhzProtocolFlag_Load | SubGhzProtocolFlag_Save | SubGhzProtocolFlag_Send,
     .decoder = &subghz_protocol_vag_decoder,
     .encoder = &subghz_protocol_vag_encoder,

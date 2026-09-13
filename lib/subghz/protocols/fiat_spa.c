@@ -80,7 +80,7 @@ const SubGhzProtocolEncoder subghz_protocol_fiat_spa_encoder = {
 const SubGhzProtocol subghz_protocol_fiat_spa = {
     .name = SUBGHZ_PROTOCOL_FIAT_SPA_NAME,
     .type = SubGhzProtocolTypeStatic,
-    .flag = SubGhzProtocolFlag_433 | SubGhzProtocolFlag_AM |
+    .flag = SubGhzProtocolFlag_315 | SubGhzProtocolFlag_433 | SubGhzProtocolFlag_AM |
             SubGhzProtocolFlag_Decodable | SubGhzProtocolFlag_Load | SubGhzProtocolFlag_Save |
             SubGhzProtocolFlag_Send,
     .decoder = &subghz_protocol_fiat_spa_decoder,

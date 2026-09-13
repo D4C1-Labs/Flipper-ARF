@@ -115,7 +115,8 @@ const SubGhzProtocolEncoder subghz_protocol_mazda_v0_encoder = {
 const SubGhzProtocol subghz_protocol_mazda_v0 = {
     .name = MAZDA_PROTOCOL_V0_NAME,
     .type = SubGhzProtocolTypeDynamic,
-    .flag = SubGhzProtocolFlag_433 | SubGhzProtocolFlag_FM | SubGhzProtocolFlag_Decodable |
+    .flag = SubGhzProtocolFlag_315 | SubGhzProtocolFlag_433 | SubGhzProtocolFlag_FM |
+            SubGhzProtocolFlag_Decodable |
             SubGhzProtocolFlag_Load | SubGhzProtocolFlag_Save | SubGhzProtocolFlag_Send,
     .decoder = &subghz_protocol_mazda_v0_decoder,
     .encoder = &subghz_protocol_mazda_v0_encoder,

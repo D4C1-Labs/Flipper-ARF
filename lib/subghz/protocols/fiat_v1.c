@@ -757,7 +757,6 @@ SubGhzProtocolStatus
             captured_btn = (uint8_t)(button & 0x0FU);
         }
 
-        bool found = false;
         for(uint8_t i = 0U; i < FIAT_V1_KNOWN_KEY_COUNT; i++) {
             if(fiat_v1_key_matches(
                    serial,
@@ -767,17 +766,10 @@ SubGhzProtocolStatus
                    fiat_v1_known_keys[i],
                    instance->epoch)) {
                 memcpy(instance->hitag2_key, fiat_v1_known_keys[i], 6U);
-                found = true;
+                key_loaded = true;
                 FURI_LOG_I(TAG, "TX: auto-discovered known key %u", i);
                 break;
             }
-        }
-        if(!found) {
-            FURI_LOG_E(
-                TAG,
-                "TX: no Hitag2 Key in .sub and no known key matches (uid=%08lX)",
-                (unsigned long)serial);
-            return SubGhzProtocolStatusErrorParserOthers;
         }
     }
 
@@ -786,19 +778,49 @@ SubGhzProtocolStatus
     instance->generic.serial = serial;
     instance->generic.btn = (uint8_t)button;
     instance->generic.cnt = control;
-    instance->hop = fiat_v1_bcm_generate_authenticator(
-        serial, (uint8_t)button, (uint16_t)control, instance->hitag2_key, instance->epoch);
-    instance->generic.data = ((uint64_t)serial << 32U) | instance->hop;
-    instance->generic.data_count_bit = FIAT_V1_LOGICAL_BITS;
 
-    fiat_v1_build_raw(
-        instance->raw_data,
-        serial,
-        (uint8_t)button,
-        (uint16_t)control,
-        instance->hop,
-        instance->tail_bits);
-    instance->frame_xor = instance->raw_data[12];
+    if(key_loaded) {
+        // KEY PRESENT: recompute the hop for the (possibly D-pad changed) button
+        // and counter, then rebuild the raw frame. For the captured button this
+        // reproduces the captured hop byte-identically; for a changed button /
+        // advanced counter it produces a fresh valid frame.
+        instance->hop = fiat_v1_bcm_generate_authenticator(
+            serial, (uint8_t)button, (uint16_t)control, instance->hitag2_key, instance->epoch);
+        instance->generic.data = ((uint64_t)serial << 32U) | instance->hop;
+        instance->generic.data_count_bit = FIAT_V1_LOGICAL_BITS;
+
+        fiat_v1_build_raw(
+            instance->raw_data,
+            serial,
+            (uint8_t)button,
+            (uint16_t)control,
+            instance->hop,
+            instance->tail_bits);
+        instance->frame_xor = instance->raw_data[12];
+    } else {
+        // NO KEY: byte-identical REPLAY of the captured frame. The key is only
+        // needed to synthesize the NEXT signal (changed button / advanced
+        // counter); the already-captured frame is stored in full (the 13-byte
+        // Raw field) so we can re-send it exactly as decoded without any crypto.
+        // Requires a valid Raw field; without it there is nothing to replay.
+        if(!fiat_v1_frame_valid(raw_from_file)) {
+            FURI_LOG_E(
+                TAG,
+                "TX: no Hitag2 Key and no replayable Raw frame (uid=%08lX)",
+                (unsigned long)serial);
+            return SubGhzProtocolStatusErrorParserOthers;
+        }
+        memcpy(instance->raw_data, raw_from_file, FIAT_V1_WIRE_BYTES);
+        instance->hop = fiat_v1_hop(instance->raw_data);
+        instance->frame_xor = instance->raw_data[12];
+        instance->generic.btn = instance->raw_data[6] >> 4U;
+        instance->generic.data = ((uint64_t)serial << 32U) | instance->hop;
+        instance->generic.data_count_bit = FIAT_V1_LOGICAL_BITS;
+        FURI_LOG_I(
+            TAG,
+            "TX(replay) UID:%08lX (no key, replaying captured frame)",
+            (unsigned long)serial);
+    }
 
     uint32_t repeat = FIAT_V1_ENC_DEFAULT_REPEAT;
     flipper_format_rewind(flipper_format);

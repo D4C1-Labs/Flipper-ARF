@@ -920,10 +920,18 @@ static bool subghz_hitag2_bf_try_hell_on_capture(
         Hitag2HellConfig cfg = {0};
         cfg.progress_cb = subghz_hitag2_bf_hell_progress;
         cfg.progress_ctx = &bridge;
-        // Backstop: force the kernel to return within ~500ms even if it hasn't
-        // hit its internal 1024-slot progress checkpoint, so the outer loop
-        // re-checks instance->cancel and BACK stays responsive.
-        cfg.timeout_ms = 500;
+        // [FREEZE FIX] Do NOT set a timeout here. The kernel now calls
+        // progress_cb after every heavy L0 slot (see subghz_hitag2_hell.c), and
+        // our progress_cb yields the CPU (furi_delay_ms) and polls
+        // instance->cancel on every call — so BACK is honored within one heavy
+        // slot (a few seconds worst case) without a timeout. A timeout would be
+        // actively WRONG here: on a partial (timed-out) chunk the loop advances
+        // chunk_start by the full CHUNK_SIZE, skipping every slot the kernel did
+        // not reach. On the M4 (where a full chunk takes minutes) a 500ms
+        // timeout skipped ~all of every chunk, so the true key's L0 slot was
+        // almost never actually searched. Running each chunk to completion keeps
+        // the sweep exhaustive; responsiveness comes from the per-slot yield.
+        cfg.timeout_ms = 0;
         cfg.now_ms_cb = furi_get_tick;
         cfg.l0_start = chunk_start;
         cfg.l0_end = chunk_start + SUBGHZ_HITAG2_BF_L5_CHUNK_SIZE;
