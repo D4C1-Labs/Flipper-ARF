@@ -61,6 +61,7 @@ typedef struct {
     FuriThread* worker;
     volatile bool worker_running;
     P2sDirection direction;
+    uint32_t last_progress_tick; // [FREEZE FIX] throttle progress events
 } P2sApp;
 
 // ---------------------------------------------------------------------------
@@ -142,7 +143,15 @@ static bool p2s_worker_should_stop(void) {
     return (furi_thread_flags_get() & P2S_WORKER_FLAG_STOP) != 0;
 }
 
+// [FREEZE FIX] Throttle progress events. Posting one custom event per file with
+// view_dispatcher_send_custom_event (which blocks FuriWaitForever when the event
+// queue is full) could stall the low-priority worker against a busy UI thread and
+// hang the app. We instead update the view-model directly (thread-safe) on every
+// file and only post a redraw event at most every ~150ms.
 static void p2s_worker_post_progress(P2sApp* app) {
+    uint32_t now = furi_get_tick();
+    if(now - app->last_progress_tick < furi_ms_to_ticks(150)) return;
+    app->last_progress_tick = now;
     view_dispatcher_send_custom_event(app->view_dispatcher, P2sEventProgress);
 }
 
@@ -251,7 +260,10 @@ static void p2s_start_worker(P2sApp* app, P2sDirection direction) {
         },
         true);
 
+    app->last_progress_tick = 0;
     app->worker = furi_thread_alloc_ex("P2sWorker", 4 * 1024, p2s_worker_thread, app);
+    // [FREEZE FIX] Low priority so the file-I/O worker never starves the UI thread.
+    furi_thread_set_priority(app->worker, FuriThreadPriorityLow);
     furi_thread_start(app->worker);
 
     view_dispatcher_switch_to_view(app->view_dispatcher, P2sViewProgress);

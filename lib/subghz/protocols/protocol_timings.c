@@ -195,6 +195,34 @@ static const SubGhzProtocolTiming protocol_timings[] = {
         .te_delta = 100,
         .min_count_bit = 128,
     },
+    {
+        .name = "Mercedes",
+        .te_short = 500,
+        .te_long = 1000,
+        .te_delta = 125,
+        .min_count_bit = 112,
+    },
+    {
+        .name = "Mazda Infinity",
+        .te_short = 250,
+        .te_long = 500,
+        .te_delta = 62,
+        .min_count_bit = 64,
+    },
+    {
+        .name = "Audi",
+        .te_short = 550,
+        .te_long = 1100,
+        .te_delta = 137,
+        .min_count_bit = 64,
+    },
+    {
+        .name = "Hundai",
+        .te_short = 500,
+        .te_long = 1000,
+        .te_delta = 125,
+        .min_count_bit = 72,
+    },
 };
 
 static const size_t protocol_timings_count = PROTOCOL_TIMINGS_COUNT_OF(protocol_timings);

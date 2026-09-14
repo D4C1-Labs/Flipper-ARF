@@ -30,7 +30,26 @@ static bool p2s_stream_write_char(Stream* stream, char value) {
     return stream_write_char(stream, value) == 1U;
 }
 
+// Read one full line (up to and including '\n', or EOF) into `line`.
+// Returns false ONLY at a genuine EOF with no bytes read (so the caller's loop
+// always terminates). This is the anti-freeze core: every call either consumes
+// at least one byte or reports EOF, so the outer scan cannot spin forever.
+static bool p2s_read_line(Stream* in_stream, FuriString* line) {
+    furi_string_reset(line);
+    char c = '\0';
+    bool any = false;
+    while(p2s_stream_read_char(in_stream, &c)) {
+        any = true;
+        furi_string_push_back(line, c);
+        if(c == '\n') break;
+    }
+    return any;
+}
+
 // Copy an entire "key: ..." value line verbatim (handles arrays of any length).
+// Rewritten to be freeze-proof: reads whole lines (guaranteed forward progress),
+// matches the "key:" prefix on the assembled line, and appends the matching line
+// to the destination. No char-by-char position juggling that could stall.
 static bool p2s_copy_raw_value_line(Stream* out_stream, Stream* in_stream, const char* key) {
     const size_t key_len = strlen(key);
     if(!key_len || !stream_rewind(in_stream) || !stream_seek(out_stream, 0, StreamOffsetFromEnd)) {
@@ -38,65 +57,30 @@ static bool p2s_copy_raw_value_line(Stream* out_stream, Stream* in_stream, const
     }
 
     bool copied = false;
+    FuriString* line = furi_string_alloc();
 
-    while(!stream_eof(in_stream)) {
-        bool line_match = true;
-        bool line_ended = false;
-
-        for(size_t i = 0; i < key_len; i++) {
-            char c = '\0';
-            if(!p2s_stream_read_char(in_stream, &c)) {
-                return p2s_fail("Read", key);
-            }
-            if(c == '\n') {
-                line_match = false;
-                line_ended = true;
-                break;
-            }
-            if(c != key[i]) {
-                line_match = false;
-            }
-        }
-
-        if(line_ended) continue;
-
-        char c = '\0';
-        if(!p2s_stream_read_char(in_stream, &c)) {
-            return p2s_fail("Read", key);
-        }
-
-        if(c != ':') {
-            line_match = false;
-        }
-
-        if(line_match) {
-            if(stream_write(out_stream, (const uint8_t*)key, key_len) != key_len ||
-               !p2s_stream_write_char(out_stream, ':')) {
+    while(p2s_read_line(in_stream, line)) {
+        const char* s = furi_string_get_cstr(line);
+        // Match "key:" at the start of the line.
+        if(strncmp(s, key, key_len) == 0 && s[key_len] == ':') {
+            size_t n = furi_string_size(line);
+            if(stream_write(out_stream, (const uint8_t*)s, n) != n) {
+                furi_string_free(line);
                 return p2s_fail("Write", key);
             }
-
-            bool wrote_newline = false;
-            while(p2s_stream_read_char(in_stream, &c)) {
-                if(!p2s_stream_write_char(out_stream, c)) {
+            // Ensure the value line ends with a newline.
+            if(n == 0 || s[n - 1] != '\n') {
+                if(!p2s_stream_write_char(out_stream, '\n')) {
+                    furi_string_free(line);
                     return p2s_fail("Write", key);
                 }
-                if(c == '\n') {
-                    wrote_newline = true;
-                    break;
-                }
-            }
-
-            if(!wrote_newline && !p2s_stream_write_char(out_stream, '\n')) {
-                return p2s_fail("Write", key);
             }
             copied = true;
-            continue;
-        }
-
-        while(c != '\n' && p2s_stream_read_char(in_stream, &c)) {
+            break; // first match is enough
         }
     }
 
+    furi_string_free(line);
     return copied ? true : p2s_fail("Read", key);
 }
 

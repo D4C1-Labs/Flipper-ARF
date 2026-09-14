@@ -86,7 +86,7 @@ const SubGhzProtocol* const subghz_protocol_registry_items[] = {
     &fiat_v2_protocol,
     &renault_v0_protocol,
     &renault_v1_protocol,
-    &subghz_protocol_bmw_cas4,
+    //&subghz_protocol_bmw_cas4,
     &subghz_protocol_subaru, 
     &subghz_protocol_mazda_siemens,
     &subghz_protocol_kia_v0,       
@@ -112,6 +112,10 @@ const SubGhzProtocol* const subghz_protocol_registry_items[] = {
     &honda_static_protocol,
     &honda_v1_protocol,
     &honda_v2_protocol,
+    //&subghz_protocol_mercedes,
+    //&subghz_protocol_mazda_infinity,
+    //&subghz_protocol_audi,
+    //&subghz_protocol_hundai,
 
     // [UNLEASHED_PORT] New protocols from Unleashed firmware (disabled by default)
     //&subghz_protocol_allstar_firefly,
@@ -136,6 +140,10 @@ typedef struct {
 } SubGhzProtocolCatalogAlias;
 
 static const SubGhzProtocolCatalogEntry subghz_protocol_catalog[] = {
+    {"Audi", SubGhzProtocolCatalogRoutePolicyAMDefault,
+     SUBGHZ_PROTOCOL_CATALOG_TX_KEY("audi")},
+    {"Hundai", SubGhzProtocolCatalogRoutePolicyAMDefault,
+     SUBGHZ_PROTOCOL_CATALOG_TX_KEY("hundai")},
     {"Chrysler V0", SubGhzProtocolCatalogRoutePolicyAMDefault,
      SUBGHZ_PROTOCOL_CATALOG_TX_KEY("chrysler_v0")},
     {"Fiat V0", SubGhzProtocolCatalogRoutePolicyAMDefault,
@@ -172,6 +180,10 @@ static const SubGhzProtocolCatalogEntry subghz_protocol_catalog[] = {
      SUBGHZ_PROTOCOL_CATALOG_TX_KEY("honda_v2")},
     {"Mazda V0", SubGhzProtocolCatalogRoutePolicyByModulation,
      SUBGHZ_PROTOCOL_CATALOG_TX_KEY("mazda_v0")},
+    {"Mazda Infinity", SubGhzProtocolCatalogRoutePolicyAMDefault,
+     SUBGHZ_PROTOCOL_CATALOG_TX_KEY("mazda_infinity")},
+    {"Mercedes", SubGhzProtocolCatalogRoutePolicyAMDefault,
+     SUBGHZ_PROTOCOL_CATALOG_TX_KEY("mercedes")},
     {"Mitsubishi V0", SubGhzProtocolCatalogRoutePolicyFMDefault, NULL},
     {"Porsche Touareg", SubGhzProtocolCatalogRoutePolicyAMDefault, NULL},
     {"PSA", SubGhzProtocolCatalogRoutePolicyByModulation,
