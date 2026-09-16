@@ -9,14 +9,25 @@
 //
 // Flow (heavily stripped vs. hitag2_bf.c: no BLE, no directory scan, one frame):
 //   on_enter  - read `data` (64-bit "Key") + `key2` ("Key2") from the loaded
-//               fff EXACTLY as renault_v1 deserialize does, show a "Running..."
-//               Popup, spawn a worker running subghz_protocol_renault_v1_run_seed_bf.
-//   worker    - runs the BF, posts SEED_BF_EVENT_DONE via the view dispatcher.
-//   on_event  - on DONE: if recovered, write "Seed" (4-byte BE hex) + "Recovered"
-//               (uint32 = 1) back into the fff and re-save the .sub, then show a
-//               success Popup; on miss show "Seed not found". Either way BACK
-//               returns to the saved menu.
+//               fff EXACTLY as renault_v1 deserialize does, show a "Running... 0%"
+//               Popup (header + a STABLE heap body buffer), spawn a worker
+//               running subghz_protocol_renault_v1_run_seed_bf_ex.
+//   worker    - runs the BF; its progress_cb posts throttled SEED_BF_EVENT_PROGRESS
+//               custom events (percentage packed in the high bits) and yields the
+//               CPU; on completion posts SEED_BF_EVENT_DONE.
+//   on_event  - on PROGRESS: rewrite the heap body buffer with "Running... X%" on
+//               the GUI thread. On DONE: if recovered, write "Seed" (4-byte BE
+//               hex) + "Recovered" (uint32 = 1) back into the fff and re-save the
+//               .sub, then show a success Popup; on miss show "Seed not found".
+//               Either way BACK returns to the saved menu.
 //   on_exit   - stop/join the worker, free ctx, reset the Popup view.
+//
+// WHY custom events instead of SceneManagerEventTypeTick: the previous version
+// relied on Tick to marshal progress AND pointed the popup at a stack buffer
+// inside the tick handler. popup_set_text() stores the char* by POINTER (no
+// copy), so once the handler returned the popup redrew freed stack memory and
+// the body appeared blank ("only Seed BF"). Custom events are queued reliably to
+// the GUI thread, and the body now lives in the heap ctx for a stable lifetime.
 
 #include "../subghz_i.h"
 #include "../helpers/subghz_custom_event.h"
@@ -28,8 +39,23 @@
 #define TAG "SubGhzSceneSeedBf"
 
 // Scene-local custom events (kept well clear of the SubGhzCustomEvent enum).
-#define SEED_BF_EVENT_DONE (0xE0)
-#define SEED_BF_EVENT_BACK (0xE1)
+//
+// DONE/BACK are plain events. PROGRESS is *not* a bare event: the worker packs
+// the percentage into the high bits so a single reliable custom event carries
+// both "there is new progress" and the value itself:
+//
+//   event = SEED_BF_EVENT_PROGRESS | (pct << 8)
+//
+// Custom events are delivered via the view_dispatcher's queue on the GUI thread
+// (guaranteed delivery), unlike SceneManagerEventTypeTick whose cadence relative
+// to a low-priority compute thread is not guaranteed. This is why the old
+// tick-driven update never visibly ran.
+#define SEED_BF_EVENT_DONE     (0xE0)
+#define SEED_BF_EVENT_BACK     (0xE1)
+#define SEED_BF_EVENT_PROGRESS (0xE2)
+
+// Extract the percentage packed into a PROGRESS custom event.
+#define SEED_BF_EVENT_PROGRESS_PCT(evt) ((uint8_t)(((evt) >> 8) & 0xFFU))
 
 typedef struct {
     SubGhz* subghz;
@@ -40,15 +66,24 @@ typedef struct {
     bool success; // BF recovered a SEED
     uint32_t seed; // recovered 4-byte SEED
     bool done_handled; // guards result handling from re-running
-    volatile uint8_t progress; // 0..100, published by the worker, drawn by tick
-    uint8_t last_drawn_progress; // last value rendered by the tick handler
-    bool running; // true while the worker is active (drives tick redraws)
+    volatile uint8_t progress; // 0..100, published by the worker
+    uint8_t last_sent_progress; // last percentage the worker posted an event for
+    uint32_t last_progress_tick; // furi_get_tick() of the last posted PROGRESS event
+    bool running; // true while the worker is active
+    // Heap-backed popup body text. CRITICAL: popup_set_text() stores the char*
+    // by POINTER (it does not copy), so the buffer it points at MUST outlive
+    // every redraw. The old code pointed the popup at a stack buffer inside the
+    // tick handler; once that handler returned the stack was reused and the
+    // popup redrew garbage (appearing blank). Keeping the buffer in the heap ctx
+    // guarantees a stable lifetime for the life of the scene.
+    char body[32];
 } SeedBfCtx;
 
 // -----------------------------------------------------------------------------
 // Cooperative progress callback (mirrors PSA's psa_decrypt_progress_cb):
-// yields the CPU so the GUI/idle/watchdog can run, updates the popup with the
-// percentage, and lets a BACK press cancel the search. Returning false aborts.
+// yields the CPU so the GUI/idle/watchdog can run, posts a throttled progress
+// event to the GUI thread, and lets a BACK press cancel the search. Returning
+// false aborts.
 // -----------------------------------------------------------------------------
 
 static bool seed_bf_progress_cb(uint8_t progress, uint32_t cand_tested, void* context) {
@@ -56,11 +91,24 @@ static bool seed_bf_progress_cb(uint8_t progress, uint32_t cand_tested, void* co
     SeedBfCtx* ctx = context;
     if(ctx->cancel) return false;
 
-    // Publish progress to the model in a thread-safe way (NOT popup_set_header,
-    // which is not safe to call from the worker thread). The GUI-thread tick
-    // handler reads this and updates the popup. Storing a plain byte is atomic
-    // enough for a percentage indicator.
     ctx->progress = progress;
+
+    // Push progress to the GUI *reliably* by posting a custom event that carries
+    // the percentage in its high bits. popup_set_* must only be touched from the
+    // GUI thread, so we never draw here — the on_event handler (GUI thread) does.
+    //
+    // Throttle to ~200ms cadence (and always emit on a percentage change) so we
+    // do not flood the view_dispatcher queue: the BF fires this callback every
+    // 4096 candidates (64 times total), which is coarse enough already, but the
+    // throttle keeps behavior stable if the yield step ever shrinks.
+    uint32_t now = furi_get_tick();
+    if(progress != ctx->last_sent_progress || (now - ctx->last_progress_tick) >= 200U) {
+        ctx->last_sent_progress = progress;
+        ctx->last_progress_tick = now;
+        view_dispatcher_send_custom_event(
+            ctx->subghz->view_dispatcher,
+            SEED_BF_EVENT_PROGRESS | ((uint32_t)progress << 8));
+    }
 
     // Yield the CPU: THIS is the actual freeze fix — it lets the GUI/idle/
     // watchdog run on the single-core M4 during the ~262k-iteration brute force.
@@ -182,6 +230,14 @@ void subghz_scene_seed_bf_on_enter(void* context) {
         }
     }
 
+    FURI_LOG_I(
+        TAG,
+        "on_enter fields_ok=%d data=%08lX%08lX key2=%05lX",
+        (int)fields_ok,
+        (unsigned long)(ctx->data >> 32),
+        (unsigned long)(ctx->data & 0xFFFFFFFF),
+        (unsigned long)ctx->key2);
+
     scene_manager_set_scene_state(
         subghz->scene_manager, SubGhzSceneSeedBf, (uint32_t)(uintptr_t)ctx);
 
@@ -202,20 +258,24 @@ void subghz_scene_seed_bf_on_enter(void* context) {
     }
 
     // Show progress and spawn the local worker (no BLE, single frame). Set BOTH
-    // a header and a body text so the popup always has visible content (a
-    // header-only popup can render as a near-blank screen). The tick handler
-    // updates the body with the live percentage.
+    // a header and a body text so the popup always has visible content from the
+    // very first frame (a header-only popup can render as a near-blank screen).
+    // The body is a stable heap buffer inside ctx (see the struct comment); the
+    // worker-driven PROGRESS events rewrite it in place on the GUI thread.
     // NOTE: no popup OK-callback while running, so OK does nothing mid-search
     // (only hardware BACK cancels). The callback is wired on completion below.
+    ctx->running = true;
+    ctx->progress = 0;
+    ctx->last_sent_progress = 0xFF; // force the first callback to post an event
+    ctx->last_progress_tick = furi_get_tick();
+    strncpy(ctx->body, "Running... 0%", sizeof(ctx->body) - 1);
+
     popup_set_callback(popup, NULL);
     popup_set_header(popup, "Seed BF", 64, 12, AlignCenter, AlignTop);
-    popup_set_text(popup, "Starting...", 64, 34, AlignCenter, AlignTop);
+    popup_set_text(popup, ctx->body, 64, 34, AlignCenter, AlignTop);
     popup_disable_timeout(popup);
     view_dispatcher_switch_to_view(subghz->view_dispatcher, SubGhzViewIdPopup);
 
-    ctx->running = true;
-    ctx->progress = 0;
-    ctx->last_drawn_progress = 0xFF; // force first tick to draw 0%
     ctx->thread = furi_thread_alloc_ex("SeedBF", 4096, seed_bf_thread, ctx);
     // Run below the UI/input services so the compute loop can never starve them
     // on the single-core M4 — BACK stays responsive.
@@ -229,23 +289,20 @@ bool subghz_scene_seed_bf_on_event(void* context, SceneManagerEvent event) {
         subghz->scene_manager, SubGhzSceneSeedBf);
     if(!ctx) return false;
 
-    if(event.type == SceneManagerEventTypeTick) {
-        // Runs on the GUI thread every 100ms: reflect the worker's progress into
-        // the popup header safely (popup_* must only be touched from this thread).
-        if(ctx->running && !ctx->done_handled) {
-            uint8_t p = ctx->progress;
-            if(p != ctx->last_drawn_progress) {
-                ctx->last_drawn_progress = p;
-                // Update the BODY text (header stays "Seed BF") so there is always
-                // visible content and the percentage advances as the BF runs.
-                char body[32];
-                snprintf(body, sizeof(body), "Running... %u%%", (unsigned)p);
-                popup_set_text(subghz->popup, body, 64, 34, AlignCenter, AlignTop);
+    if(event.type == SceneManagerEventTypeCustom) {
+        if((event.event & 0xFFU) == SEED_BF_EVENT_PROGRESS) {
+            // Runs on the GUI thread: reflect the worker's progress (carried in
+            // the event's high bits) into the popup body. popup_* is only ever
+            // touched here on the GUI thread. We rewrite ctx->body IN PLACE — the
+            // popup already points at it (stable heap buffer), and popup_set_text
+            // re-commits the model so the view repaints.
+            if(ctx->running && !ctx->done_handled) {
+                uint8_t p = SEED_BF_EVENT_PROGRESS_PCT(event.event);
+                snprintf(ctx->body, sizeof(ctx->body), "Running... %u%%", (unsigned)p);
+                popup_set_text(subghz->popup, ctx->body, 64, 34, AlignCenter, AlignTop);
             }
-        }
-        return true;
-    } else if(event.type == SceneManagerEventTypeCustom) {
-        if(event.event == SEED_BF_EVENT_DONE) {
+            return true;
+        } else if(event.event == SEED_BF_EVENT_DONE) {
             ctx->running = false;
             if(ctx->done_handled) return true;
             ctx->done_handled = true;
@@ -260,10 +317,13 @@ bool subghz_scene_seed_bf_on_event(void* context, SceneManagerEvent event) {
             if(ctx->success) {
                 seed_bf_write_seed_and_save(ctx);
 
-                char msg[32];
-                snprintf(msg, sizeof(msg), "Seed: %08lX", (unsigned long)ctx->seed);
+                // Write the result into the stable heap buffer, NOT a stack
+                // buffer: popup_set_text keeps the pointer, and this popup lives
+                // until BACK — a stack buffer would dangle and render garbage.
+                snprintf(
+                    ctx->body, sizeof(ctx->body), "Seed: %08lX", (unsigned long)ctx->seed);
                 popup_set_header(popup, "Seed found", 64, 6, AlignCenter, AlignTop);
-                popup_set_text(popup, msg, 64, 30, AlignCenter, AlignTop);
+                popup_set_text(popup, ctx->body, 64, 30, AlignCenter, AlignTop);
                 FURI_LOG_I(TAG, "SEED recovered: %08lX", (unsigned long)ctx->seed);
             } else {
                 popup_set_header(popup, "Seed BF", 64, 6, AlignCenter, AlignTop);
