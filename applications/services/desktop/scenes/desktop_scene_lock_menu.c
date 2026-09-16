@@ -9,7 +9,6 @@
 #include <desktop/desktop_settings.h>
 #include "../views/desktop_view_lock_menu.h"
 #include "desktop_scene.h"
-#include "applications/services/bt/bt_service/bt_api.h"
 
 #define TAG "DesktopSceneLock"
 
@@ -25,7 +24,6 @@ void desktop_scene_lock_menu_on_enter(void* context) {
     desktop_lock_menu_set_callback(desktop->lock_menu, desktop_scene_lock_menu_callback, desktop);
     desktop_lock_menu_set_stealth_mode_state(
         desktop->lock_menu, furi_hal_rtc_is_flag_set(FuriHalRtcFlagStealthMode));
-    desktop_lock_menu_set_bt_mode_state(desktop->lock_menu, furi_hal_bt_is_active());
     desktop_lock_menu_set_idx(desktop->lock_menu, 0);
 
     view_dispatcher_switch_to_view(desktop->view_dispatcher, DesktopViewIdLockMenu);
@@ -35,42 +33,40 @@ bool desktop_scene_lock_menu_on_event(void* context, SceneManagerEvent event) {
     Desktop* desktop = (Desktop*)context;
     bool consumed = false;
 
-    Bt* bt = furi_record_open(RECORD_BT);
-    BtSettings bts = bt->bt_settings;
-
-    if(event.type == SceneManagerEventTypeTick) {
-        bool check_pin_changed =
-            scene_manager_get_scene_state(desktop->scene_manager, DesktopSceneLockMenu);
-        if(check_pin_changed && desktop_pin_code_is_set()) {
-            scene_manager_set_scene_state(desktop->scene_manager, DesktopSceneLockMenu, 0);
-        }
-    } else if(event.type == SceneManagerEventTypeCustom) {
+    if(event.type == SceneManagerEventTypeCustom) {
         switch(event.event) {
         case DesktopLockMenuEventLock:
+            desktop_lock_menu_save_settings(desktop->lock_menu);
             scene_manager_set_scene_state(desktop->scene_manager, DesktopSceneLockMenu, 0);
             desktop_lock(desktop);
             consumed = true;
             break;
-        case DesktopLockMenuEventBt:
-            bts.enabled = !bts.enabled;
-            bt_set_settings(bt, &bts);
-            scene_manager_search_and_switch_to_previous_scene(
-                desktop->scene_manager, DesktopSceneMain);
-            break;
         case DesktopLockMenuEventStealthModeOn:
+            // Stays in the menu: only update the RTC/notification stealth state.
             desktop_set_stealth_mode_state(desktop, true);
-            scene_manager_search_and_switch_to_previous_scene(
-                desktop->scene_manager, DesktopSceneMain);
+            desktop_lock_menu_set_stealth_mode_state(desktop->lock_menu, true);
+            consumed = true;
             break;
         case DesktopLockMenuEventStealthModeOff:
+            // Stays in the menu: only update the RTC/notification stealth state.
             desktop_set_stealth_mode_state(desktop, false);
-            scene_manager_search_and_switch_to_previous_scene(
-                desktop->scene_manager, DesktopSceneMain);
+            desktop_lock_menu_set_stealth_mode_state(desktop->lock_menu, false);
+            consumed = true;
+            break;
+        case DesktopLockMenuEventSubGhz:
+            desktop_lock_menu_save_settings(desktop->lock_menu);
+            loader_start_detached_with_gui_error(desktop->loader, "subghz", "read");
+            consumed = true;
+            break;
+        case DesktopLockMenuEventProtoPirate:
+            desktop_lock_menu_save_settings(desktop->lock_menu);
+            loader_start_detached_with_gui_error(desktop->loader, "proto_pirate", NULL);
+            consumed = true;
             break;
         case DesktopLockMenuEventSettings:
-            loader_start_detached_with_gui_error(desktop->loader, "settings_apps", NULL);
-            scene_manager_search_and_switch_to_previous_scene(
-                desktop->scene_manager, DesktopSceneMain);
+            desktop_lock_menu_save_settings(desktop->lock_menu);
+            loader_start_detached_with_gui_error(desktop->loader, LOADER_APPLICATIONS_NAME, NULL);
+            consumed = true;
             break;
         default:
             break;
@@ -84,5 +80,4 @@ bool desktop_scene_lock_menu_on_event(void* context, SceneManagerEvent event) {
 void desktop_scene_lock_menu_on_exit(void* context) {
     Desktop* desktop = (Desktop*)context;
     desktop_lock_menu_save_settings(desktop->lock_menu);
-    furi_record_close(RECORD_BT);
 }

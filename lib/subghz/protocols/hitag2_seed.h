@@ -104,6 +104,22 @@ void hitag2_seed_encrypt_frame(
 // ---- SEED recovery (brute force over classic cipher) ----------------------
 
 /**
+ * Cooperative progress callback for the SEED brute force. Called periodically
+ * from inside the brute-force loop (every HITAG2_SEED_BF_YIELD_STEP candidates),
+ * mirroring PSA's PsaDecryptProgressCallback. The callback MUST yield the CPU
+ * (e.g. furi_delay_ms(1)) so the GUI/idle/watchdog can run on the single-core
+ * M4; otherwise the tight loop starves the system and the device appears frozen.
+ * @param progress     0..100 percent complete
+ * @param cand_tested  number of candidates tried so far
+ * @param context      opaque user pointer
+ * @return true to continue, false to ABORT the brute force
+ */
+typedef bool (*Hitag2SeedProgressCallback)(uint8_t progress, uint32_t cand_tested, void* context);
+
+// How often (in candidates) the brute force invokes the progress callback.
+#define HITAG2_SEED_BF_YIELD_STEP 0x1000U // every 4096 candidates
+
+/**
  * Recover the 4-byte SEED for a captured 11-byte frame by brute-forcing the
  * 18-bit seed search space against the classic cipher's hop output.
  * @param frame captured 11-byte frame (frame[10] = XOR checksum)
@@ -111,6 +127,19 @@ void hitag2_seed_encrypt_frame(
  * @return true if a matching IV/seed was found
  */
 bool hitag2_seed_recover(const uint8_t frame[11], uint8_t iv_out[4]);
+
+/**
+ * Same as hitag2_seed_recover() but cooperative: invokes @p progress_cb every
+ * HITAG2_SEED_BF_YIELD_STEP candidates so the caller can yield the CPU, show
+ * progress, and cancel. If @p progress_cb returns false the search aborts and
+ * this returns false. Passing progress_cb == NULL behaves like the plain
+ * hitag2_seed_recover() (a tight loop — only safe off the GUI thread).
+ */
+bool hitag2_seed_recover_ex(
+    const uint8_t frame[11],
+    uint8_t iv_out[4],
+    Hitag2SeedProgressCallback progress_cb,
+    void* progress_ctx);
 
 #ifdef __cplusplus
 }

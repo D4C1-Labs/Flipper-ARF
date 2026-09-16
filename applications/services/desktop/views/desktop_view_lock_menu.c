@@ -1,10 +1,14 @@
 // Visual lock menu adapted from Momentum Firmware (GPLv3)
 #include <furi.h>
+#include <furi_hal_bt.h>
 #include <gui/elements.h>
 #include <assets_icons.h>
 
 #include "../desktop_i.h"
 #include "desktop_view_lock_menu.h"
+// Full Bt definition (bt_settings field). bt_i.h only pulls in the guarded
+// notification/notification.h, so it does not re-introduce notification_app.h.
+#include <bt/bt_service/bt_i.h>
 
 static const NotificationSequence sequence_note_c = {
     &message_note_c5,
@@ -13,19 +17,29 @@ static const NotificationSequence sequence_note_c = {
     NULL,
 };
 
+// Index order is COLUMN-MAJOR so idx/2 = column, idx%2 = row. This yields the
+// on-screen layout:
+//   row0:  Lock       SubGhz       Bluetooth
+//   row1:  Sound      ProtoPirate  Settings
 typedef enum {
-    DesktopLockMenuIndexLock,
-    DesktopLockMenuIndexStealth,
-    DesktopLockMenuIndexBt,
-    DesktopLockMenuIndexSettings,
-    DesktopLockMenuIndexBrightness,
-    DesktopLockMenuIndexVolume,
+    DesktopLockMenuIndexLock, // col0 row0
+    DesktopLockMenuIndexStealth, // col0 row1 (Sound/Mute)
+    DesktopLockMenuIndexSubGhz, // col1 row0
+    DesktopLockMenuIndexProtoPirate, // col1 row1
+    DesktopLockMenuIndexBluetooth, // col2 row0
+    DesktopLockMenuIndexSettings, // col2 row1
+
+    DesktopLockMenuIndexBrightness, // bar 0
+    DesktopLockMenuIndexVolume, // bar 1
 
     DesktopLockMenuIndexTotalCount
 } DesktopLockMenuIndex;
 
 // Number of grid toggle buttons (the rest are vertical bars).
-#define LOCK_MENU_TOGGLE_COUNT 4
+#define LOCK_MENU_TOGGLE_COUNT 6
+
+// Leave room for the Flipper status bar (battery, etc.) at the top.
+#define LOCK_MENU_TOP_Y (STATUS_BAR_Y_SHIFT + 2)
 
 void desktop_lock_menu_set_callback(
     DesktopLockMenuView* lock_menu,
@@ -45,11 +59,6 @@ void desktop_lock_menu_set_stealth_mode_state(DesktopLockMenuView* lock_menu, bo
         true);
 }
 
-void desktop_lock_menu_set_bt_mode_state(DesktopLockMenuView* lock_menu, bool bt_mode) {
-    with_view_model(
-        lock_menu->view, DesktopLockMenuViewModel * model, { model->bt_mode = bt_mode; }, true);
-}
-
 void desktop_lock_menu_set_idx(DesktopLockMenuView* lock_menu, uint8_t idx) {
     furi_assert(idx < DesktopLockMenuIndexTotalCount);
     with_view_model(
@@ -61,6 +70,10 @@ void desktop_lock_menu_save_settings(DesktopLockMenuView* lock_menu) {
     if(lock_menu->save_notification) {
         notification_message_save_settings(lock_menu->notification);
         lock_menu->save_notification = false;
+    }
+    if(lock_menu->save_bt) {
+        bt_settings_save(&lock_menu->bt->bt_settings);
+        lock_menu->save_bt = false;
     }
 }
 
@@ -74,24 +87,28 @@ void desktop_lock_menu_draw_callback(Canvas* canvas, void* model) {
     bool selected, toggle;
     bool enabled = false;
     uint8_t value = 0;
-    const int8_t total = 58;
+    // Fillable inner height of a bar (bar h=48, minus 1px top/bottom border).
+    const int8_t total = 46;
     const Icon* icon = NULL;
 
     for(size_t i = 0; i < DesktopLockMenuIndexTotalCount; ++i) {
         selected = m->idx == i;
         toggle = i < LOCK_MENU_TOGGLE_COUNT;
+        // Screen is 64px tall; the status bar occupies the top ~13px, leaving
+        // ~49px for two toggle rows + a small gap. Use 23px cells with a 25px
+        // row pitch so both rows and the bars fit under the visible header.
         if(toggle) {
             x = 2 + 32 * (i / 2);
-            y = 2 + 32 * (i % 2);
+            y = LOCK_MENU_TOP_Y + 25 * (i % 2);
             w = 28;
-            h = 28;
+            h = 23;
             enabled = false;
         } else {
             uint8_t bar = i - LOCK_MENU_TOGGLE_COUNT;
-            x = 80 + 20 * bar;
-            y = 2;
+            x = 98 + 16 * bar;
+            y = LOCK_MENU_TOP_Y;
             w = 12;
-            h = 60;
+            h = 48;
             value = 0;
         }
 
@@ -99,13 +116,19 @@ void desktop_lock_menu_draw_callback(Canvas* canvas, void* model) {
         case DesktopLockMenuIndexLock:
             icon = &I_CC_Lock_16x16;
             break;
+        case DesktopLockMenuIndexBluetooth:
+            icon = &I_CC_Bluetooth_16x16;
+            enabled = m->lock_menu->bt->bt_settings.enabled;
+            break;
         case DesktopLockMenuIndexStealth:
             icon = m->stealth_mode ? &I_Muted_8x8 : &I_Volup_8x6;
             enabled = m->stealth_mode;
             break;
-        case DesktopLockMenuIndexBt:
-            icon = &I_CC_Bluetooth_16x16;
-            enabled = m->bt_mode;
+        case DesktopLockMenuIndexSubGhz:
+            icon = &I_MHz_25x11;
+            break;
+        case DesktopLockMenuIndexProtoPirate:
+            icon = &I_Cos_9x7;
             break;
         case DesktopLockMenuIndexSettings:
             icon = &I_CC_Settings_16x16;
@@ -185,34 +208,36 @@ bool desktop_lock_menu_input_callback(InputEvent* event, void* context) {
             stealth_mode = model->stealth_mode;
             if((event->type == InputTypeShort) || (event->type == InputTypeRepeat)) {
                 if(model->idx < LOCK_MENU_TOGGLE_COUNT) {
-                    // Grid navigation (2 columns of toggles)
+                    // Grid navigation: 3 columns x 2 rows (column-major idx).
+                    // idx/2 = column (0,1,2), idx%2 = row (0 top, 1 bottom).
                     if(event->key == InputKeyUp || event->key == InputKeyDown) {
+                        // Toggle between the two rows of the current column.
                         if(model->idx % 2) {
-                            model->idx--;
+                            model->idx--; // bottom -> top
                         } else {
-                            model->idx++;
+                            model->idx++; // top -> bottom
                         }
                     } else if(event->key == InputKeyLeft) {
                         if(model->idx < 2) {
-                            // wrap to the last (Volume) bar
+                            // leftmost column -> wrap to the last (Volume) bar
                             model->idx = DesktopLockMenuIndexTotalCount - 1;
                         } else {
-                            model->idx -= 2;
+                            model->idx -= 2; // one column left, same row
                         }
                     } else if(event->key == InputKeyRight) {
-                        if(model->idx >= 2) {
-                            // jump to the first (Brightness) bar
+                        if(model->idx >= LOCK_MENU_TOGGLE_COUNT - 2) {
+                            // rightmost column -> jump to the first (Brightness) bar
                             model->idx = DesktopLockMenuIndexBrightness;
                         } else {
-                            model->idx += 2;
+                            model->idx += 2; // one column right, same row
                         }
                     }
                 } else {
                     // Bar navigation (Left/Right move between bars and back to grid)
                     if(event->key == InputKeyLeft) {
                         if(model->idx == DesktopLockMenuIndexBrightness) {
-                            // back to right-hand column of the grid
-                            model->idx = DesktopLockMenuIndexBt;
+                            // back to the rightmost grid column (top row: Bluetooth)
+                            model->idx = DesktopLockMenuIndexBluetooth;
                         } else {
                             model->idx--;
                         }
@@ -236,21 +261,32 @@ bool desktop_lock_menu_input_callback(InputEvent* event, void* context) {
     } else if(event->key == InputKeyOk && event->type == InputTypeShort) {
         switch(idx) {
         case DesktopLockMenuIndexLock:
+            // Simple ARF lock behavior: leave the menu and lock.
             desktop_event = DesktopLockMenuEventLock;
             break;
+        case DesktopLockMenuIndexBluetooth:
+            // Toggle BT in place; stay in the menu (Momentum behavior).
+            lock_menu->bt->bt_settings.enabled = !lock_menu->bt->bt_settings.enabled;
+            if(lock_menu->bt->bt_settings.enabled) {
+                furi_hal_bt_start_advertising();
+            } else {
+                furi_hal_bt_stop_advertising();
+            }
+            lock_menu->save_bt = true;
+            break;
         case DesktopLockMenuIndexStealth:
+            // Stealth toggle stays in the menu; the scene updates RTC state only.
             desktop_event = stealth_mode ? DesktopLockMenuEventStealthModeOff :
                                            DesktopLockMenuEventStealthModeOn;
             break;
-        case DesktopLockMenuIndexBt:
-            desktop_event = DesktopLockMenuEventBt;
+        case DesktopLockMenuIndexSubGhz:
+            desktop_event = DesktopLockMenuEventSubGhz;
+            break;
+        case DesktopLockMenuIndexProtoPirate:
+            desktop_event = DesktopLockMenuEventProtoPirate;
             break;
         case DesktopLockMenuIndexSettings:
             desktop_event = DesktopLockMenuEventSettings;
-            break;
-        case DesktopLockMenuIndexVolume:
-            desktop_event = stealth_mode ? DesktopLockMenuEventStealthModeOff :
-                                           DesktopLockMenuEventStealthModeOn;
             break;
         default:
             break;
@@ -296,8 +332,10 @@ bool desktop_lock_menu_input_callback(InputEvent* event, void* context) {
 
 DesktopLockMenuView* desktop_lock_menu_alloc(void) {
     DesktopLockMenuView* lock_menu = malloc(sizeof(DesktopLockMenuView));
+    lock_menu->bt = furi_record_open(RECORD_BT);
     lock_menu->notification = furi_record_open(RECORD_NOTIFICATION);
     lock_menu->save_notification = false;
+    lock_menu->save_bt = false;
     lock_menu->view = view_alloc();
     view_allocate_model(lock_menu->view, ViewModelTypeLocking, sizeof(DesktopLockMenuViewModel));
     with_view_model(
@@ -319,5 +357,6 @@ void desktop_lock_menu_free(DesktopLockMenuView* lock_menu_view) {
 
     view_free(lock_menu_view->view);
     furi_record_close(RECORD_NOTIFICATION);
+    furi_record_close(RECORD_BT);
     free(lock_menu_view);
 }

@@ -9,6 +9,7 @@
 #include <lib/subghz/blocks/generic.h>
 #include <lib/subghz/blocks/math.h>
 #include <flipper_format/flipper_format.h>
+#include "hitag2_seed.h" // Hitag2SeedProgressCallback for the cooperative Seed BF
 
 #define RENAULT_PROTOCOL_V1_NAME "Renault V1"
 
@@ -114,3 +115,17 @@ uint16_t subghz_protocol_renault_v1_iv_control(uint8_t counter, uint8_t combo);
  * @return true if a SEED was recovered, false on brute-force miss
  */
 bool subghz_protocol_renault_v1_run_seed_bf(uint64_t data, uint32_t key2, uint32_t* seed_out);
+
+/**
+ * [HITAG2_SEED] Cooperative variant of the Seed BF. Invokes @p progress_cb every
+ * HITAG2_SEED_BF_YIELD_STEP candidates so the worker thread can yield the CPU
+ * (furi_delay_ms), report progress, and cancel — preventing the single-core M4
+ * from freezing under the tight brute-force loop. progress_cb == NULL behaves
+ * like subghz_protocol_renault_v1_run_seed_bf().
+ */
+bool subghz_protocol_renault_v1_run_seed_bf_ex(
+    uint64_t data,
+    uint32_t key2,
+    uint32_t* seed_out,
+    Hitag2SeedProgressCallback progress_cb,
+    void* progress_ctx);

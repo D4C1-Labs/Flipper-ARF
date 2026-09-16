@@ -8,6 +8,9 @@
 // NO include guard and is already pulled in via desktop_i.h, so including it
 // again caused mass redefinition errors. We only store a NotificationApp*.
 #include <notification/notification.h>
+// Guarded header providing the Bt typedef (we only store a Bt*). The .c pulls in
+// bt_i.h for access to the bt_settings field.
+#include <bt/bt_service/bt.h>
 
 #define HINT_TIMEOUT 2
 
@@ -21,13 +24,14 @@ struct DesktopLockMenuView {
     void* context;
 
     NotificationApp* notification;
+    Bt* bt;
     bool save_notification;
+    bool save_bt;
 };
 
 typedef struct {
     uint8_t idx;
     bool stealth_mode;
-    bool bt_mode;
     DesktopLockMenuView* lock_menu;
 } DesktopLockMenuViewModel;
 
@@ -38,7 +42,6 @@ void desktop_lock_menu_set_callback(
 
 View* desktop_lock_menu_get_view(DesktopLockMenuView* lock_menu);
 void desktop_lock_menu_set_stealth_mode_state(DesktopLockMenuView* lock_menu, bool stealth_mode);
-void desktop_lock_menu_set_bt_mode_state(DesktopLockMenuView* lock_menu, bool bt_mode);
 void desktop_lock_menu_set_idx(DesktopLockMenuView* lock_menu, uint8_t idx);
 void desktop_lock_menu_save_settings(DesktopLockMenuView* lock_menu);
 DesktopLockMenuView* desktop_lock_menu_alloc(void);

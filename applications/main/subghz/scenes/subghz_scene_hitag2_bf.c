@@ -472,6 +472,15 @@ static bool hitag2_bf_progress_cb(
         eta_sec,
         subghz_hitag2_bf_get_capture_count(ctx->bf));
 
+    // [FREEZE FIX] Yield the CPU here. The kernel's checkpoint comment states it
+    // relies on "the driver's progress_cb (which yields the CPU)" to keep the
+    // single-core M4 responsive, but this callback previously only updated stats
+    // and returned — so a LOCAL (non-offloaded) run of the heavy L5 (Hitag2Hell)
+    // never gave the GUI/idle/watchdog a chance to run and the device froze.
+    // Mirrors PSA's psa_decrypt_progress_cb. Only runs after each heavy slot /
+    // every 16 cheap slots, so the throughput cost is negligible.
+    furi_delay_ms(1);
+
     return true;
 }
 

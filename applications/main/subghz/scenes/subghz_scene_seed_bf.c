@@ -40,7 +40,33 @@ typedef struct {
     bool success; // BF recovered a SEED
     uint32_t seed; // recovered 4-byte SEED
     bool done_handled; // guards result handling from re-running
+    volatile uint8_t progress; // 0..100, published by the worker, drawn by tick
+    uint8_t last_drawn_progress; // last value rendered by the tick handler
+    bool running; // true while the worker is active (drives tick redraws)
 } SeedBfCtx;
+
+// -----------------------------------------------------------------------------
+// Cooperative progress callback (mirrors PSA's psa_decrypt_progress_cb):
+// yields the CPU so the GUI/idle/watchdog can run, updates the popup with the
+// percentage, and lets a BACK press cancel the search. Returning false aborts.
+// -----------------------------------------------------------------------------
+
+static bool seed_bf_progress_cb(uint8_t progress, uint32_t cand_tested, void* context) {
+    UNUSED(cand_tested);
+    SeedBfCtx* ctx = context;
+    if(ctx->cancel) return false;
+
+    // Publish progress to the model in a thread-safe way (NOT popup_set_header,
+    // which is not safe to call from the worker thread). The GUI-thread tick
+    // handler reads this and updates the popup. Storing a plain byte is atomic
+    // enough for a percentage indicator.
+    ctx->progress = progress;
+
+    // Yield the CPU: THIS is the actual freeze fix — it lets the GUI/idle/
+    // watchdog run on the single-core M4 during the ~262k-iteration brute force.
+    furi_delay_ms(1);
+    return true;
+}
 
 // -----------------------------------------------------------------------------
 // Worker thread: runs the classic-Hitag2 SEED brute force for the single frame.
@@ -50,7 +76,8 @@ static int32_t seed_bf_thread(void* context) {
     SeedBfCtx* ctx = context;
 
     uint32_t seed = 0;
-    bool ok = subghz_protocol_renault_v1_run_seed_bf(ctx->data, ctx->key2, &seed);
+    bool ok = subghz_protocol_renault_v1_run_seed_bf_ex(
+        ctx->data, ctx->key2, &seed, seed_bf_progress_cb, ctx);
     if(!ctx->cancel) {
         ctx->success = ok;
         ctx->seed = seed;
@@ -164,6 +191,9 @@ void subghz_scene_seed_bf_on_enter(void* context) {
     popup_disable_timeout(popup);
     view_dispatcher_switch_to_view(subghz->view_dispatcher, SubGhzViewIdPopup);
 
+    ctx->running = true;
+    ctx->progress = 0;
+    ctx->last_drawn_progress = 0xFF; // force first tick to draw 0%
     ctx->thread = furi_thread_alloc_ex("SeedBF", 4096, seed_bf_thread, ctx);
     // Run below the UI/input services so the compute loop can never starve them
     // on the single-core M4 — BACK stays responsive.
@@ -177,8 +207,22 @@ bool subghz_scene_seed_bf_on_event(void* context, SceneManagerEvent event) {
         subghz->scene_manager, SubGhzSceneSeedBf);
     if(!ctx) return false;
 
-    if(event.type == SceneManagerEventTypeCustom) {
+    if(event.type == SceneManagerEventTypeTick) {
+        // Runs on the GUI thread every 100ms: reflect the worker's progress into
+        // the popup header safely (popup_* must only be touched from this thread).
+        if(ctx->running && !ctx->done_handled) {
+            uint8_t p = ctx->progress;
+            if(p != ctx->last_drawn_progress) {
+                ctx->last_drawn_progress = p;
+                char hdr[32];
+                snprintf(hdr, sizeof(hdr), "Running Seed BF... %u%%", (unsigned)p);
+                popup_set_header(subghz->popup, hdr, 64, 26, AlignCenter, AlignTop);
+            }
+        }
+        return true;
+    } else if(event.type == SceneManagerEventTypeCustom) {
         if(event.event == SEED_BF_EVENT_DONE) {
+            ctx->running = false;
             if(ctx->done_handled) return true;
             ctx->done_handled = true;
 

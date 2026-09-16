@@ -822,12 +822,21 @@ static void renault_v1_seed_unpack_frame(const uint8_t frame[11], uint64_t* data
 // *seed_out and returns true. This is the ONLY place the heavy brute force runs,
 // so live capture is never blocked.
 bool subghz_protocol_renault_v1_run_seed_bf(uint64_t data, uint32_t key2, uint32_t* seed_out) {
+    return subghz_protocol_renault_v1_run_seed_bf_ex(data, key2, seed_out, NULL, NULL);
+}
+
+bool subghz_protocol_renault_v1_run_seed_bf_ex(
+    uint64_t data,
+    uint32_t key2,
+    uint32_t* seed_out,
+    Hitag2SeedProgressCallback progress_cb,
+    void* progress_ctx) {
     uint8_t frame[11];
     renault_v1_seed_pack_frame(data, key2, frame);
     frame[10] = (uint8_t)(hitag2_seed_frame_xor(frame) | (frame[10] & 0xC0U));
 
     uint8_t iv[4];
-    if(hitag2_seed_recover(frame, iv)) {
+    if(hitag2_seed_recover_ex(frame, iv, progress_cb, progress_ctx)) {
         if(seed_out) *seed_out = hitag2_seed_from_iv(iv);
         return true;
     }

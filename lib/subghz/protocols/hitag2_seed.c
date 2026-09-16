@@ -361,7 +361,11 @@ static bool hitag2_seed_bf_hop_matches(
            (iv_work[2] == hop_target[2]) && (iv_work[3] == hop_target[3]);
 }
 
-bool hitag2_seed_recover(const uint8_t frame[11], uint8_t iv_out[4]) {
+bool hitag2_seed_recover_ex(
+    const uint8_t frame[11],
+    uint8_t iv_out[4],
+    Hitag2SeedProgressCallback progress_cb,
+    void* progress_ctx) {
     uint8_t serial_be[4];
     uint8_t perm[6];
     uint8_t hop_target[4];
@@ -371,6 +375,18 @@ bool hitag2_seed_recover(const uint8_t frame[11], uint8_t iv_out[4]) {
 
     uint8_t iv[4];
     for(uint32_t cand = 0; cand < HITAG2_SEED_BF_CANDIDATES; cand++) {
+        // Cooperative yield/progress/cancel (mirrors PSA's brute force): every
+        // HITAG2_SEED_BF_YIELD_STEP candidates give the callback a chance to
+        // yield the CPU and cancel. Without this the ~262k-iteration tight loop
+        // starves the GUI/idle/watchdog on the single-core M4 and the device
+        // appears frozen.
+        if(progress_cb && (cand & (HITAG2_SEED_BF_YIELD_STEP - 1U)) == 0U) {
+            uint8_t pct = (uint8_t)(((uint64_t)cand * 100U) / HITAG2_SEED_BF_CANDIDATES);
+            if(!progress_cb(pct, cand, progress_ctx)) {
+                return false;
+            }
+        }
+
         iv[0] = iv0;
         iv[1] = (uint8_t)(fp | ((cand & 3U) << 6U));
         iv[2] = (uint8_t)(cand >> 2U);
@@ -384,4 +400,8 @@ bool hitag2_seed_recover(const uint8_t frame[11], uint8_t iv_out[4]) {
         }
     }
     return false;
+}
+
+bool hitag2_seed_recover(const uint8_t frame[11], uint8_t iv_out[4]) {
+    return hitag2_seed_recover_ex(frame, iv_out, NULL, NULL);
 }
