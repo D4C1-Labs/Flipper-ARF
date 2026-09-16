@@ -483,10 +483,30 @@ bool hitag2_hell_recover(
                 // Descend into layers 2..31.
                 deep_search(&ctx, state, alive);
                 if(result->overflow) break;
+
+                // [FREEZE FIX v2] A single "heavy" L0 slot runs 512 deep_search
+                // descents; on the M4 that can take many seconds/minutes with NO
+                // yield if we only checkpoint AFTER the whole slot (below). That
+                // was the residual L5 freeze (BACK/progress dead during a heavy
+                // slot). Checkpoint INSIDE this loop too: every 32 descents give
+                // progress_cb a chance to yield the CPU and honor cancel.
+                if(config && config->progress_cb && ((i1 & 0x1FU) == 0x1FU)) {
+                    uint8_t pct_inner =
+                        (uint8_t)(l0_total ? ((uint64_t)(i0 - l0_start) * 100U / l0_total) : 100U);
+                    if(!config->progress_cb(
+                           pct_inner,
+                           ctx.states_tested + i1,
+                           config->progress_ctx)) {
+                        result->cancelled = true;
+                        break;
+                    }
+                }
             }
 
             ctx.states_tested += (1U << 9);
             did_deep_search = true;
+            // If cancelled inside the inner loop, stop the whole sweep.
+            if(result->cancelled) break;
         }
 
         // [FREEZE FIX] Checkpoint after every heavy (deep-searched) slot, and at

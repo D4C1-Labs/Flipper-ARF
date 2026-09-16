@@ -60,12 +60,17 @@ bool desktop_scene_lock_menu_on_event(void* context, SceneManagerEvent event) {
             break;
         case DesktopLockMenuEventProtoPirate:
             desktop_lock_menu_save_settings(desktop->lock_menu);
-            loader_start_detached_with_gui_error(desktop->loader, "proto_pirate", NULL);
+            // ProtoPirate is an EXTERNAL app (.fap): the loader resolves it by
+            // its .fam `name` ("ProtoPirate"), NOT by its appid ("proto_pirate").
+            loader_start_detached_with_gui_error(desktop->loader, "ProtoPirate", NULL);
             consumed = true;
             break;
         case DesktopLockMenuEventSettings:
+            // Open the System settings app (general configuration) rather than the
+            // Apps menu. "System" is a built-in SETTINGS app resolved by its .fam
+            // name. There is no loader API to open the Settings SUBMENU directly.
             desktop_lock_menu_save_settings(desktop->lock_menu);
-            loader_start_detached_with_gui_error(desktop->loader, LOADER_APPLICATIONS_NAME, NULL);
+            loader_start_detached_with_gui_error(desktop->loader, "System", NULL);
             consumed = true;
             break;
         default:

@@ -125,10 +125,10 @@ void desktop_lock_menu_draw_callback(Canvas* canvas, void* model) {
             enabled = m->stealth_mode;
             break;
         case DesktopLockMenuIndexSubGhz:
-            icon = &I_MHz_25x11;
+            icon = &I_CC_SubGhz_10x10; // the app's own SubGHz icon
             break;
         case DesktopLockMenuIndexProtoPirate:
-            icon = &I_Cos_9x7;
+            icon = &I_CC_ProtoPirate_10x10; // ProtoPirate's own app icon
             break;
         case DesktopLockMenuIndexSettings:
             icon = &I_CC_Settings_16x16;
@@ -308,7 +308,12 @@ bool desktop_lock_menu_input_callback(InputEvent* event, void* context) {
                 lock_menu->notification->settings.display_brightness =
                     value < 0.00f ? 0.00f : (value > 1.00f ? 1.00f : value);
                 lock_menu->save_notification = true;
-                notification_message(lock_menu->notification, &sequence_display_backlight_on);
+                // Use FORCE_ON (not _on): _on respects the current backlight
+                // state and won't re-apply the level, so the brightness slider
+                // appeared to do nothing. force_on immediately re-applies the new
+                // display_brightness — same call the LCD settings screen uses.
+                notification_message(
+                    lock_menu->notification, &sequence_display_backlight_force_on);
                 break;
             case DesktopLockMenuIndexVolume:
                 value = lock_menu->notification->settings.speaker_volume + 0.05f * offset;

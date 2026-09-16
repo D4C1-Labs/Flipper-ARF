@@ -75,6 +75,13 @@ static bool seed_bf_progress_cb(uint8_t progress, uint32_t cand_tested, void* co
 static int32_t seed_bf_thread(void* context) {
     SeedBfCtx* ctx = context;
 
+    FURI_LOG_I(
+        TAG,
+        "Seed BF start: data=%08lX%08lX key2=%05lX",
+        (unsigned long)(ctx->data >> 32),
+        (unsigned long)(ctx->data & 0xFFFFFFFF),
+        (unsigned long)ctx->key2);
+
     uint32_t seed = 0;
     bool ok = subghz_protocol_renault_v1_run_seed_bf_ex(
         ctx->data, ctx->key2, &seed, seed_bf_progress_cb, ctx);
@@ -82,6 +89,13 @@ static int32_t seed_bf_thread(void* context) {
         ctx->success = ok;
         ctx->seed = seed;
     }
+
+    FURI_LOG_I(
+        TAG,
+        "Seed BF done: ok=%d cancel=%d seed=%08lX",
+        (int)ok,
+        (int)ctx->cancel,
+        (unsigned long)seed);
 
     view_dispatcher_send_custom_event(ctx->subghz->view_dispatcher, SEED_BF_EVENT_DONE);
     return 0;
@@ -174,10 +188,11 @@ void subghz_scene_seed_bf_on_enter(void* context) {
     Popup* popup = subghz->popup;
     popup_reset(popup);
     popup_set_context(popup, subghz);
-    popup_set_callback(popup, seed_bf_popup_callback);
 
     if(!fields_ok) {
-        // Not a decodable Renault V1 frame; report and let BACK return.
+        // Not a decodable Renault V1 frame; report and let BACK return. Only here
+        // do we wire the OK->return callback (nothing is running to cancel).
+        popup_set_callback(popup, seed_bf_popup_callback);
         popup_set_header(popup, "Seed BF", 64, 6, AlignCenter, AlignTop);
         popup_set_text(
             popup, "Missing Key/Key2\nfields.", 64, 30, AlignCenter, AlignTop);
@@ -186,8 +201,15 @@ void subghz_scene_seed_bf_on_enter(void* context) {
         return;
     }
 
-    // Show progress and spawn the local worker (no BLE, single frame).
-    popup_set_header(popup, "Running Seed BF...", 64, 26, AlignCenter, AlignTop);
+    // Show progress and spawn the local worker (no BLE, single frame). Set BOTH
+    // a header and a body text so the popup always has visible content (a
+    // header-only popup can render as a near-blank screen). The tick handler
+    // updates the body with the live percentage.
+    // NOTE: no popup OK-callback while running, so OK does nothing mid-search
+    // (only hardware BACK cancels). The callback is wired on completion below.
+    popup_set_callback(popup, NULL);
+    popup_set_header(popup, "Seed BF", 64, 12, AlignCenter, AlignTop);
+    popup_set_text(popup, "Starting...", 64, 34, AlignCenter, AlignTop);
     popup_disable_timeout(popup);
     view_dispatcher_switch_to_view(subghz->view_dispatcher, SubGhzViewIdPopup);
 
@@ -214,9 +236,11 @@ bool subghz_scene_seed_bf_on_event(void* context, SceneManagerEvent event) {
             uint8_t p = ctx->progress;
             if(p != ctx->last_drawn_progress) {
                 ctx->last_drawn_progress = p;
-                char hdr[32];
-                snprintf(hdr, sizeof(hdr), "Running Seed BF... %u%%", (unsigned)p);
-                popup_set_header(subghz->popup, hdr, 64, 26, AlignCenter, AlignTop);
+                // Update the BODY text (header stays "Seed BF") so there is always
+                // visible content and the percentage advances as the BF runs.
+                char body[32];
+                snprintf(body, sizeof(body), "Running... %u%%", (unsigned)p);
+                popup_set_text(subghz->popup, body, 64, 34, AlignCenter, AlignTop);
             }
         }
         return true;
