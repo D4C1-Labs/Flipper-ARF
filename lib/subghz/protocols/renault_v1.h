@@ -74,3 +74,43 @@ uint8_t subghz_protocol_renault_v1_iv_button(uint8_t button, uint8_t combo);
  * combo bit1 = control option (0 = counter & 0x3FF, 1 = (~counter) & 0x3FF).
  */
 uint16_t subghz_protocol_renault_v1_iv_control(uint8_t counter, uint8_t combo);
+
+// ---------------------------------------------------------------------------
+// [HITAG2_SEED] Classic-Hitag2 SEED model (ported from ProtoPirate).
+//
+// This is an ADDITIVE, second recovery/TX path that is completely SEPARATE from
+// the Fiat-BCM key-recovery above and from the Hitag2Hell BF engine. It uses the
+// classic byte-array Hitag2 cipher (lib/subghz/protocols/hitag2_seed.c) to:
+//   (a) recover a 4-byte SEED from a captured frame, and
+//   (b) forward re-encode a valid NEXT code from serial+cnt+btn+seed.
+//
+// The SEED is persisted in the .sub via the "Seed" field and its recovered-state
+// via "Recovered". These fields are OPTIONAL on load: old .sub files without them
+// still deserialize fine.
+// ---------------------------------------------------------------------------
+
+// Flipper format field name carrying the recovered 4-byte SEED (big-endian hex).
+#define RENAULT_V1_SEED_FIELD "Seed"
+
+// Flipper format field name carrying the classic-Hitag2 recovered marker.
+#define RENAULT_V1_RECOVERED_FIELD "Recovered"
+
+// Flipper format field name carrying the 18-bit key2 (uint32). Exposed here so
+// the manual "Seed BF" scene can read it back from a saved signal.
+#define RENAULT_V1_KEY2_FIELD "Key2"
+
+/**
+ * [HITAG2_SEED] Manual, on-demand classic-Hitag2 SEED brute force.
+ *
+ * Runs the heavy (~0x40000-candidate) classic Hitag2 brute force over a single
+ * decoded Renault V1 frame given its `data` (64-bit) and `key2` (18-bit). This
+ * is intentionally NOT called during live capture or on signal load; it is
+ * invoked ONLY from the saved-signal "Seed BF" menu action so that capturing
+ * never stalls and no button presses are dropped.
+ *
+ * @param      data      the decoded 64-bit frame body
+ * @param      key2      the 18-bit key2 field
+ * @param[out] seed_out  receives the recovered 4-byte SEED on success
+ * @return true if a SEED was recovered, false on brute-force miss
+ */
+bool subghz_protocol_renault_v1_run_seed_bf(uint64_t data, uint32_t key2, uint32_t* seed_out);

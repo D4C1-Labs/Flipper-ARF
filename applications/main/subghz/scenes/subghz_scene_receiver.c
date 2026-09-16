@@ -1,6 +1,8 @@
 #include "../subghz_i.h"
 #include <dolphin/dolphin.h>
 #include <lib/subghz/protocols/bin_raw.h>
+// SubGHz autosave/duplicate/history features adapted from Momentum Firmware (GPLv3)
+#include <toolbox/name_generator.h>
 
 #define TAG "SubGhzSceneReceiver"
 
@@ -140,13 +142,77 @@ static void subghz_scene_add_to_history_callback(
 
             subghz->state_notifications = SubGhzNotificationStateRxDone;
 
+            // SubGHz autosave/duplicate/history features adapted from Momentum Firmware (GPLv3)
+            // Duplicate detection: the new item already carries the accumulated
+            // repeat count (see subghz_history_add_to_history). When Remove
+            // Duplicates is enabled, delete the older matching rows from both the
+            // history and the receiver menu so only the newest instance remains.
+            if(subghz->last_settings->remove_duplicates) {
+                uint32_t hash_data = subghz_history_get_hash_data(history, idx);
+                const SubGhzProtocol* protocol = decoder_base->protocol;
+                subghz_view_receiver_disable_draw_callback(subghz->subghz_receiver);
+                for(uint16_t i = idx; i > 0; i--) {
+                    i--; // Iterating in reverse with off by one
+                    if(subghz_history_get_hash_data(history, i) == hash_data &&
+                       subghz_history_get_protocol(history, i) == protocol) {
+                        subghz_history_delete_item(subghz->history, i);
+                        subghz_view_receiver_delete_item(subghz->subghz_receiver, i);
+                        idx--;
+                    }
+                    i++;
+                }
+                subghz->idx_menu_chosen =
+                    subghz_view_receiver_get_idx_menu(subghz->subghz_receiver);
+                subghz_view_receiver_enable_draw_callback(subghz->subghz_receiver);
+                if(idx == 0) {
+                    subghz_rx_key_state_set(subghz, SubGhzRxKeyStateStart);
+                }
+            }
+
             subghz_history_get_text_item_menu(history, item_name, idx);
             subghz_history_get_time_item_menu(history, item_time, idx);
+
+            // Repeat count display: ARF's subghz_view_receiver_add_item_to_menu()
+            // has no repeats parameter (unlike Momentum). Rather than extend the
+            // view model + renderer (higher risk), append the count to the row
+            // text, which is the lower-risk option.
+            uint16_t repeats = subghz_history_get_repeats(history, idx);
+            if(repeats > 0) {
+                furi_string_cat_printf(item_name, " (x%u)", repeats + 1);
+            }
+
             subghz_view_receiver_add_item_to_menu(
                 subghz->subghz_receiver,
                 furi_string_get_cstr(item_name),
                 furi_string_get_cstr(item_time),
                 subghz_history_get_type_protocol(history, idx));
+
+            // Autosave: when enabled and the protocol supports Save, write the
+            // received signal to SUBGHZ_APP_FOLDER "/Autosave" with a detailed
+            // datetime filename (subghz_save_protocol_to_file creates the dir).
+            if((decoder_base->protocol->flag & SubGhzProtocolFlag_Save) &&
+               subghz->last_settings->autosave) {
+                char file[SUBGHZ_MAX_LEN_NAME] = {0};
+                const char* suf = subghz->last_settings->protocol_file_names ?
+                                      decoder_base->protocol->name :
+                                      SUBGHZ_APP_FILENAME_PREFIX;
+                DateTime time = subghz_history_get_datetime(history, idx);
+                name_generator_make_detailed_datetime(file, sizeof(file), suf, &time);
+                FuriString* path = furi_string_alloc_set(SUBGHZ_APP_FOLDER "/Autosave");
+                char* dir = strdup(furi_string_get_cstr(path));
+                const char* ext = SUBGHZ_APP_FILENAME_EXTENSION;
+                Storage* storage = furi_record_open(RECORD_STORAGE);
+                storage_get_next_filename(storage, dir, file, ext, path, sizeof(file));
+                strlcpy(file, furi_string_get_cstr(path), sizeof(file));
+                furi_string_printf(path, "%s/%s%s", dir, file, ext);
+                furi_record_close(RECORD_STORAGE);
+                free(dir);
+                subghz_save_protocol_to_file(
+                    subghz,
+                    subghz_history_get_raw_data(history, idx),
+                    furi_string_get_cstr(path));
+                furi_string_free(path);
+            }
 
             subghz_scene_receiver_update_statusbar(subghz);
             if(subghz_history_get_text_space_left(subghz->history, NULL)) {
@@ -195,6 +261,12 @@ void subghz_scene_receiver_on_enter(void* context) {
         furi_string_reset(item_time);
         subghz_history_get_text_item_menu(history, item_name, i);
         subghz_history_get_time_item_menu(history, item_time, i);
+        // SubGHz autosave/duplicate/history features adapted from Momentum Firmware (GPLv3)
+        // Keep the repeat count visible when reloading history into the menu.
+        uint16_t repeats = subghz_history_get_repeats(history, i);
+        if(repeats > 0) {
+            furi_string_cat_printf(item_name, " (x%u)", repeats + 1);
+        }
         subghz_view_receiver_add_item_to_menu(
             subghz->subghz_receiver,
             furi_string_get_cstr(item_name),

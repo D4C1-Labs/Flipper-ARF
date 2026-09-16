@@ -98,6 +98,7 @@
 #include "mazda_infinity.h"
 #include "audi.h"
 #include "hundai.h"
+#include "gm.h"
 
 // [UNLEASHED_PORT] New protocols from Unleashed firmware
 #include "allstar_firefly.h"

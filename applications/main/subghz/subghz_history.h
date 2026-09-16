@@ -7,6 +7,8 @@
 #include <lib/flipper_format/flipper_format.h>
 #include <lib/subghz/types.h>
 
+// SubGHz autosave/duplicate/history features adapted from Momentum Firmware (GPLv3)
+
 typedef struct SubGhzHistory SubGhzHistory;
 
 /** Allocate SubGhzHistory
@@ -28,6 +30,32 @@ void subghz_history_free(SubGhzHistory* instance);
 void subghz_history_reset(SubGhzHistory* instance);
 
 void subghz_history_delete_item(SubGhzHistory* instance, uint16_t idx);
+
+// SubGHz autosave/duplicate/history features adapted from Momentum Firmware (GPLv3)
+
+/** Get hash data to history[idx]
+ * 
+ * @param instance - SubGhzHistory instance
+ * @param idx      - record index
+ * @return hash    - hash data
+ */
+uint32_t subghz_history_get_hash_data(SubGhzHistory* instance, uint16_t idx);
+
+/** Get protocol pointer to history[idx]
+ * 
+ * @param instance - SubGhzHistory instance
+ * @param idx      - record index
+ * @return proto   - protocol pointer
+ */
+const SubGhzProtocol* subghz_history_get_protocol(SubGhzHistory* instance, uint16_t idx);
+
+/** Get repeat count to history[idx]
+ * 
+ * @param instance  - SubGhzHistory instance
+ * @param idx       - Record index
+ * @return repeats  - uint16_t repeat count
+*/
+uint16_t subghz_history_get_repeats(SubGhzHistory* instance, uint16_t idx);
 
 /** Get frequency to history[idx]
  * 
@@ -128,3 +156,18 @@ bool subghz_history_add_to_history(
  * @return SubGhzProtocolCommonLoad*
  */
 FlipperFormat* subghz_history_get_raw_data(SubGhzHistory* instance, uint16_t idx);
+
+// SubGHz autosave/duplicate/history features adapted from Momentum Firmware (GPLv3)
+
+/** Consolidate history removing existing duplicates
+ *
+ * @param instance - SubGhzHistory instance
+ */
+void subghz_history_remove_duplicates(SubGhzHistory* instance);
+
+/** Check if memory/history is full
+ *
+ * @param instance - SubGhzHistory instance
+ * @return bool - is FULL
+ */
+bool subghz_history_full(SubGhzHistory* instance);

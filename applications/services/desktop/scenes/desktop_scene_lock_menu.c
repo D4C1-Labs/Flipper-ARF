@@ -67,6 +67,11 @@ bool desktop_scene_lock_menu_on_event(void* context, SceneManagerEvent event) {
             scene_manager_search_and_switch_to_previous_scene(
                 desktop->scene_manager, DesktopSceneMain);
             break;
+        case DesktopLockMenuEventSettings:
+            loader_start_detached_with_gui_error(desktop->loader, "settings_apps", NULL);
+            scene_manager_search_and_switch_to_previous_scene(
+                desktop->scene_manager, DesktopSceneMain);
+            break;
         default:
             break;
         }
@@ -77,6 +82,7 @@ bool desktop_scene_lock_menu_on_event(void* context, SceneManagerEvent event) {
 }
 
 void desktop_scene_lock_menu_on_exit(void* context) {
-    UNUSED(context);
+    Desktop* desktop = (Desktop*)context;
+    desktop_lock_menu_save_settings(desktop->lock_menu);
     furi_record_close(RECORD_BT);
 }

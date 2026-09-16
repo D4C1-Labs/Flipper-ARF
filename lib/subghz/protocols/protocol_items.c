@@ -116,6 +116,7 @@ const SubGhzProtocol* const subghz_protocol_registry_items[] = {
     //&subghz_protocol_mazda_infinity,
     //&subghz_protocol_audi,
     //&subghz_protocol_hundai,
+    //&subghz_protocol_gm,
 
     // [UNLEASHED_PORT] New protocols from Unleashed firmware (disabled by default)
     //&subghz_protocol_allstar_firefly,
@@ -158,6 +159,8 @@ static const SubGhzProtocolCatalogEntry subghz_protocol_catalog[] = {
     {"Ford V2", SubGhzProtocolCatalogRoutePolicyFMF4,
      SUBGHZ_PROTOCOL_CATALOG_TX_KEY("ford_v2")},
     {"Ford V3", SubGhzProtocolCatalogRoutePolicyFMF4, NULL},
+    {"GM", SubGhzProtocolCatalogRoutePolicyAMDefault,
+     SUBGHZ_PROTOCOL_CATALOG_TX_KEY("gm")},
     {"Honda Static", SubGhzProtocolCatalogRoutePolicyFMHonda1,
      SUBGHZ_PROTOCOL_CATALOG_TX_KEY("honda_static")},
     {"Honda V1", SubGhzProtocolCatalogRoutePolicyAMDefault,

@@ -33,6 +33,9 @@ typedef struct {
     bool leds_and_amp;
     uint8_t tx_power;
     bool custom_car_emulate;
+    // SubGHz autosave/duplicate/history features adapted from Momentum Firmware (GPLv3)
+    bool autosave;
+    bool remove_duplicates;
     char protocol_filter[SUBGHZ_LAST_SETTINGS_PROTOCOL_FILTER_SIZE];  /* comma-separated disabled protocols, empty = all enabled */
 } SubGhzLastSettings;
 
