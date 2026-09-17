@@ -305,7 +305,12 @@ static bool subghz_protocol_encoder_scher_khan_get_upload(
     uint8_t btn) {
     furi_check(instance);
 
-    // For 51-bit dynamic: rebuild data with new button and incremented counter
+    // [PROTOPIRATE_PORT] 51-bit MAGIC CODE Dynamic: forward-encode. The car-emulate
+    // scene supplies the base counter via "Cnt" (read into generic.cnt in
+    // encoder_deserialize) and increments it each press; we advance by the HAL
+    // rolling mult on top of that base, so every TX carries a new counter — never a
+    // replay. Static (35-bit) and Response (63/64/81/82-bit) variants fall through
+    // untouched below and are transmitted verbatim (correctly replay-only).
     if(instance->generic.data_count_bit == 51) {
         uint32_t override_cnt = 0;
         if(subghz_block_generic_global_counter_override_get(&override_cnt)) {
@@ -325,6 +330,8 @@ static bool subghz_protocol_encoder_scher_khan_get_upload(
         instance->generic.btn = btn;
     }
 
+    // [PROTOPIRATE_PORT] 57-bit MAGIC CODE PRO1/PRO2: forward-encode via the PI-derived
+    // cipher tables + CRC. Same counter policy as the 51-bit dynamic case above.
     if(instance->generic.data_count_bit == 57) {
         uint32_t override_cnt = 0;
         if(subghz_block_generic_global_counter_override_get(&override_cnt)) {

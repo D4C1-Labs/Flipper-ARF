@@ -1393,9 +1393,38 @@ SubGhzProtocolStatus
             instance->btn = 0x20;
         }
 
+        // [CAR_EMULATE_FIX] Read the Serial/Btn/Cnt overrides the car-emulate
+        // scene writes into the flipper_format. The scene bumps its own counter
+        // and writes it back as "Cnt" on every TX (car_emulate_update_fff), but
+        // subghz_block_generic_deserialize() never reads "Cnt" — it only reads
+        // Key/Bit. Without this, VAG re-derives the base counter from the packed
+        // Key (which never changes) and only adds a constant, so every "next
+        // signal" replays the SAME frame. Reading "Cnt" here makes the base
+        // counter track the scene, so repeated TX truly advances the code.
+        {
+            uint32_t ser_u32 = instance->serial;
+            uint32_t btn_u32 = instance->btn;
+            uint32_t cnt_u32 = instance->cnt;
+            flipper_format_rewind(flipper_format);
+            const bool got_serial =
+                flipper_format_read_uint32(flipper_format, "Serial", &ser_u32, 1);
+            flipper_format_rewind(flipper_format);
+            const bool got_btn = flipper_format_read_uint32(flipper_format, "Btn", &btn_u32, 1);
+            flipper_format_rewind(flipper_format);
+            const bool got_cnt = flipper_format_read_uint32(flipper_format, "Cnt", &cnt_u32, 1);
+
+            if(got_serial) instance->serial = ser_u32;
+            if(got_btn) instance->btn = (uint8_t)btn_u32;
+            if(got_cnt) instance->cnt = cnt_u32 & 0xFFFFFF;
+        }
+
         if(subghz_custom_btn_get_original() == 0) {
             subghz_custom_btn_set_original(vag_btn_to_custom(instance->btn));
         }
+        // VAG exposes Lock/Unlock/Boot; set_max=4 makes all D-pad directions
+        // reachable (not just OK). vag_custom_to_btn re-maps the selection into a
+        // real button byte, and the encoder re-encrypts + re-CRCs below so the
+        // remapped button is a valid frame (forward-encoded, not replay).
         subghz_custom_btn_set_max(4);
 
         uint8_t selected_custom;
@@ -1408,7 +1437,11 @@ SubGhzProtocolStatus
         uint8_t new_btn = vag_custom_to_btn(selected_custom, instance->btn);
         instance->btn = new_btn;
 
+        // Forward-encode the NEXT counter. When the scene supplied "Cnt" the
+        // base already tracks the requested value; advance by the rolling
+        // multiplier (>=1) so each TX emits a fresh, re-encrypted frame.
         uint32_t mult = furi_hal_subghz_get_rolling_counter_mult();
+        if(mult == 0U) mult = 1U;
         instance->cnt = (instance->cnt + mult) & 0xFFFFFF;
 
         uint8_t type_byte = (uint8_t)(instance->key1_high >> 24);

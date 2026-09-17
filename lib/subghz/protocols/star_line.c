@@ -207,6 +207,13 @@ void subghz_protocol_encoder_star_line_free(void* context) {
 static bool
     subghz_protocol_star_line_gen_data(SubGhzProtocolEncoderStarLine* instance, uint8_t btn) {
 
+    // [PROTOPIRATE_PORT] Counter policy for KeeLoq forward-encode:
+    //  - If an explicit global override is set, use it verbatim.
+    //  - Otherwise advance the rolling counter by the HAL multiplier. The
+    //    car-emulate scene supplies the base counter via "Cnt" (read in
+    //    encoder_deserialize into generic.cnt) and increments it every press, so
+    //    each TX encrypts a strictly-advancing counter — never a replay of the
+    //    same hop code.
     uint32_t override_cnt = 0;
     if(subghz_block_generic_global_counter_override_get(&override_cnt)) {
         instance->generic.cnt = override_cnt & 0xFFFF;

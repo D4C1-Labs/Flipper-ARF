@@ -169,6 +169,10 @@ void subghz_scene_decode_raw_on_enter(void* context) {
     subghz_txrx_set_rx_callback(subghz->txrx, subghz_scene_add_to_history_callback, subghz);
 
     subghz_txrx_receiver_set_filter(subghz->txrx, SubGhzProtocolFlag_Decodable);
+    // Gate decoders by the loaded capture's preset modulation (AM/FM), mirroring
+    // ProtoPirate. Without this, an FM (2-FSK) capture such as KIA V6 would be
+    // fed to AM (OOK) decoders like Fiat V2, producing false positives.
+    subghz_txrx_receiver_apply_modulation_filter(subghz->txrx);
 
     if(scene_manager_get_scene_state(subghz->scene_manager, SubGhzSceneDecodeRAW) ==
        SubGhzDecodeRawStateStart) {

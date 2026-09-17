@@ -209,6 +209,29 @@ SubGhzProtocolStatus
         uint16_t raw_count = (uint16_t)((instance->generic.data >> 4) & 0xFFF);
         instance->generic.cnt = ((raw_count >> 4) | (raw_count << 8)) & 0xFFF;
 
+        // [PROTOPIRATE_PORT] Honor the app-supplied Serial/Btn/Cnt overrides so the
+        // rolling counter actually advances on each TX. The car-emulate scene writes an
+        // incremented "Cnt" into the flipper_format before re-invoking this deserialize;
+        // without reading it back here the frame would be a byte-identical replay. The
+        // 12-bit cnt is re-packed (and CRC recomputed) in get_upload below.
+        {
+            uint32_t ser_u32 = 0;
+            uint32_t btn_u32 = 0;
+            uint32_t cnt_u32 = 0;
+            flipper_format_rewind(flipper_format);
+            if(flipper_format_read_uint32(flipper_format, "Serial", &ser_u32, 1)) {
+                instance->generic.serial = ser_u32;
+            }
+            flipper_format_rewind(flipper_format);
+            if(flipper_format_read_uint32(flipper_format, "Btn", &btn_u32, 1)) {
+                instance->generic.btn = (uint8_t)(btn_u32 & 0x0FU);
+            }
+            flipper_format_rewind(flipper_format);
+            if(flipper_format_read_uint32(flipper_format, "Cnt", &cnt_u32, 1)) {
+                instance->generic.cnt = (uint16_t)(cnt_u32 & 0xFFFU);
+            }
+        }
+
         // [PROTOPIRATE_PORT] custom_btn support
         // Kia/Hyundai V2 uses a raw 4-bit button field (no in-file name table).
         // Follow the shared KIA family convention used by V3/V4/V6/V7:
@@ -434,6 +457,22 @@ SubGhzProtocolStatus subghz_protocol_decoder_kia_v2_serialize(
     }
     uint32_t raw_count = (uint16_t)((instance->generic.data >> 4) & 0xFFF);
     if(!flipper_format_write_uint32(flipper_format, "RawCnt", &raw_count, 1)) {
+        return SubGhzProtocolStatusErrorParserOthers;
+    }
+    // [PROTOPIRATE_PORT] Persist Serial/Btn/Cnt so the car-emulate scene can seed
+    // original_counter from "Cnt". Without it the rolling counter would restart from
+    // 0 on emulate and desync from the vehicle. The encoder deserialize reads these
+    // back (with the scene-incremented Cnt) to forward-encode the next rolling code.
+    uint32_t serial_tmp = instance->generic.serial;
+    if(!flipper_format_write_uint32(flipper_format, "Serial", &serial_tmp, 1)) {
+        return SubGhzProtocolStatusErrorParserOthers;
+    }
+    uint32_t btn_tmp = instance->generic.btn;
+    if(!flipper_format_write_uint32(flipper_format, "Btn", &btn_tmp, 1)) {
+        return SubGhzProtocolStatusErrorParserOthers;
+    }
+    uint32_t cnt_tmp = instance->generic.cnt;
+    if(!flipper_format_write_uint32(flipper_format, "Cnt", &cnt_tmp, 1)) {
         return SubGhzProtocolStatusErrorParserOthers;
     }
     return SubGhzProtocolStatusOk;

@@ -315,6 +315,18 @@ SubGhzProtocolStatus subghz_protocol_decoder_fiat_spa_serialize(
            SubGhzProtocolStatusOk) {
             break;
         }
+        // [PROTOPIRATE_PORT] Persist Serial/Btn/Cnt so the base counter (hop) and
+        // the captured button survive a save/reload, matching the KIA family
+        // template. Even though Fiat SPA is replay-only, the car-emulate scene
+        // seeds its counter display from "Cnt".
+        uint32_t serial = instance->fix;
+        uint32_t btn = instance->endbyte;
+        uint32_t cnt = instance->hop;
+        if(!flipper_format_write_uint32(flipper_format, "Serial", &serial, 1) ||
+           !flipper_format_write_uint32(flipper_format, "Btn", &btn, 1) ||
+           !flipper_format_write_uint32(flipper_format, "Cnt", &cnt, 1)) {
+            break;
+        }
         if(!flipper_format_write_uint32(
                flipper_format, "EndByte", (uint32_t*)&instance->endbyte, 1)) {
             break;
@@ -502,34 +514,27 @@ SubGhzProtocolStatus subghz_protocol_encoder_fiat_spa_deserialize(
             instance->endbyte = (uint8_t)endbyte_temp;
         }
 
-        // [PROTOPIRATE_PORT] custom_btn support
-        // Fiat SPA shares the Fiat V0 frame: the button is carried in the LOW
-        // NIBBLE of the endbyte:
-        //   Lock   = 0x4..0x7   (canonical bits 0b01xx)
-        //   Unlock = 0x8..0xB   (canonical bits 0b10xx)
-        //   (no Trunk/Panic on this protocol)
-        // Up  -> Lock, Down -> Unlock, OK -> original (byte-identical replay).
-        // High nibble (rolling portion) and the two low sub-code bits are
-        // preserved; when OK is selected the endbyte is left untouched.
+        // [PROTOPIRATE_PORT] Fiat SPA shares the Fiat V0 71-bit frame and is
+        // REPLAY-ONLY: the rolling field (hop, upper 32 bits of Key) is
+        // opaque/encrypted with no known key or forward-computable checksum, so we
+        // cannot synthesize a valid NEXT frame for a changed button or an advanced
+        // counter. Matching ProtoPirate ("Fiat" -> return original), we replay the
+        // CAPTURED endbyte/button exactly and never pretend to increment the
+        // counter. custom_btn is still primed so the D-pad UI behaves consistently,
+        // but every selection re-emits the captured frame byte-identically.
         {
             const uint8_t original_btn = instance->endbyte;
             if(subghz_custom_btn_get_original() == 0) {
                 subghz_custom_btn_set_original(original_btn);
             }
-            subghz_custom_btn_set_max(4);
-            uint8_t custom_btn_id = subghz_custom_btn_get();
-            const uint8_t high = (uint8_t)(original_btn & 0xF0U);
-            const uint8_t sub = (uint8_t)(original_btn & 0x03U); // preserve sub-code
-            uint8_t endbyte = original_btn;
-            switch(custom_btn_id) {
-            case SUBGHZ_CUSTOM_BTN_UP:   endbyte = (uint8_t)(high | 0x04U | sub); break; // Lock
-            case SUBGHZ_CUSTOM_BTN_OK:   endbyte = original_btn;                  break;
-            case SUBGHZ_CUSTOM_BTN_DOWN: endbyte = (uint8_t)(high | 0x08U | sub); break; // Unlock
-            default:                     endbyte = original_btn;                  break;
-            }
-            instance->endbyte = endbyte;
+            // Replay-only: advertise a single button (OK) and always re-emit the
+            // captured endbyte regardless of the selected custom_btn.
+            subghz_custom_btn_set_max(1);
+            instance->endbyte = original_btn;
         }
 
+        // Counter (hop) is replay-only: keep the captured hop; do NOT read/apply an
+        // incremented "Cnt" because we cannot recompute the encrypted rolling code.
         instance->generic.cnt = instance->hop;
         instance->generic.serial = instance->fix;
         instance->generic.btn = instance->endbyte;

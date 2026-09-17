@@ -361,20 +361,51 @@ SubGhzProtocolStatus
             subghz_protocol_sheriff_cfm_const.min_count_bit_for_found);
         if(ret != SubGhzProtocolStatusOk) break;
 
-        uint32_t model_temp = 0;
-        if(flipper_format_read_uint32(flipper_format, "Model", &model_temp, 1)) {
-            instance->model = (SheriffCfmModel)model_temp;
-        } else {
+        // [PROTOPIRATE_PORT] Always recover model/serial/btn/cnt from the packed Key
+        // via KeeLoq decrypt. Use "Model" only as a hint; we must still populate the
+        // generic fields (previously, when "Model" was present the decrypt was
+        // skipped and serial/btn/cnt were left uninitialised, so the very first TX
+        // encrypted a wrong/zero counter).
+        {
             SheriffCfmModel detected;
             uint8_t det_btn;
             uint32_t det_serial;
             uint16_t det_cnt;
-            if(cfm_try_decrypt(instance->generic.data, &detected, &det_btn, &det_serial, &det_cnt)) {
+            if(cfm_try_decrypt(
+                   instance->generic.data, &detected, &det_btn, &det_serial, &det_cnt)) {
                 instance->model = detected;
                 instance->generic.btn = det_btn;
                 instance->generic.serial = det_serial;
                 instance->generic.cnt = det_cnt;
             }
+            uint32_t model_temp = 0;
+            if(flipper_format_read_uint32(flipper_format, "Model", &model_temp, 1)) {
+                instance->model = (SheriffCfmModel)model_temp;
+            }
+        }
+
+        // [PROTOPIRATE_PORT] Read Serial/Btn/Cnt overrides from the flipper_format.
+        // The car-emulate scene increments the rolling counter and writes it into
+        // "Cnt"; subghz_block_generic_deserialize_check_count_bit only reads Key, so
+        // we must read "Cnt" here or the KeeLoq hop would re-encrypt the same counter
+        // and replay the same frame.
+        {
+            uint32_t u32 = 0;
+            flipper_format_rewind(flipper_format);
+            if(flipper_format_read_uint32(flipper_format, "Serial", &u32, 1)) {
+                instance->generic.serial = u32;
+            }
+            u32 = 0;
+            flipper_format_rewind(flipper_format);
+            if(flipper_format_read_uint32(flipper_format, "Btn", &u32, 1)) {
+                instance->generic.btn = (uint8_t)u32;
+            }
+            u32 = 0;
+            flipper_format_rewind(flipper_format);
+            if(flipper_format_read_uint32(flipper_format, "Cnt", &u32, 1)) {
+                instance->generic.cnt = (uint16_t)u32;
+            }
+            flipper_format_rewind(flipper_format);
         }
 
         if(!flipper_format_read_uint32(
@@ -402,6 +433,10 @@ SubGhzProtocolStatus
         uint32_t model = (uint32_t)instance->model;
         flipper_format_rewind(flipper_format);
         flipper_format_insert_or_update_uint32(flipper_format, "Model", &model, 1);
+
+        uint32_t serial = instance->generic.serial;
+        flipper_format_rewind(flipper_format);
+        flipper_format_insert_or_update_uint32(flipper_format, "Serial", &serial, 1);
 
         uint32_t btn = instance->generic.btn;
         flipper_format_rewind(flipper_format);
@@ -588,6 +623,15 @@ SubGhzProtocolStatus subghz_protocol_decoder_sheriff_cfm_serialize(
     if(ret == SubGhzProtocolStatusOk) {
         uint32_t model = (uint32_t)instance->model;
         flipper_format_insert_or_update_uint32(flipper_format, "Model", &model, 1);
+
+        // [PROTOPIRATE_PORT] Persist Serial/Btn/Cnt so the base counter survives
+        // save/reload and the car-emulate scene can read/override them.
+        uint32_t serial = instance->generic.serial;
+        flipper_format_insert_or_update_uint32(flipper_format, "Serial", &serial, 1);
+        uint32_t btn = instance->generic.btn;
+        flipper_format_insert_or_update_uint32(flipper_format, "Btn", &btn, 1);
+        uint32_t cnt = instance->generic.cnt;
+        flipper_format_insert_or_update_uint32(flipper_format, "Cnt", &cnt, 1);
     }
     return ret;
 }

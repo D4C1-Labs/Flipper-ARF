@@ -664,6 +664,27 @@ SubGhzProtocolStatus subghz_protocol_decoder_kia_v6_serialize(
     SubGhzProtocolStatus ret =
         subghz_block_generic_serialize(&instance->generic, flipper_format, preset);
 
+    // [PROTOPIRATE_PORT] Persist Serial/Btn/Cnt (as ProtoPirate's pp_serialize_fields
+    // does). The car-emulate scene reads "Cnt" to seed original_counter; without it the
+    // rolling counter would restart from 0 and desync from the vehicle.
+    if(ret == SubGhzProtocolStatusOk) {
+        uint32_t serial_tmp = instance->generic.serial;
+        if(!flipper_format_write_uint32(flipper_format, "Serial", &serial_tmp, 1)) {
+            ret = SubGhzProtocolStatusErrorParserOthers;
+        }
+    }
+    if(ret == SubGhzProtocolStatusOk) {
+        uint32_t btn_tmp = instance->generic.btn;
+        if(!flipper_format_write_uint32(flipper_format, "Btn", &btn_tmp, 1)) {
+            ret = SubGhzProtocolStatusErrorParserOthers;
+        }
+    }
+    if(ret == SubGhzProtocolStatusOk) {
+        uint32_t cnt_tmp = instance->generic.cnt;
+        if(!flipper_format_write_uint32(flipper_format, "Cnt", &cnt_tmp, 1)) {
+            ret = SubGhzProtocolStatusErrorParserOthers;
+        }
+    }
     if(ret == SubGhzProtocolStatusOk) {
         uint32_t key2_low = instance->stored_part2_low;
         if(!flipper_format_write_uint32(flipper_format, "Key_2", &key2_low, 1)) {
@@ -939,6 +960,31 @@ SubGhzProtocolStatus
         instance->generic.cnt = dec.generic.cnt;
         instance->generic.data_count_bit = subghz_protocol_kia_v6_const.min_count_bit_for_found;
         instance->fx_field = dec.fx_field;
+
+        // [PROTOPIRATE_PORT] Honor the app-supplied Serial/Btn/Cnt overrides so the
+        // rolling counter actually advances on each TX. The car-emulate scene writes an
+        // incremented "Cnt" into the flipper_format before re-invoking this deserialize.
+        // Without reading it back here, cnt is re-derived from the AES-decrypted stored
+        // key and the frame is a byte-identical replay. kia_v6_encoder_build_upload()
+        // re-runs AES with the new cnt (and recomputes the embedded CRC), so the emitted
+        // frame is a valid forward-encoded rolling code.
+        {
+            uint32_t ser_u32 = 0;
+            uint32_t btn_u32 = 0;
+            uint32_t cnt_u32 = 0;
+            flipper_format_rewind(flipper_format);
+            if(flipper_format_read_uint32(flipper_format, "Serial", &ser_u32, 1)) {
+                instance->generic.serial = ser_u32;
+            }
+            flipper_format_rewind(flipper_format);
+            if(flipper_format_read_uint32(flipper_format, "Btn", &btn_u32, 1)) {
+                instance->generic.btn = (uint8_t)btn_u32;
+            }
+            flipper_format_rewind(flipper_format);
+            if(flipper_format_read_uint32(flipper_format, "Cnt", &cnt_u32, 1)) {
+                instance->generic.cnt = cnt_u32;
+            }
+        }
 
         // [PROTOPIRATE_PORT] custom_btn support
         // Kia V6 codes (see get_string switch): Lock=0x01, Unlock=0x02,

@@ -237,6 +237,14 @@ static uint32_t subghz_txrx_rx(SubGhzTxRx* instance, uint32_t frequency) {
 
     subghz_devices_idle(instance->radio_device);
 
+    // Gate decoders by the active preset's modulation (AM/FM), mirroring
+    // ProtoPirate. Applied here (the single choke point through which all RX
+    // starts pass, including the frequency/preset hoppers) so the gate always
+    // tracks the current preset. Prevents AM (OOK) decoders such as Fiat V2
+    // from being fed FM (2-FSK) captures like KIA V6, which is the source of
+    // the Fiat V2 false positives.
+    subghz_txrx_receiver_apply_modulation_filter(instance);
+
     uint32_t value = subghz_devices_set_frequency(instance->radio_device, frequency);
     subghz_devices_flush_rx(instance->radio_device);
     subghz_txrx_speaker_on(instance);
@@ -832,6 +840,58 @@ bool subghz_txrx_protocol_is_transmittable(SubGhzTxRx* instance, bool check_type
 void subghz_txrx_receiver_set_filter(SubGhzTxRx* instance, SubGhzProtocolFlag filter) {
     furi_assert(instance);
     subghz_receiver_set_filter(instance->receiver, filter);
+}
+
+// CC1101 MDMCFG2 register: modulation format is encoded in bits [6:4].
+#define SUBGHZ_CC1101_REG_MDMCFG2        0x12U
+#define SUBGHZ_CC1101_MOD_FORMAT_MASK    0x70U
+#define SUBGHZ_CC1101_MOD_FORMAT_ASK_OOK 0x30U
+
+// Read a register value out of a CC1101 preset data blob (address/value pairs
+// terminated by a 0x00/0x00 sentinel). Mirrors ProtoPirate's
+// protopirate_preset_try_get_register().
+static bool
+    subghz_txrx_preset_try_get_register(const uint8_t* data, size_t size, uint8_t reg, uint8_t* value) {
+    if(!data || !value || (size < 2U)) {
+        return false;
+    }
+    for(size_t i = 0; i + 1U < size; i += 2U) {
+        const uint8_t address = data[i];
+        const uint8_t reg_data = data[i + 1U];
+        if((address == 0x00U) && (reg_data == 0x00U)) {
+            break;
+        }
+        if(address == reg) {
+            *value = reg_data;
+            return true;
+        }
+    }
+    return false;
+}
+
+// Derive the modulation gate (SubGhzProtocolFlag_AM / _FM) from the active
+// preset and apply it to the receiver. This mirrors ProtoPirate, which selects
+// an AM-only or FM-only protocol registry from the capture's preset modulation,
+// preventing AM (OOK) decoders (e.g. Fiat V2) from being fed FM (2-FSK)
+// captures (e.g. KIA V6). If the modulation cannot be determined, the gate is
+// disabled (0) so behaviour falls back to the legacy "feed everything".
+void subghz_txrx_receiver_apply_modulation_filter(SubGhzTxRx* instance) {
+    furi_assert(instance);
+    SubGhzProtocolFlag modulation = 0;
+    uint8_t mdmcfg2 = 0U;
+    if(subghz_txrx_preset_try_get_register(
+           instance->preset->data,
+           instance->preset->data_size,
+           SUBGHZ_CC1101_REG_MDMCFG2,
+           &mdmcfg2)) {
+        modulation =
+            ((mdmcfg2 & SUBGHZ_CC1101_MOD_FORMAT_MASK) == SUBGHZ_CC1101_MOD_FORMAT_ASK_OOK) ?
+                SubGhzProtocolFlag_AM :
+                SubGhzProtocolFlag_FM;
+    } else {
+        FURI_LOG_W(TAG, "Preset missing MDMCFG2, modulation gate disabled");
+    }
+    subghz_receiver_set_modulation_filter(instance->receiver, modulation);
 }
 
 void subghz_txrx_set_rx_callback(

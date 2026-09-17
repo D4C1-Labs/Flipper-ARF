@@ -248,6 +248,29 @@ SubGhzProtocolStatus
         instance->generic.cnt = ((instance->generic.data >> 4) & 0xF) << 8 |
                                 ((instance->generic.data >> 8) & 0xFF);
 
+        // [PROTOPIRATE_PORT] Honor the app-supplied Serial/Btn/Cnt overrides so the
+        // rolling counter actually advances on each TX. The car-emulate scene writes an
+        // incremented "Cnt" into the flipper_format before re-invoking this deserialize;
+        // without reading it back here the frame would be a byte-identical replay.
+        // Mirrors ProtoPirate kia_v1 (pp_encoder_read_fields) and kia_v0's Cnt handling.
+        {
+            uint32_t ser_u32 = 0;
+            uint32_t btn_u32 = 0;
+            uint32_t cnt_u32 = 0;
+            flipper_format_rewind(flipper_format);
+            if(flipper_format_read_uint32(flipper_format, "Serial", &ser_u32, 1)) {
+                instance->generic.serial = ser_u32;
+            }
+            flipper_format_rewind(flipper_format);
+            if(flipper_format_read_uint32(flipper_format, "Btn", &btn_u32, 1)) {
+                instance->generic.btn = (uint8_t)btn_u32;
+            }
+            flipper_format_rewind(flipper_format);
+            if(flipper_format_read_uint32(flipper_format, "Cnt", &cnt_u32, 1)) {
+                instance->generic.cnt = (uint16_t)(cnt_u32 & 0xFFFU);
+            }
+        }
+
         // [PROTOPIRATE_PORT] custom_btn support
         // Kia V1 codes (see get_name_button): Close/Lock=0x1, Open/Unlock=0x2,
         // Boot/Trunk=0x3. Only 3 buttons; RIGHT falls back to the captured one.
@@ -460,7 +483,26 @@ SubGhzProtocolStatus subghz_protocol_decoder_kia_v1_serialize(
 
     subghz_protocol_kia_v1_check_remote_controller(instance);
 
-    return subghz_block_generic_serialize(&instance->generic, flipper_format, preset);
+    SubGhzProtocolStatus ret =
+        subghz_block_generic_serialize(&instance->generic, flipper_format, preset);
+    if(ret != SubGhzProtocolStatusOk) return ret;
+
+    // [PROTOPIRATE_PORT] Persist Serial/Btn/Cnt so the car-emulate scene can seed
+    // original_counter from "Cnt" and the encoder deserialize can forward-encode the
+    // next rolling code. Without a stored Cnt the counter would restart from 0.
+    uint32_t serial_tmp = instance->generic.serial;
+    if(!flipper_format_write_uint32(flipper_format, "Serial", &serial_tmp, 1)) {
+        return SubGhzProtocolStatusErrorParserOthers;
+    }
+    uint32_t btn_tmp = instance->generic.btn;
+    if(!flipper_format_write_uint32(flipper_format, "Btn", &btn_tmp, 1)) {
+        return SubGhzProtocolStatusErrorParserOthers;
+    }
+    uint32_t cnt_tmp = instance->generic.cnt;
+    if(!flipper_format_write_uint32(flipper_format, "Cnt", &cnt_tmp, 1)) {
+        return SubGhzProtocolStatusErrorParserOthers;
+    }
+    return SubGhzProtocolStatusOk;
 }
 
 SubGhzProtocolStatus

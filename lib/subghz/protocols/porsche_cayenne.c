@@ -380,8 +380,14 @@ SubGhzProtocolStatus subghz_protocol_decoder_porsche_cayenne_serialize(
         temp = instance->generic.btn;
         flipper_format_write_uint32(flipper_format, "Btn", &temp, 1);
 
+        // [CAR_EMULATE_FIX] Persist the counter under BOTH "Counter" (legacy
+        // field this protocol has always used) and "Cnt" (the field the generic
+        // car-emulate scene reads for original_counter and rewrites on every TX).
+        // Writing "Cnt" lets the scene seed its counter correctly on load and
+        // keeps save/reload round-trips consistent.
         temp = instance->generic.cnt;
         flipper_format_write_uint32(flipper_format, "Counter", &temp, 1);
+        flipper_format_write_uint32(flipper_format, "Cnt", &temp, 1);
     }
 
     return ret;
@@ -600,12 +606,30 @@ SubGhzProtocolStatus subghz_protocol_encoder_porsche_cayenne_deserialize(
             break;
         }
 
+        // [CAR_EMULATE_FIX] The car-emulate scene bumps its own counter and
+        // writes it back as "Cnt" (uint32) on every TX. subghz_block_generic
+        // does not read "Cnt", and this encoder historically only read the
+        // legacy "Counter" field — so the scene's per-TX increment was ignored
+        // and every "next signal" re-sent the SAME rolling code. Prefer "Cnt"
+        // when present so the counter tracks the scene and each TX forward-
+        // encodes a fresh frame; fall back to "Counter" for older files.
+        uint32_t cnt_override = 0;
+        flipper_format_rewind(flipper_format);
+        if(flipper_format_read_uint32(flipper_format, "Cnt", &cnt_override, 1)) {
+            instance->generic.cnt = cnt_override;
+        }
+
         uint32_t override_cnt = 0;
         if(subghz_block_generic_global_counter_override_get(&override_cnt)) {
             instance->generic.cnt = override_cnt & 0xFFFF;
         }
 
-        // Apply custom button if set
+        // [CAR_EMULATE_FIX] custom_btn: Porsche has 4 buttons (Lock/Unlock/
+        // Trunk/Open). set_max(4) makes every D-pad direction reachable, not just
+        // OK. porsche_cayenne_get_btn_code() (called from build_upload) maps the
+        // selection to a real button code, and the 24-bit cipher re-computes the
+        // authentication bytes for that button — a real forward-encode, not a
+        // replay.
         if(subghz_custom_btn_get_original() == 0) {
             subghz_custom_btn_set_original(porsche_cayenne_btn_to_custom(instance->generic.btn));
         }

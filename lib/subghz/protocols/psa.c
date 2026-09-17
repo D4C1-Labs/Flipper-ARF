@@ -1759,8 +1759,21 @@ SubGhzProtocolStatus subghz_protocol_encoder_psa_deserialize(void* context, Flip
             has_decrypted_data = false;
         }
 
+        // [CAR_EMULATE_FIX] Prefer the uint32 "Cnt" that the car-emulate scene
+        // writes (and bumps) on every TX. subghz_block_generic does not read
+        // "Cnt", so this is the ONLY place the scene's incremented counter can
+        // reach the encoder. Previously the string form was tried first and the
+        // uint32 form was only a fallback; when the scene stored "Cnt" as uint32
+        // the string parse could pick up a stale value, so repeated TX could
+        // re-send the SAME code. Read uint32 first, then fall back to the legacy
+        // whitespace-hex string form for older saved files.
         flipper_format_rewind(flipper_format);
-        if(flipper_format_read_string(flipper_format, "Cnt", temp_str)) {
+        bool got_cnt_u32 = flipper_format_read_uint32(flipper_format, "Cnt", &counter, 1);
+        flipper_format_rewind(flipper_format);
+        if(got_cnt_u32) {
+            // uint32 "Cnt" (scene / round-trip) — authoritative, already read.
+            (void)got_cnt_u32;
+        } else if(flipper_format_read_string(flipper_format, "Cnt", temp_str)) {
             const char* cnt_str = furi_string_get_cstr(temp_str);
             for(size_t i = 0; i < strlen(cnt_str); i++) {
                 char c = cnt_str[i];
@@ -1771,10 +1784,7 @@ SubGhzProtocolStatus subghz_protocol_encoder_psa_deserialize(void* context, Flip
                 counter = (counter << 4) | nibble;
             }
         } else {
-            flipper_format_rewind(flipper_format);
-            if(!flipper_format_read_uint32(flipper_format, "Cnt", &counter, 1)) {
-                has_decrypted_data = false;
-            }
+            has_decrypted_data = false;
         }
 
         flipper_format_rewind(flipper_format);

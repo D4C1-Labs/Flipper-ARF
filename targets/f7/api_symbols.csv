@@ -1,5 +1,5 @@
 entry,status,name,type,params
-Version,+,89.2,,
+Version,+,89.3,,
 Header,+,applications/drivers/subghz/cc1101_ext/cc1101_ext_interconnect.h,,
 Header,+,applications/services/applications.h,,
 Header,+,applications/services/bt/bt_service/bt.h,,
@@ -3602,6 +3602,7 @@ Function,+,subghz_receiver_free,void,SubGhzReceiver*
 Function,+,subghz_receiver_reset,void,SubGhzReceiver*
 Function,+,subghz_receiver_search_decoder_base_by_name,SubGhzProtocolDecoderBase*,"SubGhzReceiver*, const char*"
 Function,+,subghz_receiver_set_filter,void,"SubGhzReceiver*, SubGhzProtocolFlag"
+Function,+,subghz_receiver_set_modulation_filter,void,"SubGhzReceiver*, SubGhzProtocolFlag"
 Function,+,subghz_receiver_set_rx_callback,void,"SubGhzReceiver*, SubGhzReceiverCallback, void*"
 Function,+,subghz_setting_alloc,SubGhzSetting*,
 Function,+,subghz_setting_customs_presets_to_log,uint8_t,SubGhzSetting*

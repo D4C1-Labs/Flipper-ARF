@@ -415,8 +415,24 @@ SubGhzProtocolStatus subghz_protocol_decoder_subaru_serialize(
     SubGhzRadioPreset* preset) {
     furi_assert(context);
     SubGhzProtocolDecoderSubaru* instance = context;
-    
-    return subghz_block_generic_serialize(&instance->generic, flipper_format, preset);
+
+    SubGhzProtocolStatus status =
+        subghz_block_generic_serialize(&instance->generic, flipper_format, preset);
+    if(status != SubGhzProtocolStatusOk) {
+        return status;
+    }
+
+    // [PROTOPIRATE_PORT] Persist Serial/Btn/Cnt so the base counter survives
+    // save/reload and the car-emulate scene can read/override them.
+    uint32_t v_serial = instance->generic.serial;
+    uint32_t v_btn = instance->generic.btn;
+    uint32_t v_cnt = instance->generic.cnt;
+    if(!flipper_format_write_uint32(flipper_format, "Serial", &v_serial, 1) ||
+       !flipper_format_write_uint32(flipper_format, "Btn", &v_btn, 1) ||
+       !flipper_format_write_uint32(flipper_format, "Cnt", &v_cnt, 1)) {
+        return SubGhzProtocolStatusErrorParserOthers;
+    }
+    return SubGhzProtocolStatusOk;
 }
 
 SubGhzProtocolStatus subghz_protocol_decoder_subaru_deserialize(void* context, FlipperFormat* flipper_format) {
@@ -593,13 +609,30 @@ SubGhzProtocolStatus subghz_protocol_encoder_subaru_deserialize(void* context, F
         instance->serial = ((uint32_t)b[1] << 16) | ((uint32_t)b[2] << 8) | b[3];
         instance->button = b[0] & 0x0F;
         subaru_decode_count(b, &instance->count);
-        
+
+        // [PROTOPIRATE_PORT] Read Serial/Btn/Cnt overrides from the flipper_format.
+        // The car-emulate scene increments the rolling counter and writes it into
+        // "Cnt" before re-invoking this deserialize(); subghz_block_generic_deserialize
+        // only reads Key, so we must read "Cnt" here or we would replay the same frame.
+        uint32_t ser_u32 = 0;
+        uint32_t btn_u32 = 0;
+        uint32_t cnt_u32 = 0;
+        flipper_format_rewind(flipper_format);
+        bool got_serial = flipper_format_read_uint32(flipper_format, "Serial", &ser_u32, 1);
+        flipper_format_rewind(flipper_format);
+        bool got_btn = flipper_format_read_uint32(flipper_format, "Btn", &btn_u32, 1);
+        flipper_format_rewind(flipper_format);
+        bool got_cnt = flipper_format_read_uint32(flipper_format, "Cnt", &cnt_u32, 1);
+
+        if(got_serial) instance->serial = ser_u32 & 0xFFFFFF;
+
         uint8_t original_custom_btn = subaru_btn_to_custom(instance->button);
         if(subghz_custom_btn_get_original() == 0) {
             subghz_custom_btn_set_original(original_custom_btn);
         }
         subghz_custom_btn_set_max(5);
         
+        // [PROTOPIRATE_PORT] Map the D-pad custom_btn to a real button code.
         uint8_t selected_custom_btn;
         if(subghz_custom_btn_get() == SUBGHZ_CUSTOM_BTN_OK) {
             selected_custom_btn = subghz_custom_btn_get_original();
@@ -608,17 +641,29 @@ SubGhzProtocolStatus subghz_protocol_encoder_subaru_deserialize(void* context, F
         }
         
         uint8_t new_button = subaru_get_button_code(selected_custom_btn);
+        // Explicit "Btn" override in the file wins over the custom_btn mapping.
+        if(got_btn) new_button = (uint8_t)(btn_u32 & 0x0F);
         subghz_block_generic_global_button_override_get(&new_button);
         instance->button = new_button;
-        
-        uint32_t override_cnt = 0;
-        if(subghz_block_generic_global_counter_override_get(&override_cnt)) {
-            instance->count = override_cnt & 0xFFFF;
+
+        // [PROTOPIRATE_PORT] Counter: prefer the scene-supplied "Cnt" (already the
+        // next value). Fall back to the global override, else advance locally.
+        if(got_cnt) {
+            instance->count = cnt_u32 & 0xFFFF;
         } else {
-            uint32_t mult = furi_hal_subghz_get_rolling_counter_mult();
-            instance->count = (instance->count + mult) & 0xFFFF;
+            uint32_t override_cnt = 0;
+            if(subghz_block_generic_global_counter_override_get(&override_cnt)) {
+                instance->count = override_cnt & 0xFFFF;
+            } else {
+                uint32_t mult = furi_hal_subghz_get_rolling_counter_mult();
+                instance->count = (instance->count + mult) & 0xFFFF;
+            }
         }
-        
+
+        // Rebuild serial bytes in case Serial was overridden.
+        b[1] = (uint8_t)(instance->serial >> 16);
+        b[2] = (uint8_t)(instance->serial >> 8);
+        b[3] = (uint8_t)(instance->serial);
         b[0] = (b[0] & 0xF0) | (instance->button & 0x0F);
         
         subaru_encode_count(b, instance->count);
@@ -648,6 +693,10 @@ SubGhzProtocolStatus subghz_protocol_encoder_subaru_deserialize(void* context, F
             ret = SubGhzProtocolStatusErrorParserKey;
             break;
         }
+
+        uint32_t temp_serial = instance->generic.serial;
+        flipper_format_rewind(flipper_format);
+        flipper_format_insert_or_update_uint32(flipper_format, "Serial", &temp_serial, 1);
 
         uint32_t temp_btn = instance->generic.btn;
         flipper_format_rewind(flipper_format);

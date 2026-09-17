@@ -247,35 +247,30 @@ SubGhzProtocolStatus
             instance->endbyte = (uint8_t)(btn_u32 & 0x7FU);
         }
 
-        // [PROTOPIRATE_PORT] custom_btn support
-        // Fiat V0 carries the button in the LOW NIBBLE of the endbyte:
-        //   Lock   = 0x4..0x7   (canonical bits 0b01xx)
-        //   Unlock = 0x8..0xB   (canonical bits 0b10xx)
-        //   (no Trunk/Panic on this protocol)
-        // Up  -> Lock, Down -> Unlock, OK -> original (byte-identical replay).
-        // The two low sub-code bits and the high nibble (rolling portion) of the
-        // endbyte are preserved so only the Lock/Unlock selector changes; when OK
-        // is selected the endbyte is left completely untouched.
+        // [PROTOPIRATE_PORT] Fiat V0 is REPLAY-ONLY.
+        // The rolling field (hop, upper 32 bits of Key) is opaque/encrypted with
+        // no known key or forward-computable checksum, so we cannot synthesize a
+        // valid NEXT frame for a changed button or an advanced counter. Matching
+        // ProtoPirate's emu_button_for_protocol() ("Fiat" -> return original), we
+        // replay the CAPTURED endbyte/button exactly and never pretend to
+        // increment the counter. The custom_btn machinery is still primed (so the
+        // D-pad UI behaves consistently and OK is a plain replay), but every
+        // selection re-emits the captured frame byte-identically.
         {
             const uint8_t original_btn = instance->endbyte;
             if(subghz_custom_btn_get_original() == 0) {
                 subghz_custom_btn_set_original(original_btn);
             }
-            subghz_custom_btn_set_max(4);
-            uint8_t custom_btn_id = subghz_custom_btn_get();
-            const uint8_t high = (uint8_t)(original_btn & 0xF0U);
-            const uint8_t sub = (uint8_t)(original_btn & 0x03U); // preserve sub-code
-            uint8_t endbyte = original_btn;
-            switch(custom_btn_id) {
-            case SUBGHZ_CUSTOM_BTN_UP:   endbyte = (uint8_t)(high | 0x04U | sub); break; // Lock
-            case SUBGHZ_CUSTOM_BTN_OK:   endbyte = original_btn;                  break;
-            case SUBGHZ_CUSTOM_BTN_DOWN: endbyte = (uint8_t)(high | 0x08U | sub); break; // Unlock
-            default:                     endbyte = original_btn;                  break;
-            }
-            instance->endbyte = (uint8_t)(endbyte & 0x7FU);
+            // Only OK is meaningful for a replay-only protocol; advertise a single
+            // button so the UI does not imply forward-encoded directions exist.
+            subghz_custom_btn_set_max(1);
+            // Replay the captured endbyte regardless of the selected custom_btn.
+            instance->endbyte = (uint8_t)(original_btn & 0x7FU);
         }
 
         instance->generic.btn = instance->endbyte;
+        // Counter (hop) is replay-only: keep the captured hop; do NOT read/apply an
+        // incremented "Cnt" because we cannot recompute the encrypted rolling code.
         instance->generic.cnt = instance->hop;
         instance->generic.serial = instance->fix;
 

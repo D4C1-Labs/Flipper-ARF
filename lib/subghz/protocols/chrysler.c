@@ -490,8 +490,9 @@ SubGhzProtocolStatus
     }
 
     // [PROTOPIRATE_PORT] custom_btn support
-    // Chrysler mapping: Up=0x1 (Lock), OK=0x2 (Unlock)
-    // custom_btn_id=OK returns original; UP/DOWN override tx_button.
+    // Chrysler has exactly 2 buttons: Lock=0x1, Unlock=0x2 (set_max=2).
+    // Map the D-pad so both are reachable: Up=Lock, Down=Unlock. OK/other replay
+    // the captured button (the "Btn" field read above seeds original_button).
     {
         if(subghz_custom_btn_get_original() == 0) {
             subghz_custom_btn_set_original(original_button);
@@ -500,12 +501,15 @@ SubGhzProtocolStatus
         uint8_t custom_btn_id = subghz_custom_btn_get();
         switch(custom_btn_id) {
         case SUBGHZ_CUSTOM_BTN_UP:
-            tx_button = 0x1U;
+            tx_button = 0x1U; // Lock
+            break;
+        case SUBGHZ_CUSTOM_BTN_DOWN:
+            tx_button = 0x2U; // Unlock
             break;
         case SUBGHZ_CUSTOM_BTN_OK:
         default:
-            // [BUGFIX] OK is the default state after loading a .sub. Replay
-            // the original captured button rather than force a specific one.
+            // OK is the default state after loading a .sub. Replay the original
+            // captured button rather than force a specific one.
             tx_button = original_button;
             break;
         }

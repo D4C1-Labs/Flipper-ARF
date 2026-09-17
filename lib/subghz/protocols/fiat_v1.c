@@ -762,50 +762,38 @@ SubGhzProtocolStatus
         }
     }
 
-    // WHEN A KEY IS AVAILABLE: apply the full D-pad remap and advance the
-    // rolling counter so each direction press synthesizes a fresh valid frame
-    // (mirrors PSA). WHEN NO KEY: leave button/control at the captured values so
-    // the no-key branch below can replay the captured frame byte-for-byte.
+    // WHEN A KEY IS AVAILABLE: apply the full D-pad remap. The rolling counter is
+    // driven by the app (car-emulate scene writes an incremented "Cnt" into the
+    // flipper_format before re-invoking this deserialize); we already read it into
+    // `control` above, so we simply honor it here — matching the KIA family
+    // template (kia_v6.c ~984). The re-encode below recomputes the Hitag2
+    // authenticator for the honored (button, control), so each TX with a fresh
+    // "Cnt" is a valid NEXT rolling code, not a byte-identical replay.
+    // WHEN NO KEY: leave button/control at the captured values so the no-key
+    // branch below can replay the captured frame byte-for-byte (we cannot forward-
+    // encode without the Hitag2 key).
     if(key_loaded) {
-        bool dpad_changed = false;
         switch(custom_btn_id) {
         case SUBGHZ_CUSTOM_BTN_UP:
             button = 0x8U; // Unlock
-            dpad_changed = true;
             break;
         case SUBGHZ_CUSTOM_BTN_DOWN:
             button = 0x4U; // Lock
-            dpad_changed = true;
             break;
         case SUBGHZ_CUSTOM_BTN_LEFT:
             button = 0x2U; // Trunk
-            dpad_changed = true;
             break;
         case SUBGHZ_CUSTOM_BTN_RIGHT:
             button = 0x1U; // Close
-            dpad_changed = true;
             break;
         case SUBGHZ_CUSTOM_BTN_OK:
         default:
-            // OK = re-emit the ORIGINAL captured frame (button + captured
-            // counter + captured hop), byte-identical, so OK == replay of the
-            // capture. Do not advance the counter.
+            // OK = re-emit the captured button. The counter still follows the
+            // app-supplied "Cnt", so OK advances with the scene like every other
+            // key; the frame is re-encoded (not a raw replay) because the key is
+            // available.
             button = original_btn;
             break;
-        }
-
-        // Advance the 10-bit rolling counter for D-pad-driven emulation so each
-        // press sends a NEW counter the car will accept. Honor an explicit
-        // framework counter override if present; otherwise step by the rolling
-        // counter multiplier (like PSA). The captured-button (OK) path keeps the
-        // captured counter so it is an exact replay of the capture.
-        if(dpad_changed) {
-            uint32_t override_cnt = 0U;
-            if(subghz_block_generic_global_counter_override_get(&override_cnt)) {
-                control = override_cnt;
-            } else {
-                control += (uint32_t)furi_hal_subghz_get_rolling_counter_mult();
-            }
         }
     }
 

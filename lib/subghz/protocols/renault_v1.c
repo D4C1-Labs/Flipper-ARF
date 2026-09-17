@@ -1168,13 +1168,6 @@ SubGhzProtocolStatus
         // the directional D-pad so a NEXT code with a new button/counter can be
         // forward-encoded. Otherwise stay REPLAY-ONLY and disable the D-pad.
         const bool seed_tx = (instance->seed_recovered == HITAG2_SEED_RECOVERED_YES);
-        {
-            const uint8_t original_btn = captured_button;
-            if(subghz_custom_btn_get_original() == 0) {
-                subghz_custom_btn_set_original(original_btn);
-            }
-            subghz_custom_btn_set_max(seed_tx ? 4U : 0U);
-        }
 
         // Start from the captured frame. For the SEED path we forward re-encode
         // below; for replay we reproduce the captured frame byte-identically.
@@ -1184,6 +1177,80 @@ SubGhzProtocolStatus
         instance->generic.data = captured_data;
         instance->key2 = captured_key2;
 
+        // [CAR_EMULATE_FIX] Read the Serial/Btn/Cnt overrides written by the
+        // car-emulate scene. subghz_block_generic_deserialize() only reads
+        // Key/Bit, so without this the base counter always came from the packed
+        // Key (captured_counter) and the SEED path did captured_counter+1 on
+        // EVERY TX — re-sending the SAME "next" code. Reading "Cnt" here makes
+        // the base counter track the scene so repeated TX truly advances.
+        uint8_t override_button = captured_button;
+        {
+            uint32_t serial_u32 = serial;
+            uint32_t btn_u32 = captured_button;
+            uint32_t cnt_u32 = counter;
+
+            flipper_format_rewind(flipper_format);
+            const bool got_serial =
+                flipper_format_read_uint32(flipper_format, "Serial", &serial_u32, 1);
+            flipper_format_rewind(flipper_format);
+            const bool got_btn = flipper_format_read_uint32(flipper_format, "Btn", &btn_u32, 1);
+            flipper_format_rewind(flipper_format);
+            const bool got_cnt = flipper_format_read_uint32(flipper_format, "Cnt", &cnt_u32, 1);
+
+            if(got_serial) serial = serial_u32 & 0x00FFFFFFU;
+            if(got_btn) override_button = (uint8_t)btn_u32;
+            if(got_cnt) counter = (uint8_t)(cnt_u32 & 0xFFU);
+        }
+
+        // [CAR_EMULATE_FIX] custom_btn mapping.
+        //
+        // REPLAY path (no SEED): we cannot re-encode a new button into a valid
+        // frame, so keep set_max(0) which makes subghz_custom_btn_is_allowed()
+        // false. The transmitter view then only offers OK == byte-identical
+        // replay of the captured button (honest UX, no dead directions).
+        //
+        // SEED path: a recovered 4-byte SEED lets hitag2_seed_encrypt_frame()
+        // forward-encrypt ANY button. set_max(4) makes every D-pad direction
+        // reachable and we map the selection onto the type's valid button range.
+        {
+            const uint8_t original_btn = captured_button;
+            if(subghz_custom_btn_get_original() == 0) {
+                subghz_custom_btn_set_original(original_btn);
+            }
+            subghz_custom_btn_set_max(seed_tx ? 4U : 0U);
+
+            if(seed_tx) {
+                // Renault V1 non-13 buttons: low nibble 0x04..0x07 = Lock,
+                // 0x08..0x0B = Unlock (see renault_v1_get_button_name). Preserve
+                // the captured high nibble (type base) and only swap the action
+                // nibble so the frame stays a valid member of its type family.
+                const uint8_t base = (uint8_t)(override_button & 0xF0U);
+                uint8_t action = (uint8_t)(override_button & 0x0FU);
+                switch(subghz_custom_btn_get()) {
+                case SUBGHZ_CUSTOM_BTN_UP:
+                    action = 0x04U; // Lock
+                    break;
+                case SUBGHZ_CUSTOM_BTN_DOWN:
+                    action = 0x08U; // Unlock
+                    break;
+                case SUBGHZ_CUSTOM_BTN_LEFT:
+                    action = 0x05U; // Lock variant
+                    break;
+                case SUBGHZ_CUSTOM_BTN_RIGHT:
+                    action = 0x09U; // Unlock variant
+                    break;
+                case SUBGHZ_CUSTOM_BTN_OK:
+                default:
+                    // OK: keep the (file/captured) button unchanged.
+                    break;
+                }
+                if(subghz_custom_btn_get() != SUBGHZ_CUSTOM_BTN_OK) {
+                    override_button = (uint8_t)(base | action);
+                }
+            }
+        }
+
+        instance->tx_button = override_button;
         instance->packet_bit_count = RENAULT_V1_MIN_BITS;
         instance->generic.data_count_bit = RENAULT_V1_MIN_BITS;
         instance->generic.serial = serial;
@@ -1191,8 +1258,9 @@ SubGhzProtocolStatus
         instance->generic.cnt = counter;
 
         // [HITAG2_SEED] Forward re-encode a NEXT code when a SEED is available.
-        // We advance the counter by one and encrypt a fresh frame with the
-        // recovered seed. Failure is graceful: fall back to the replayed frame.
+        // We advance the (scene-tracked) counter by one and encrypt a fresh frame
+        // with the recovered seed. Failure is graceful: fall back to the
+        // captured replay frame + button.
         if(seed_tx) {
             instance->generic.cnt = (counter + 1U) & 0xFFU;
             if(renault_v1_encoder_reencode_seed(instance)) {
@@ -1200,6 +1268,8 @@ SubGhzProtocolStatus
                 instance->packet_bit_count = RENAULT_V1_MIN_BITS;
             } else {
                 // Recovered flag but re-encode failed: revert to captured replay.
+                instance->tx_button = captured_button;
+                instance->generic.btn = captured_button;
                 instance->generic.cnt = counter;
                 instance->generic.data = captured_data;
                 instance->key2 = captured_key2;

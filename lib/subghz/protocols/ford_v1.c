@@ -1203,8 +1203,8 @@ SubGhzProtocolStatus
             if(serial == UINT32_MAX || btn == UINT32_MAX || cnt == UINT32_MAX) break;
 
             // [PROTOPIRATE_PORT] custom_btn support
-            // Ford V1 mapping (4-bit): Up=0x2 (Unlock), OK=0x4 (Trunk),
-            // Down=0x8 (Panic), Left=0x1 (Lock). Right unsupported.
+            // Ford V1 mapping (4-bit): Up=0x2 (Unlock), Right=0x4 (Trunk),
+            // Down=0x8 (Panic), Left=0x1 (Lock). OK replays the captured button.
             {
                 const uint8_t original_btn = (uint8_t)(btn & 0x0FU);
                 if(subghz_custom_btn_get_original() == 0) {
@@ -1218,6 +1218,7 @@ SubGhzProtocolStatus
                 case SUBGHZ_CUSTOM_BTN_OK:    btn = original_btn; break;
                 case SUBGHZ_CUSTOM_BTN_DOWN:  btn = 0x08U; break;
                 case SUBGHZ_CUSTOM_BTN_LEFT:  btn = 0x01U; break;
+                case SUBGHZ_CUSTOM_BTN_RIGHT: btn = 0x04U; break;
                 default:                      btn = original_btn; break;
                 }
             }
