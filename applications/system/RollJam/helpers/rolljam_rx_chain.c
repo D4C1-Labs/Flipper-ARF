@@ -10,6 +10,10 @@ typedef struct {
 
 #include <furi.h>
 #include <loader/firmware_api/firmware_api.h>
+
+/* RollJam private SubGhz API table (api/rolljam_api_table.cpp) — exposes the
+ * SubGhz lib symbols the runtime plugins import. */
+extern const ElfApiInterface* const subghz_application_api_interface;
 #include "../protocols/keys.h"
 
 #define TAG "RollJamRxChain"
@@ -627,6 +631,7 @@ bool rolljam_rx_chain_init_receiver(RollJamRxChain* chain) {
             CompositeApiResolver* resolver = composite_api_resolver_alloc();
             if(!resolver) return false;
             composite_api_resolver_add(resolver, firmware_api_interface);
+    composite_api_resolver_add(resolver, subghz_application_api_interface);
 
             PluginManager* manager = plugin_manager_alloc(
                 plugins_to_load[i].appid,

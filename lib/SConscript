@@ -7,6 +7,14 @@ env.Append(
         "#/lib",
         # Ugly hack
         Dir("../assets/compiled"),
+        # subghz and nfc are no longer built as firmware modules (their
+        # SConscripts don't run), but their headers must still be resolvable —
+        # both by the firmware core (furi_hal_subghz/nfc) and by external apps
+        # that carry these libs privately and use root-relative includes like
+        # "protocols/mf_classic/mf_classic.h". Expose their roots on CPPPATH.
+        "#/lib/subghz",
+        "#/lib/nfc",
+        "#/lib/lfrfid",
     ],
     SDK_HEADERS=[
         File("../applications/services/applications.h"),
@@ -28,14 +36,16 @@ libs = env.BuildModules(
         "fatfs",
         "flipper_format",
         "infrared",
-        "subghz",
-        # nfc removed from the firmware to free internal flash for the full
-        # SubGHz protocol catalog. NFC ships as external app(s).
+        # subghz, nfc and lfrfid are NOT linked into the firmware. They ship as
+        # self-contained external apps that each carry their own private copy of
+        # the library (executed via XIP). This frees internal flash so subghz/nfc
+        # can enable their full protocol catalogs and leaves headroom for future
+        # protocols. furi_hal_subghz / furi_hal_nfc stay in the firmware and are
+        # used by those apps via the SDK.
         "digital_signal",
         "pulse_reader",
         "signal_reader",
         "u8g2",
-        "lfrfid",
         "flipper_application",
         "music_worker",
         "nanopb",

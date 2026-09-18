@@ -3,11 +3,15 @@ App(
     name="Subghz Rolling Flaws",
     apptype=FlipperAppType.EXTERNAL,
     entry_point="rolling_flaws_app",
-    requires=["gui", "subghz"],
+    requires=["gui"],
     stack_size=2 * 1024,
     fap_version=(1, 5),
     fap_icon="rolling_flaws.png",
     fap_category="Sub-GHz",
     fap_icon_assets="assets",
     fap_description="Rolling code receiver (version 1.5), used to learn about rolling code flaws.  Watch video at https://youtu.be/gMnGuDC9EQo",
+    # SubGHz library is no longer in the firmware; carry a private copy.
+    fap_private_libs=[
+        Lib(name="subghz", fap_include_paths=[".", ".."], cflags=["-Wno-error"]),
+    ],
 )

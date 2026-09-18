@@ -1,0 +1,16 @@
+App(
+    appid="iso15693_nfc_writer",
+    name="ISO 15693-3 NFC Writer",
+    apptype=FlipperAppType.EXTERNAL,
+    entry_point="iso15693_writer_app",
+    stack_size=2 * 1024,
+    fap_icon="icon.png",
+    fap_category="NFC",
+    # NFC library is no longer in the firmware; carry a private copy.
+    fap_private_libs=[
+        Lib(name="nfc", fap_include_paths=[".", ".."], cflags=["-Wno-error"]),
+    ],
+    fap_libs=["mbedtls", "bit_lib"],
+    fap_icon_assets="assets",
+    requires=["nfc"],
+)

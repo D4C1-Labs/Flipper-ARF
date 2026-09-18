@@ -10,6 +10,10 @@ App(
     fap_icon_assets="images",
     fap_icon_assets_symbol="ulcrelay",
     fap_category="NFC",
+    # SubGHz library is no longer in the firmware; carry a private copy.
+    fap_private_libs=[
+        Lib(name="subghz", fap_include_paths=[".", ".."], cflags=["-Wno-error"]),
+    ],
     fap_author="noproto",
     fap_description="Relay Ultralight C authentication",
     fap_weburl="https://github.com/noproto",

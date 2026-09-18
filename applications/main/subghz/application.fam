@@ -1,25 +1,39 @@
 App(
     appid="subghz",
     name="Sub-GHz",
-    apptype=FlipperAppType.APP,
+    apptype=FlipperAppType.MENUEXTERNAL,
     targets=["f7"],
-    cdefines=["APP_SUBGHZ"],
     entry_point="subghz_app",
     requires=[
         "gui",
         "cli",
         "dialogs",
     ],
-    provides=[
-        "subghz_load_dangerous_settings",
-    ],
     icon="A_Sub1ghz_14",
     stack_size=3 * 1024,
     order=1,
     resources="resources",
+    # The SubGHz protocol library is no longer linked into the firmware (removed
+    # to free flash). This app carries its own private copy of lib/subghz with
+    # the FULL protocol catalog and is fully self-contained. furi_hal_subghz
+    # stays in the firmware and is used via the SDK.
+    sources=["*.c*", "!subghz_cli.c", "!subghz_dangerous_freq.c", "!helpers/subghz_chat.c", "!lib"],
     fap_libs=["assets", "hwdrivers"],
+    fap_private_libs=[
+        Lib(
+            name="subghz",
+            # "." exposes lib/subghz's own root for internal `#include "x.h"`;
+            # ".." exposes applications/main/subghz/lib so `#include <subghz/...>`
+            # resolves. `#include <lib/subghz/...>` resolves via the app work dir.
+            fap_include_paths=[".", ".."],
+            cflags=["-Wno-error"],
+        ),
+    ],
     fap_icon="icon.png",
     fap_category="Sub-GHz",
+    # The full protocol catalog is large; stream read-only sections from flash
+    # via XIP instead of copying the whole FAP into RAM.
+    flags=["ForceXIP"],
 )
 
 App(
@@ -35,6 +49,7 @@ App(
     appid="subghz_load_dangerous_settings",
     apptype=FlipperAppType.STARTUP,
     entry_point="subghz_dangerous_freq",
-    requires=["storage", "subghz"],
+    requires=["storage"],
+    sources=["subghz_dangerous_freq.c"],
     order=650,
 )

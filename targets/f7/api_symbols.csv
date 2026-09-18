@@ -1,5 +1,5 @@
 entry,status,name,type,params
-Version,+,90.1,,
+Version,+,92.0,,
 Header,+,applications/drivers/subghz/cc1101_ext/cc1101_ext_interconnect.h,,
 Header,+,applications/services/applications.h,,
 Header,+,applications/services/bt/bt_service/bt.h,,
@@ -73,11 +73,6 @@ Header,+,lib/infrared/signal/infrared_error_code.h,,
 Header,+,lib/infrared/signal/infrared_signal.h,,
 Header,+,lib/infrared/worker/infrared_transmit.h,,
 Header,+,lib/infrared/worker/infrared_worker.h,,
-Header,+,lib/lfrfid/lfrfid_dict_file.h,,
-Header,+,lib/lfrfid/lfrfid_raw_file.h,,
-Header,+,lib/lfrfid/lfrfid_raw_worker.h,,
-Header,+,lib/lfrfid/lfrfid_worker.h,,
-Header,+,lib/lfrfid/protocols/lfrfid_protocols.h,,
 Header,+,lib/libusb_stm32/inc/hid_usage_button.h,,
 Header,+,lib/libusb_stm32/inc/hid_usage_consumer.h,,
 Header,+,lib/libusb_stm32/inc/hid_usage_desktop.h,,
@@ -158,25 +153,6 @@ Header,+,lib/stm32wb_hal/Inc/stm32wbxx_ll_tim.h,,
 Header,+,lib/stm32wb_hal/Inc/stm32wbxx_ll_usart.h,,
 Header,+,lib/stm32wb_hal/Inc/stm32wbxx_ll_utils.h,,
 Header,+,lib/stm32wb_hal/Inc/stm32wbxx_ll_wwdg.h,,
-Header,+,lib/subghz/blocks/const.h,,
-Header,+,lib/subghz/blocks/custom_btn.h,,
-Header,+,lib/subghz/blocks/decoder.h,,
-Header,+,lib/subghz/blocks/encoder.h,,
-Header,+,lib/subghz/blocks/generic.h,,
-Header,+,lib/subghz/blocks/math.h,,
-Header,+,lib/subghz/devices/cc1101_configs.h,,
-Header,+,lib/subghz/devices/cc1101_int/cc1101_int_interconnect.h,,
-Header,+,lib/subghz/environment.h,,
-Header,+,lib/subghz/protocols/public_api.h,,
-Header,+,lib/subghz/protocols/raw.h,,
-Header,+,lib/subghz/receiver.h,,
-Header,+,lib/subghz/registry.h,,
-Header,+,lib/subghz/subghz_file_encoder_worker.h,,
-Header,+,lib/subghz/subghz_protocol_registry.h,,
-Header,+,lib/subghz/subghz_setting.h,,
-Header,+,lib/subghz/subghz_tx_rx_worker.h,,
-Header,+,lib/subghz/subghz_worker.h,,
-Header,+,lib/subghz/transmitter.h,,
 Header,+,lib/toolbox/api_lock.h,,
 Header,+,lib/toolbox/args.h,,
 Header,+,lib/toolbox/bit_buffer.h,,
@@ -1007,7 +983,6 @@ Function,+,elements_string_fit_width,void,"Canvas*, FuriString*, size_t"
 Function,+,elements_text_box,void,"Canvas*, int32_t, int32_t, size_t, size_t, Align, Align, const char*, _Bool"
 Function,+,elf_resolve_from_hashtable,_Bool,"const ElfApiInterface*, uint32_t, Elf32_Addr*"
 Function,+,elf_symbolname_hash,uint32_t,const char*
-Function,+,em4305_write,void,LFRFIDEM4305*
 Function,+,empty_screen_alloc,EmptyScreen*,
 Function,+,empty_screen_free,void,EmptyScreen*
 Function,+,empty_screen_get_view,View*,EmptyScreen*
@@ -2123,32 +2098,6 @@ Function,-,ldexp,double,"double, int"
 Function,-,ldexpf,float,"float, int"
 Function,-,ldexpl,long double,"long double, int"
 Function,-,ldiv,ldiv_t,"long, long"
-Function,+,lfrfid_dict_file_load,ProtocolId,"ProtocolDict*, const char*"
-Function,+,lfrfid_dict_file_save,_Bool,"ProtocolDict*, ProtocolId, const char*"
-Function,+,lfrfid_raw_file_alloc,LFRFIDRawFile*,Storage*
-Function,+,lfrfid_raw_file_free,void,LFRFIDRawFile*
-Function,+,lfrfid_raw_file_open_read,_Bool,"LFRFIDRawFile*, const char*"
-Function,+,lfrfid_raw_file_open_write,_Bool,"LFRFIDRawFile*, const char*"
-Function,+,lfrfid_raw_file_read_header,_Bool,"LFRFIDRawFile*, float*, float*"
-Function,+,lfrfid_raw_file_read_pair,_Bool,"LFRFIDRawFile*, uint32_t*, uint32_t*, _Bool*"
-Function,+,lfrfid_raw_file_write_buffer,_Bool,"LFRFIDRawFile*, uint8_t*, size_t"
-Function,+,lfrfid_raw_file_write_header,_Bool,"LFRFIDRawFile*, float, float, uint32_t"
-Function,+,lfrfid_raw_worker_alloc,LFRFIDRawWorker*,
-Function,+,lfrfid_raw_worker_free,void,LFRFIDRawWorker*
-Function,+,lfrfid_raw_worker_start_emulate,void,"LFRFIDRawWorker*, const char*, LFRFIDWorkerEmulateRawCallback, void*"
-Function,+,lfrfid_raw_worker_start_read,void,"LFRFIDRawWorker*, const char*, float, float, LFRFIDWorkerReadRawCallback, void*"
-Function,+,lfrfid_raw_worker_stop,void,LFRFIDRawWorker*
-Function,+,lfrfid_worker_alloc,LFRFIDWorker*,ProtocolDict*
-Function,+,lfrfid_worker_emulate_raw_start,void,"LFRFIDWorker*, const char*, LFRFIDWorkerEmulateRawCallback, void*"
-Function,+,lfrfid_worker_emulate_start,void,"LFRFIDWorker*, LFRFIDProtocol"
-Function,+,lfrfid_worker_free,void,LFRFIDWorker*
-Function,+,lfrfid_worker_read_raw_start,void,"LFRFIDWorker*, const char*, LFRFIDWorkerReadType, LFRFIDWorkerReadRawCallback, void*"
-Function,+,lfrfid_worker_read_start,void,"LFRFIDWorker*, LFRFIDWorkerReadType, LFRFIDWorkerReadCallback, void*"
-Function,+,lfrfid_worker_start_thread,void,LFRFIDWorker*
-Function,+,lfrfid_worker_stop,void,LFRFIDWorker*
-Function,+,lfrfid_worker_stop_thread,void,LFRFIDWorker*
-Function,+,lfrfid_worker_write_and_set_pass_start,void,"LFRFIDWorker*, LFRFIDProtocol, LFRFIDWorkerWriteCallback, void*"
-Function,+,lfrfid_worker_write_start,void,"LFRFIDWorker*, LFRFIDProtocol, LFRFIDWorkerWriteCallback, void*"
 Function,-,lgamma,double,double
 Function,-,lgamma_r,double,"double, int*"
 Function,-,lgammaf,float,float
@@ -2940,204 +2889,7 @@ Function,-,strupr,char*,char*
 Function,-,strverscmp,int,"const char*, const char*"
 Function,-,strxfrm,size_t,"char*, const char*, size_t"
 Function,-,strxfrm_l,size_t,"char*, const char*, size_t, locale_t"
-Function,+,subghz_block_generic_deserialize,SubGhzProtocolStatus,"SubGhzBlockGeneric*, FlipperFormat*"
-Function,+,subghz_block_generic_deserialize_check_count_bit,SubGhzProtocolStatus,"SubGhzBlockGeneric*, FlipperFormat*, uint16_t"
-Function,+,subghz_block_generic_get_preset_name,void,"const char*, FuriString*"
-Function,+,subghz_block_generic_global_button_override_get,_Bool,uint8_t*
-Function,+,subghz_block_generic_global_button_override_set,void,uint8_t
-Function,+,subghz_block_generic_global_counter_override_get,_Bool,uint32_t*
-Function,+,subghz_block_generic_global_counter_override_set,void,uint32_t
-Function,+,subghz_block_generic_global_reset,void,void*
-Function,+,subghz_block_generic_serialize,SubGhzProtocolStatus,"SubGhzBlockGeneric*, FlipperFormat*, SubGhzRadioPreset*"
-Function,+,subghz_custom_btn_get,uint8_t,
-Function,-,subghz_custom_btn_get_long,_Bool,
-Function,+,subghz_custom_btn_get_max_pages,uint8_t,
-Function,+,subghz_custom_btn_get_original,uint8_t,
-Function,+,subghz_custom_btn_get_page,uint8_t,
-Function,+,subghz_custom_btn_has_pages,_Bool,
-Function,+,subghz_custom_btn_is_allowed,_Bool,
-Function,+,subghz_custom_btn_set,_Bool,uint8_t
-Function,-,subghz_custom_btn_set_long,void,_Bool
-Function,+,subghz_custom_btn_set_max_pages,void,uint8_t
-Function,+,subghz_custom_btn_set_page,void,uint8_t
-Function,+,subghz_custom_btn_set_pages,void,_Bool
-Function,+,subghz_custom_btns_reset,void,
 Function,-,subghz_device_cc1101_ext_ep,const FlipperAppPluginDescriptor*,
-Function,+,subghz_devices_begin,_Bool,const SubGhzDevice*
-Function,+,subghz_devices_deinit,void,
-Function,+,subghz_devices_end,void,const SubGhzDevice*
-Function,+,subghz_devices_flush_rx,void,const SubGhzDevice*
-Function,+,subghz_devices_flush_tx,void,const SubGhzDevice*
-Function,+,subghz_devices_get_by_name,const SubGhzDevice*,const char*
-Function,+,subghz_devices_get_data_gpio,const GpioPin*,const SubGhzDevice*
-Function,+,subghz_devices_get_lqi,uint8_t,const SubGhzDevice*
-Function,+,subghz_devices_get_name,const char*,const SubGhzDevice*
-Function,+,subghz_devices_get_rssi,float,const SubGhzDevice*
-Function,+,subghz_devices_idle,void,const SubGhzDevice*
-Function,+,subghz_devices_init,void,
-Function,+,subghz_devices_is_async_complete_tx,_Bool,const SubGhzDevice*
-Function,+,subghz_devices_is_connect,_Bool,const SubGhzDevice*
-Function,+,subghz_devices_is_frequency_valid,_Bool,"const SubGhzDevice*, uint32_t"
-Function,+,subghz_devices_is_rx_data_crc_valid,_Bool,const SubGhzDevice*
-Function,+,subghz_devices_load_preset,void,"const SubGhzDevice*, FuriHalSubGhzPreset, uint8_t*"
-Function,+,subghz_devices_read_packet,void,"const SubGhzDevice*, uint8_t*, uint8_t*"
-Function,+,subghz_devices_reset,void,const SubGhzDevice*
-Function,+,subghz_devices_rx_pipe_not_empty,_Bool,const SubGhzDevice*
-Function,+,subghz_devices_set_async_mirror_pin,void,"const SubGhzDevice*, const GpioPin*"
-Function,+,subghz_devices_set_frequency,uint32_t,"const SubGhzDevice*, uint32_t"
-Function,+,subghz_devices_set_rx,void,const SubGhzDevice*
-Function,+,subghz_devices_set_tx,_Bool,const SubGhzDevice*
-Function,+,subghz_devices_sleep,void,const SubGhzDevice*
-Function,+,subghz_devices_start_async_rx,void,"const SubGhzDevice*, void*, void*"
-Function,+,subghz_devices_start_async_tx,_Bool,"const SubGhzDevice*, void*, void*"
-Function,+,subghz_devices_stop_async_rx,void,const SubGhzDevice*
-Function,+,subghz_devices_stop_async_tx,void,const SubGhzDevice*
-Function,+,subghz_devices_write_packet,void,"const SubGhzDevice*, const uint8_t*, uint8_t"
-Function,+,subghz_environment_alloc,SubGhzEnvironment*,
-Function,+,subghz_environment_free,void,SubGhzEnvironment*
-Function,+,subghz_environment_get_alutech_at_4n_rainbow_table_file_name,const char*,SubGhzEnvironment*
-Function,+,subghz_environment_get_came_atomo_rainbow_table_file_name,const char*,SubGhzEnvironment*
-Function,+,subghz_environment_get_keystore,SubGhzKeystore*,SubGhzEnvironment*
-Function,+,subghz_environment_get_nice_flor_s_rainbow_table_file_name,const char*,SubGhzEnvironment*
-Function,+,subghz_environment_get_protocol_name_registry,const char*,"SubGhzEnvironment*, size_t"
-Function,+,subghz_environment_get_protocol_registry,const SubGhzProtocolRegistry*,SubGhzEnvironment*
-Function,+,subghz_environment_load_keystore,_Bool,"SubGhzEnvironment*, const char*"
-Function,+,subghz_environment_reset_keeloq,void,SubGhzEnvironment*
-Function,+,subghz_environment_set_alutech_at_4n_rainbow_table_file_name,void,"SubGhzEnvironment*, const char*"
-Function,+,subghz_environment_set_came_atomo_rainbow_table_file_name,void,"SubGhzEnvironment*, const char*"
-Function,+,subghz_environment_set_nice_flor_s_rainbow_table_file_name,void,"SubGhzEnvironment*, const char*"
-Function,+,subghz_environment_set_protocol_registry,void,"SubGhzEnvironment*, const SubGhzProtocolRegistry*"
-Function,+,subghz_file_encoder_worker_alloc,SubGhzFileEncoderWorker*,
-Function,+,subghz_file_encoder_worker_callback_end,void,"SubGhzFileEncoderWorker*, SubGhzFileEncoderWorkerCallbackEnd, void*"
-Function,+,subghz_file_encoder_worker_free,void,SubGhzFileEncoderWorker*
-Function,+,subghz_file_encoder_worker_get_level_duration,LevelDuration,void*
-Function,+,subghz_file_encoder_worker_get_text_progress,void,"SubGhzFileEncoderWorker*, FuriString*"
-Function,+,subghz_file_encoder_worker_is_running,_Bool,SubGhzFileEncoderWorker*
-Function,+,subghz_file_encoder_worker_start,_Bool,"SubGhzFileEncoderWorker*, const char*, const char*"
-Function,+,subghz_file_encoder_worker_stop,void,SubGhzFileEncoderWorker*
-Function,+,subghz_keystore_alloc,SubGhzKeystore*,
-Function,+,subghz_keystore_free,void,SubGhzKeystore*
-Function,+,subghz_keystore_get_data,SubGhzKeyArray_t*,SubGhzKeystore*
-Function,+,subghz_keystore_load,_Bool,"SubGhzKeystore*, const char*"
-Function,+,subghz_keystore_raw_encrypted_save,_Bool,"const char*, const char*, uint8_t*"
-Function,+,subghz_keystore_raw_get_data,_Bool,"const char*, size_t, uint8_t*, size_t"
-Function,+,subghz_keystore_reset_kl,void,SubGhzKeystore*
-Function,+,subghz_keystore_save,_Bool,"SubGhzKeystore*, const char*, uint8_t*"
-Function,+,subghz_protocol_alutech_at_4n_create_data,_Bool,"void*, FlipperFormat*, uint32_t, uint8_t, uint16_t, SubGhzRadioPreset*"
-Function,+,subghz_protocol_beninca_arc_create_data,_Bool,"void*, FlipperFormat*, uint32_t, uint8_t, uint32_t, SubGhzRadioPreset*"
-Function,+,subghz_protocol_blocks_add_bit,void,"SubGhzBlockDecoder*, uint8_t"
-Function,+,subghz_protocol_blocks_add_bytes,uint8_t,"const uint8_t[], size_t"
-Function,+,subghz_protocol_blocks_add_to_128_bit,void,"SubGhzBlockDecoder*, uint8_t, uint64_t*"
-Function,+,subghz_protocol_blocks_crc16,uint16_t,"const uint8_t[], size_t, uint16_t, uint16_t"
-Function,+,subghz_protocol_blocks_crc16lsb,uint16_t,"const uint8_t[], size_t, uint16_t, uint16_t"
-Function,+,subghz_protocol_blocks_crc4,uint8_t,"const uint8_t[], size_t, uint8_t, uint8_t"
-Function,+,subghz_protocol_blocks_crc7,uint8_t,"const uint8_t[], size_t, uint8_t, uint8_t"
-Function,+,subghz_protocol_blocks_crc8,uint8_t,"const uint8_t[], size_t, uint8_t, uint8_t"
-Function,+,subghz_protocol_blocks_crc8le,uint8_t,"const uint8_t[], size_t, uint8_t, uint8_t"
-Function,+,subghz_protocol_blocks_get_bit_array,_Bool,"uint8_t[], size_t"
-Function,+,subghz_protocol_blocks_get_hash_data,uint8_t,"SubGhzBlockDecoder*, size_t"
-Function,+,subghz_protocol_blocks_get_parity,uint8_t,"uint64_t, uint8_t"
-Function,+,subghz_protocol_blocks_get_upload_from_bit_array,size_t,"uint8_t[], size_t, LevelDuration*, size_t, uint32_t, SubGhzProtocolBlockAlignBit"
-Function,+,subghz_protocol_blocks_lfsr_digest16,uint16_t,"const uint8_t[], size_t, uint16_t, uint16_t"
-Function,+,subghz_protocol_blocks_lfsr_digest8,uint8_t,"const uint8_t[], size_t, uint8_t, uint8_t"
-Function,+,subghz_protocol_blocks_lfsr_digest8_reflect,uint8_t,"const uint8_t[], size_t, uint8_t, uint8_t"
-Function,+,subghz_protocol_blocks_parity8,uint8_t,uint8_t
-Function,+,subghz_protocol_blocks_parity_bytes,uint8_t,"const uint8_t[], size_t"
-Function,+,subghz_protocol_blocks_reverse_key,uint64_t,"uint64_t, uint8_t"
-Function,+,subghz_protocol_blocks_set_bit_array,void,"_Bool, uint8_t[], size_t, size_t"
-Function,+,subghz_protocol_blocks_xor_bytes,uint8_t,"const uint8_t[], size_t"
-Function,+,subghz_protocol_came_atomo_create_data,_Bool,"void*, FlipperFormat*, uint32_t, uint16_t, SubGhzRadioPreset*"
-Function,+,subghz_protocol_decoder_base_deserialize,SubGhzProtocolStatus,"SubGhzProtocolDecoderBase*, FlipperFormat*"
-Function,+,subghz_protocol_decoder_base_get_hash_data,uint8_t,SubGhzProtocolDecoderBase*
-Function,+,subghz_protocol_decoder_base_get_string,_Bool,"SubGhzProtocolDecoderBase*, FuriString*"
-Function,+,subghz_protocol_decoder_base_serialize,SubGhzProtocolStatus,"SubGhzProtocolDecoderBase*, FlipperFormat*, SubGhzRadioPreset*"
-Function,-,subghz_protocol_decoder_base_set_decoder_callback,void,"SubGhzProtocolDecoderBase*, SubGhzProtocolDecoderBaseRxCallback, void*"
-Function,+,subghz_protocol_decoder_bin_raw_data_input_rssi,void,"SubGhzProtocolDecoderBinRAW*, float"
-Function,+,subghz_protocol_decoder_raw_alloc,void*,SubGhzEnvironment*
-Function,+,subghz_protocol_decoder_raw_deserialize,SubGhzProtocolStatus,"void*, FlipperFormat*"
-Function,+,subghz_protocol_decoder_raw_feed,void,"void*, _Bool, uint32_t"
-Function,+,subghz_protocol_decoder_raw_free,void,void*
-Function,+,subghz_protocol_decoder_raw_get_string,void,"void*, FuriString*"
-Function,+,subghz_protocol_decoder_raw_reset,void,void*
-Function,+,subghz_protocol_encoder_raw_alloc,void*,SubGhzEnvironment*
-Function,+,subghz_protocol_encoder_raw_deserialize,SubGhzProtocolStatus,"void*, FlipperFormat*"
-Function,+,subghz_protocol_encoder_raw_free,void,void*
-Function,+,subghz_protocol_encoder_raw_stop,void,void*
-Function,+,subghz_protocol_encoder_raw_yield,LevelDuration,void*
-Function,+,subghz_protocol_faac_slh_create_data,_Bool,"void*, FlipperFormat*, uint32_t, uint8_t, uint32_t, uint32_t, const char*, SubGhzRadioPreset*"
-Function,+,subghz_protocol_jarolift_create_data,_Bool,"void*, FlipperFormat*, uint32_t, uint8_t, uint16_t, SubGhzRadioPreset*"
-Function,+,subghz_protocol_keeloq_bft_create_data,_Bool,"void*, FlipperFormat*, uint32_t, uint8_t, uint16_t, uint32_t, const char*, SubGhzRadioPreset*"
-Function,+,subghz_protocol_keeloq_create_data,_Bool,"void*, FlipperFormat*, uint32_t, uint8_t, uint16_t, const char*, SubGhzRadioPreset*"
-Function,+,subghz_protocol_kinggates_stylo_4k_create_data,_Bool,"void*, FlipperFormat*, uint32_t, uint8_t, uint16_t, SubGhzRadioPreset*"
-Function,+,subghz_protocol_nice_flor_s_create_data,_Bool,"void*, FlipperFormat*, uint32_t, uint8_t, uint16_t, SubGhzRadioPreset*, _Bool"
-Function,+,subghz_protocol_phoenix_v2_create_data,_Bool,"void*, FlipperFormat*, uint32_t, uint16_t, SubGhzRadioPreset*"
-Function,+,subghz_protocol_raw_file_encoder_worker_set_callback_end,void,"SubGhzProtocolEncoderRAW*, SubGhzProtocolEncoderRAWCallbackEnd, void*"
-Function,+,subghz_protocol_raw_gen_fff_data,void,"FlipperFormat*, const char*, const char*"
-Function,+,subghz_protocol_raw_get_sample_write,size_t,SubGhzProtocolDecoderRAW*
-Function,+,subghz_protocol_raw_save_to_file_init,_Bool,"SubGhzProtocolDecoderRAW*, const char*, SubGhzRadioPreset*"
-Function,+,subghz_protocol_raw_save_to_file_pause,void,"SubGhzProtocolDecoderRAW*, _Bool"
-Function,+,subghz_protocol_raw_save_to_file_stop,void,SubGhzProtocolDecoderRAW*
-Function,+,subghz_protocol_registry_count,size_t,const SubGhzProtocolRegistry*
-Function,+,subghz_protocol_registry_get_by_index,const SubGhzProtocol*,"const SubGhzProtocolRegistry*, size_t"
-Function,+,subghz_protocol_registry_get_by_name,const SubGhzProtocol*,"const SubGhzProtocolRegistry*, const char*"
-Function,+,subghz_protocol_secplus_v1_check_fixed,_Bool,uint32_t
-Function,+,subghz_protocol_secplus_v2_create_data,_Bool,"void*, FlipperFormat*, uint32_t, uint8_t, uint32_t, SubGhzRadioPreset*"
-Function,+,subghz_protocol_somfy_keytis_create_data,_Bool,"void*, FlipperFormat*, uint32_t, uint8_t, uint16_t, SubGhzRadioPreset*"
-Function,+,subghz_protocol_somfy_telis_create_data,_Bool,"void*, FlipperFormat*, uint32_t, uint8_t, uint16_t, SubGhzRadioPreset*"
-Function,+,subghz_receiver_alloc_init,SubGhzReceiver*,SubGhzEnvironment*
-Function,+,subghz_receiver_decode,void,"SubGhzReceiver*, _Bool, uint32_t"
-Function,+,subghz_receiver_free,void,SubGhzReceiver*
-Function,+,subghz_receiver_reset,void,SubGhzReceiver*
-Function,+,subghz_receiver_search_decoder_base_by_name,SubGhzProtocolDecoderBase*,"SubGhzReceiver*, const char*"
-Function,+,subghz_receiver_set_filter,void,"SubGhzReceiver*, SubGhzProtocolFlag"
-Function,+,subghz_receiver_set_modulation_filter,void,"SubGhzReceiver*, SubGhzProtocolFlag"
-Function,+,subghz_receiver_set_rx_callback,void,"SubGhzReceiver*, SubGhzReceiverCallback, void*"
-Function,+,subghz_setting_alloc,SubGhzSetting*,
-Function,+,subghz_setting_customs_presets_to_log,uint8_t,SubGhzSetting*
-Function,+,subghz_setting_delete_custom_preset,_Bool,"SubGhzSetting*, const char*"
-Function,+,subghz_setting_free,void,SubGhzSetting*
-Function,+,subghz_setting_get_default_frequency,uint32_t,SubGhzSetting*
-Function,+,subghz_setting_get_frequency,uint32_t,"SubGhzSetting*, size_t"
-Function,+,subghz_setting_get_frequency_count,size_t,SubGhzSetting*
-Function,+,subghz_setting_get_frequency_default_index,uint32_t,SubGhzSetting*
-Function,+,subghz_setting_get_hopper_frequency,uint32_t,"SubGhzSetting*, size_t"
-Function,+,subghz_setting_get_hopper_frequency_count,size_t,SubGhzSetting*
-Function,+,subghz_setting_get_hopper_preset_count,size_t,SubGhzSetting*
-Function,+,subghz_setting_get_hopper_preset_index,size_t,"SubGhzSetting*, size_t"
-Function,+,subghz_setting_get_inx_preset_by_name,int,"SubGhzSetting*, const char*"
-Function,+,subghz_setting_get_preset_count,size_t,SubGhzSetting*
-Function,+,subghz_setting_get_preset_data,uint8_t*,"SubGhzSetting*, size_t"
-Function,+,subghz_setting_get_preset_data_by_name,uint8_t*,"SubGhzSetting*, const char*"
-Function,+,subghz_setting_get_preset_data_size,size_t,"SubGhzSetting*, size_t"
-Function,+,subghz_setting_get_preset_name,const char*,"SubGhzSetting*, size_t"
-Function,+,subghz_setting_load,void,"SubGhzSetting*, const char*"
-Function,+,subghz_setting_load_custom_preset,_Bool,"SubGhzSetting*, const char*, FlipperFormat*"
-Function,+,subghz_setting_set_default_frequency,void,"SubGhzSetting*, uint32_t"
-Function,+,subghz_transmitter_alloc_init,SubGhzTransmitter*,"SubGhzEnvironment*, const char*"
-Function,+,subghz_transmitter_deserialize,SubGhzProtocolStatus,"SubGhzTransmitter*, FlipperFormat*"
-Function,+,subghz_transmitter_free,void,SubGhzTransmitter*
-Function,+,subghz_transmitter_get_protocol_instance,SubGhzProtocolEncoderBase*,SubGhzTransmitter*
-Function,+,subghz_transmitter_stop,_Bool,SubGhzTransmitter*
-Function,+,subghz_transmitter_yield,LevelDuration,void*
-Function,+,subghz_tx_rx_worker_alloc,SubGhzTxRxWorker*,
-Function,+,subghz_tx_rx_worker_available,size_t,SubGhzTxRxWorker*
-Function,+,subghz_tx_rx_worker_free,void,SubGhzTxRxWorker*
-Function,+,subghz_tx_rx_worker_is_running,_Bool,SubGhzTxRxWorker*
-Function,+,subghz_tx_rx_worker_read,size_t,"SubGhzTxRxWorker*, uint8_t*, size_t"
-Function,+,subghz_tx_rx_worker_set_callback_have_read,void,"SubGhzTxRxWorker*, SubGhzTxRxWorkerCallbackHaveRead, void*"
-Function,+,subghz_tx_rx_worker_start,_Bool,"SubGhzTxRxWorker*, const SubGhzDevice*, uint32_t"
-Function,+,subghz_tx_rx_worker_stop,void,SubGhzTxRxWorker*
-Function,+,subghz_tx_rx_worker_write,_Bool,"SubGhzTxRxWorker*, uint8_t*, size_t"
-Function,+,subghz_worker_alloc,SubGhzWorker*,
-Function,+,subghz_worker_free,void,SubGhzWorker*
-Function,+,subghz_worker_is_running,_Bool,SubGhzWorker*
-Function,+,subghz_worker_rx_callback,void,"_Bool, uint32_t, void*"
-Function,+,subghz_worker_set_context,void,"SubGhzWorker*, void*"
-Function,+,subghz_worker_set_filter,void,"SubGhzWorker*, uint16_t"
-Function,+,subghz_worker_set_overrun_callback,void,"SubGhzWorker*, SubGhzWorkerOverrunCallback"
-Function,+,subghz_worker_set_pair_callback,void,"SubGhzWorker*, SubGhzWorkerPairCallback"
-Function,+,subghz_worker_start,void,SubGhzWorker*
-Function,+,subghz_worker_stop,void,SubGhzWorker*
 Function,+,submenu_add_item,void,"Submenu*, const char*, uint32_t, SubmenuItemCallback, void*"
 Function,+,submenu_add_item_ex,void,"Submenu*, const char*, uint32_t, SubmenuItemCallbackEx, void*"
 Function,+,submenu_add_lockable_item,void,"Submenu*, const char*, uint32_t, SubmenuItemCallback, void*, _Bool, const char*"
@@ -3152,9 +2904,6 @@ Function,+,submenu_set_header,void,"Submenu*, const char*"
 Function,+,submenu_set_orientation,void,"Submenu*, ViewOrientation"
 Function,+,submenu_set_selected_item,void,"Submenu*, uint32_t"
 Function,-,system,int,const char*
-Function,+,t5577_write,void,LFRFIDT5577*
-Function,+,t5577_write_with_mask,void,"LFRFIDT5577*, uint8_t, _Bool, uint32_t"
-Function,+,t5577_write_with_pass,void,"LFRFIDT5577*, uint32_t"
 Function,-,tan,double,double
 Function,-,tanf,float,float
 Function,-,tanh,double,double
@@ -4531,7 +4280,6 @@ Variable,+,gpio_usb_dp,const GpioPin,
 Variable,+,gpio_vibro,const GpioPin,
 Variable,+,input_pins,const InputPin[],
 Variable,+,input_pins_count,const size_t,
-Variable,+,lfrfid_protocols,const ProtocolBase* const[],
 Variable,+,message_blink_set_color_blue,const NotificationMessage,
 Variable,+,message_blink_set_color_cyan,const NotificationMessage,
 Variable,+,message_blink_set_color_green,const NotificationMessage,
@@ -4731,19 +4479,6 @@ Variable,+,sequence_single_vibro,const NotificationSequence,
 Variable,+,sequence_solid_yellow,const NotificationSequence,
 Variable,+,sequence_success,const NotificationSequence,
 Variable,+,simple_array_config_uint8_t,const SimpleArrayConfig,
-Variable,+,subghz_block_generic_global,SubGhzBlockGenericGlobal,
-Variable,-,subghz_device_cc1101_int,const SubGhzDevice,
-Variable,+,subghz_device_cc1101_preset_2fsk_dev12khz_async_regs,const uint8_t[],
-Variable,+,subghz_device_cc1101_preset_2fsk_dev2_38khz_async_regs,const uint8_t[],
-Variable,+,subghz_device_cc1101_preset_2fsk_dev47_6khz_async_regs,const uint8_t[],
-Variable,+,subghz_device_cc1101_preset_gfsk_9_99kb_async_regs,const uint8_t[],
-Variable,+,subghz_device_cc1101_preset_msk_99_97kb_async_regs,const uint8_t[],
-Variable,+,subghz_device_cc1101_preset_ook_270khz_async_regs,const uint8_t[],
-Variable,+,subghz_device_cc1101_preset_ook_650khz_async_regs,const uint8_t[],
-Variable,+,subghz_protocol_raw,const SubGhzProtocol,
-Variable,+,subghz_protocol_raw_decoder,const SubGhzProtocolDecoder,
-Variable,+,subghz_protocol_raw_encoder,const SubGhzProtocolEncoder,
-Variable,+,subghz_protocol_registry,const SubGhzProtocolRegistry,
 Variable,-,suboptarg,char*,
 Variable,-,u8g2_cb_mirror,const u8g2_cb_t,
 Variable,-,u8g2_cb_r0,const u8g2_cb_t,

@@ -38,6 +38,28 @@ if not _ENABLE_EMULATE:
         "!protopirate_scene_emulate.c",
     ]
 
+# Private SubGHz library for ProtoPirate. The SubGHz protocol library is no
+# longer in the firmware, but ProtoPirate ships its OWN copy of the concrete
+# car-key protocols and its own protocol registry under protocols/. So the
+# private lib provides ONLY the shared infrastructure and pulls in only the
+# base decoder from protocols/. NOTE: fap_private_libs Lib.sources are
+# include-only globs (the "!exclude" syntax is NOT supported here, unlike app
+# sources), so we enumerate exactly what to compile.
+_PROTOPIRATE_SUBGHZ_LIB = Lib(
+    name="subghz",
+    fap_include_paths=[".", ".."],
+    cflags=["-Wno-error"],
+    sources=[
+        "*.c*",  # environment, receiver, transmitter, worker, setting, keystore, ...
+        "blocks/*.c*",
+        "devices/*.c*",
+        "devices/cc1101_int/*.c*",
+        # Only the base decoder from protocols/ (ProtoPirate vendors all the
+        # concrete protocols + its own registry).
+        "protocols/base.c",
+    ],
+)
+
 App(
     appid="proto_pirate",
     name="ProtoPirate",
@@ -53,7 +75,9 @@ App(
     fap_icon_assets="images",
     fap_file_assets="keystore",
     cdefines=["PROTOPIRATE_PROTOCOL_RX_ONLY=1"],
-    sources=_MAIN_APP_SOURCES,
+    sources=_MAIN_APP_SOURCES + ["!lib"],
+    fap_libs=["hwdrivers"],
+    fap_private_libs=[_PROTOPIRATE_SUBGHZ_LIB],
 )
 
 # --- RX protocol plugins ---

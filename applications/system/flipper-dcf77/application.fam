@@ -14,6 +14,10 @@ App(
     fap_icon="icons/app.png",
     fap_icon_assets="icons",
     fap_category="Tools",
+    # SubGHz library is no longer in the firmware; carry a private copy.
+    fap_private_libs=[
+        Lib(name="subghz", fap_include_paths=[".", ".."], cflags=["-Wno-error"]),
+    ],
     fap_version="2.0",
     fap_author="@arha",
     fap_weburl="https://github.com/arha/flipper-dcf77",

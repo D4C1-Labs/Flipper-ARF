@@ -2,6 +2,10 @@
 #include "rolljam_app_i.h"
 #include "protocols/protocol_items.h"
 #include <loader/firmware_api/firmware_api.h>
+
+/* RollJam private SubGhz API table (api/rolljam_api_table.cpp) — exposes the
+ * SubGhz lib symbols the runtime plugins import. */
+extern const ElfApiInterface* const subghz_application_api_interface;
 #include <stdio.h>
 
 #define TAG "RollJamTxRx"
@@ -90,6 +94,7 @@ static bool rolljam_ensure_protocol_registry_plugin(
         return false;
     }
     composite_api_resolver_add(resolver, firmware_api_interface);
+    composite_api_resolver_add(resolver, subghz_application_api_interface);
 
     const char* appid = (filter == RollJamProtocolRegistryFilterFM) ? 
         ROLLJAM_PROTOCOL_FM_PLUGIN_APP_ID : ROLLJAM_PROTOCOL_AM_PLUGIN_APP_ID;

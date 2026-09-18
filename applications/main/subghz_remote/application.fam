@@ -36,6 +36,10 @@ App(
     fap_author="@gid9798 and @xMasterX",
     fap_description="SubGhz Remote, uses up to 5 .sub files",
     fap_category="Sub-GHz",
+    # SubGHz library is no longer in the firmware; carry a private copy.
+    fap_private_libs=[
+        Lib(name="subghz", fap_include_paths=[".", ".."], cflags=["-Wno-error"]),
+    ],
     fap_icon_assets="icons",
     fap_icon_assets_symbol="subghz_remote",
     fap_version="1.8",

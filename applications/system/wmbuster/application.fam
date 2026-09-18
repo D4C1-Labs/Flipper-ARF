@@ -6,6 +6,13 @@ App(
     requires=["gui", "storage", "dialogs"],
     stack_size=8 * 1024,
     fap_category="Sub-GHz",
+    # SubGHz library is no longer in the firmware; carry a private copy.
+    # NB: named "fwsubghz" (not "subghz") so the generated static lib does not
+    # collide with this app's own "subghz/" source folder. The <lib/subghz/...>
+    # includes still resolve via the lib/subghz symlink + app root include path.
+    fap_private_libs=[
+        Lib(name="fwsubghz", fap_include_paths=[".", ".."], cflags=["-Wno-error"]),
+    ],
     fap_icon="images/icon_10x10.png",
     fap_icon_assets="images",
     fap_author="wm-buster",

@@ -3,6 +3,10 @@
 #include "radio_device_loader.h"
 
 #include <loader/firmware_api/firmware_api.h>
+
+/* ProtoPirate private SubGhz API table (api/protopirate_api_table.cpp) — exposes
+ * the SubGhz lib symbols the protocol plugins import at runtime. */
+extern const ElfApiInterface* const subghz_application_api_interface;
 #include <notification/notification_messages.h>
 
 #define TAG "ProtoPirateToolScene"
@@ -170,6 +174,7 @@ static bool protopirate_tool_scene_plugin_ensure_loaded(
         return false;
     }
     composite_api_resolver_add(resolver, firmware_api_interface);
+    composite_api_resolver_add(resolver, subghz_application_api_interface);
 
     PluginManager* manager = plugin_manager_alloc(
         PROTOPIRATE_TOOL_SCENE_PLUGIN_APP_ID,

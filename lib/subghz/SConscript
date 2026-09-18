@@ -1,5 +1,12 @@
 Import("env")
 
+# The SubGHz protocol library is no longer linked into the firmware image. It is
+# compiled privately into each app that uses it (see the SubGHz app's
+# fap_private_libs) and, for the SubGHz app, executed from an internal-flash XIP
+# region at runtime. This SConscript is retained so the header include path and
+# lint sources stay available; it no longer builds a static library for the
+# internal firmware.
+
 env.Append(
     CPPPATH=[
         "#/lib/subghz",
@@ -7,35 +14,4 @@ env.Append(
     LINT_SOURCES=[
         Dir("."),
     ],
-    SDK_HEADERS=[
-        File("environment.h"),
-        File("receiver.h"),
-        File("registry.h"),
-        File("subghz_worker.h"),
-        File("subghz_tx_rx_worker.h"),
-        File("subghz_file_encoder_worker.h"),
-        File("transmitter.h"),
-        File("protocols/raw.h"),
-        File("protocols/public_api.h"),
-        File("blocks/const.h"),
-        File("blocks/decoder.h"),
-        File("blocks/encoder.h"),
-        File("blocks/generic.h"),
-        File("blocks/math.h"),
-        File("blocks/custom_btn.h"),
-        File("subghz_setting.h"),
-        File("subghz_protocol_registry.h"),
-        File("devices/cc1101_configs.h"),
-        File("devices/cc1101_int/cc1101_int_interconnect.h"),
-        File("subghz_file_encoder_worker.h"),
-    ],
 )
-
-libenv = env.Clone(FW_LIB_NAME="subghz")
-libenv.ApplyLibFlags()
-
-sources = libenv.GlobRecursive("*.c*")
-
-lib = libenv.StaticLibrary("${FW_LIB_NAME}", sources)
-libenv.Install("${LIB_DIST_DIR}", lib)
-Return("lib")

@@ -1,0 +1,20 @@
+App(
+    appid="ami_tool",
+    name="AmiTool",
+    apptype=FlipperAppType.EXTERNAL,
+    entry_point="ami_tool_app",
+    requires=["gui"],
+    stack_size=2 * 1024,
+    fap_category="NFC",
+    # NFC library is no longer in the firmware; carry a private copy.
+    fap_private_libs=[
+        Lib(name="nfc", fap_include_paths=[".", ".."], cflags=["-Wno-error"]),
+    ],
+    fap_icon="ami_tool.png",
+    fap_description="An NTAG215 toolkit for Flipper Zero to work with tags used with gaming consoles.",
+    fap_author="Firefox2100",
+    fap_weburl="https://github.com/Firefox2100/ami-tool",
+    fap_file_assets="files",
+    fap_libs=["mbedtls", "bit_lib"],
+    fap_version="0.2.1",
+)

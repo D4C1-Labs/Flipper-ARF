@@ -7,6 +7,10 @@ App(
     stack_size=2 * 1024,
     fap_icon="icons/FdxbMaker_10px.png",
     fap_category="RFID",
+    # LF RFID library is no longer in the firmware; carry a private copy.
+    fap_private_libs=[
+        Lib(name="lfrfid", fap_include_paths=[".", ".."], cflags=["-Wno-error"]),
+    ],
     fap_icon_assets="icons",
     fap_description="FDX-B format file maker for animal microchips",
     fap_author="Skye Gibbs",

@@ -8,6 +8,10 @@
 #include "../rolljam_history.h"
 
 #include <loader/firmware_api/firmware_api.h>
+
+/* RollJam private SubGhz API table (api/rolljam_api_table.cpp) — exposes the
+ * SubGhz lib symbols the runtime plugins import. */
+extern const ElfApiInterface* const subghz_application_api_interface;
 #include <lib/flipper_application/plugins/plugin_manager.h>
 #include <lib/flipper_application/plugins/composite_resolver.h>
 
@@ -112,6 +116,7 @@ static bool emulate_plugin_load(RollJamApp* app) {
         return false;
     }
     composite_api_resolver_add(resolver, firmware_api_interface);
+    composite_api_resolver_add(resolver, subghz_application_api_interface);
 
     PluginManager* manager = plugin_manager_alloc(
         ROLLJAM_EMULATE_PLUGIN_APP_ID,

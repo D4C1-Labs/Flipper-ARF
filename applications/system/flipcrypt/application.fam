@@ -1,0 +1,19 @@
+App(
+    appid="flip_crypt",
+    name="FlipCrypt",
+    apptype=FlipperAppType.EXTERNAL,
+    entry_point="flip_crypt_app",
+    stack_size=4 * 1024,
+    fap_category="Tools",
+    # NFC library is no longer in the firmware; carry a private copy.
+    fap_private_libs=[
+        Lib(name="nfc", fap_include_paths=[".", ".."], cflags=["-Wno-error"]),
+    ],
+    fap_libs=["mbedtls", "bit_lib"],
+    fap_version="0.6",
+    fap_icon="icon.png",
+    fap_icon_assets="assets",
+    fap_description="Encrypt, decrypt, and hash text using a wide variety of classic and modern crypto tools.",
+    fap_author="Tyl3rA",
+    fap_weburl="https://github.com/Tyl3rA/FlipCrypt",
+)

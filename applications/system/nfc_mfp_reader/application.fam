@@ -1,0 +1,24 @@
+App(
+    appid="mfp_reader",
+    name="MFP Reader",
+    apptype=FlipperAppType.EXTERNAL,
+    entry_point="mfp_app_entry",
+    requires=["gui", "notification"],
+    stack_size=4 * 1024,
+    fap_category="NFC",
+    # NFC library is no longer in the firmware; carry a private copy.
+    fap_private_libs=[
+        Lib(name="nfc", fap_include_paths=[".", ".."], cflags=["-Wno-error"]),
+    ],
+    fap_libs=["mbedtls", "bit_lib"],
+    fap_icon="icons/mfp_reader_10px.png",
+    fap_icon_assets="icons",
+    fap_version=(1, 1),
+    fap_description="MIFARE Plus SL3 reader, dumper and emulator",
+    fap_author="Defensor7",
+    fap_weburl="https://github.com/Defensor7/flipperzero-mfp-reader",
+    sources=[
+        "*.c",
+        "lib/aes/*.c",
+    ],
+)

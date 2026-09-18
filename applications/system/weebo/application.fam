@@ -1,0 +1,22 @@
+App(
+    appid="weebo",
+    name="Weebo",
+    apptype=FlipperAppType.EXTERNAL,
+    entry_point="weebo_app",
+    stack_size=5 * 1024,
+    fap_icon="weebo.png",
+    fap_icon_assets="images",
+    fap_file_assets="assets",
+    fap_libs=["mbedtls", "bit_lib"],
+    fap_private_libs=[
+        Lib(name="nfc", fap_include_paths=[".", ".."], cflags=["-Wno-error"]),
+        Lib(
+            name="amiitool",
+        ),
+    ],
+    fap_category="NFC",
+    fap_author="bettse",
+    fap_weburl="https://github.com/bettse/weebo",
+    fap_version="0.5",
+    fap_description="An NTAG215 parser, writer, emulator, remixer, duplicator",
+)

@@ -123,6 +123,10 @@ App(
     apptype=FlipperAppType.PLUGIN,
     entry_point="get_api",
     requires=["unit_tests"],
+    # SubGHz library is no longer in the firmware; carry a private copy.
+    fap_private_libs=[
+        Lib(name="subghz", fap_include_paths=[".", ".."], cflags=["-Wno-error"]),
+    ],
 )
 
 App(
@@ -164,6 +168,10 @@ App(
     apptype=FlipperAppType.PLUGIN,
     entry_point="get_api",
     requires=["unit_tests"],
+    # LF RFID library is no longer in the firmware; carry a private copy.
+    fap_private_libs=[
+        Lib(name="lfrfid", fap_include_paths=[".", ".."], cflags=["-Wno-error"]),
+    ],
 )
 
 App(

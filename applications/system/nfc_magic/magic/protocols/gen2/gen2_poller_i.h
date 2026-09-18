@@ -2,8 +2,13 @@
 
 #include "gen2_poller.h"
 #include <nfc/protocols/nfc_generic_event.h>
-#include "crypto1.h" // TODO: Move to a better home
+// Use the private nfc library's crypto1 (identical Crypto1 struct + API) instead
+// of nfc_magic's vendored copy, to avoid conflicting redeclarations now that the
+// nfc lib is linked privately.
+#include <nfc/helpers/crypto1.h>
 #include <nfc/protocols/iso14443_3a/iso14443_3a_poller.h>
+// mf_classic_process_error() is provided by the private nfc library.
+#include <nfc/protocols/mf_classic/mf_classic_poller_i.h>
 
 #ifdef __cplusplus
 extern "C" {

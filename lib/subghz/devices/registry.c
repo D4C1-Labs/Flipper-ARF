@@ -2,7 +2,16 @@
 
 #include "cc1101_int/cc1101_int_interconnect.h"
 #include <flipper_application/plugins/plugin_manager.h>
+#include <flipper_application/plugins/composite_resolver.h>
 #include <loader/firmware_api/firmware_api.h>
+
+/* Private API interface exposing the CC1101 preset register arrays to the
+ * external radio plugin (radio_device_cc1101_ext). Since the SubGHz protocol
+ * library now lives inside the SubGHz FAP instead of the firmware, these
+ * symbols are no longer in the global firmware API table; the SubGHz app
+ * provides them and we merge them with the firmware API via a composite
+ * resolver. Defined in applications/main/subghz/api/subghz_app_api_table.cpp. */
+extern const ElfApiInterface* const subghz_application_api_interface;
 
 #define TAG "SubGhzDeviceRegistry"
 
@@ -10,6 +19,7 @@ struct SubGhzDeviceRegistry {
     const SubGhzDevice** items;
     size_t size;
     PluginManager* manager;
+    CompositeApiResolver* api_resolver;
 };
 
 static SubGhzDeviceRegistry* subghz_device_registry = NULL;
@@ -17,10 +27,13 @@ static SubGhzDeviceRegistry* subghz_device_registry = NULL;
 void subghz_device_registry_init(void) {
     SubGhzDeviceRegistry* subghz_device =
         (SubGhzDeviceRegistry*)malloc(sizeof(SubGhzDeviceRegistry));
+    subghz_device->api_resolver = composite_api_resolver_alloc();
+    composite_api_resolver_add(subghz_device->api_resolver, firmware_api_interface);
+    composite_api_resolver_add(subghz_device->api_resolver, subghz_application_api_interface);
     subghz_device->manager = plugin_manager_alloc(
         SUBGHZ_RADIO_DEVICE_PLUGIN_APP_ID,
         SUBGHZ_RADIO_DEVICE_PLUGIN_API_VERSION,
-        firmware_api_interface);
+        composite_api_resolver_get(subghz_device->api_resolver));
 
     //TODO FL-3556: should be APP_DATA_PATH("plugins"), not a hardcoded /ext path
     // [UNLEASHED_PORT] TODO: review - unleashed uses plugin_manager_load_all_prefixed() with
@@ -54,6 +67,7 @@ void subghz_device_registry_init(void) {
 
 void subghz_device_registry_deinit(void) {
     plugin_manager_free(subghz_device_registry->manager);
+    composite_api_resolver_free(subghz_device_registry->api_resolver);
     free(subghz_device_registry->items);
     free(subghz_device_registry);
     subghz_device_registry = NULL;

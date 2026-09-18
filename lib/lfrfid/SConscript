@@ -1,5 +1,11 @@
 Import("env")
 
+# The LF RFID library is no longer linked into the firmware image. It is
+# compiled privately into each app that uses it (see the LF RFID app's
+# fap_private_libs). This SConscript is retained so the header include path and
+# lint sources stay available; it no longer builds a static library for the
+# internal firmware.
+
 env.Append(
     LINT_SOURCES=[
         Dir("."),
@@ -7,20 +13,4 @@ env.Append(
     CPPPATH=[
         "#/lib/lfrfid",
     ],
-    SDK_HEADERS=[
-        File("lfrfid_worker.h"),
-        File("lfrfid_raw_worker.h"),
-        File("lfrfid_raw_file.h"),
-        File("lfrfid_dict_file.h"),
-        File("protocols/lfrfid_protocols.h"),
-    ],
 )
-
-libenv = env.Clone(FW_LIB_NAME="lfrfid")
-libenv.ApplyLibFlags()
-
-sources = libenv.GlobRecursive("*.c*")
-
-lib = libenv.StaticLibrary("${FW_LIB_NAME}", sources)
-libenv.Install("${LIB_DIST_DIR}", lib)
-Return("lib")

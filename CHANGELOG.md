@@ -23,11 +23,15 @@
   use and improves the odds of capturing it. Leave all off to disable.
 
 ### Changed
-- Sub-GHz now runs from firmware with its complete protocol library built in,
-  so every protocol loads instantly with no external app or plugin to install.
-- NFC is temporarily not included in this build. Freeing the internal flash
-  needed for the full Sub-GHz protocol catalog required removing the NFC stack
-  from the firmware image; NFC will return as a standalone external app.
+- Slimmer firmware, bigger app catalog. The Sub-GHz, NFC and 125 kHz RFID
+  libraries no longer live inside the firmware image; each app now ships as a
+  self-contained external app that carries its own copy and runs it directly
+  from flash (execute-in-place). This shrinks the firmware from ~940 KB to
+  ~480 KB and frees a large block of internal flash, which is what lets Sub-GHz
+  enable its complete protocol catalog and leaves ample headroom for new
+  protocols and apps.
+- NFC and 125 kHz RFID are back and fully featured, running as external apps
+  (all card types, parsers and protocol plugins included).
 - Battery info is now one tap away from the power-off screen.
 
 ### Fixed

@@ -1,3 +1,20 @@
+# Private SubGHz library for RollJam. Like ProtoPirate, RollJam vendors its own
+# concrete protocols + registry under protocols/, so the private lib provides
+# only the shared infrastructure and just the base decoder from protocols/
+# (Lib.sources are include-only globs — no "!exclude" support here).
+_ROLLJAM_SUBGHZ_LIB = Lib(
+    name="subghz",
+    fap_include_paths=[".", ".."],
+    cflags=["-Wno-error"],
+    sources=[
+        "*.c*",
+        "blocks/*.c*",
+        "devices/*.c*",
+        "devices/cc1101_int/*.c*",
+        "protocols/base.c",
+    ],
+)
+
 App(
     appid="rolljam_standalone",
     name="RollJam",
@@ -13,7 +30,10 @@ App(
     cdefines=["ENABLE_SHIELD_RX_SCENE=1", "ENABLE_EMULATE_FEATURE=1"],
     fap_icon="icon.png",
     fap_file_assets="keystore",
+    fap_libs=["hwdrivers"],
+    fap_private_libs=[_ROLLJAM_SUBGHZ_LIB],
     sources=[
+        "!lib",
         "rolljam_app.c",
         "rolljam_app_i.c",
         "rolljam_history.c",

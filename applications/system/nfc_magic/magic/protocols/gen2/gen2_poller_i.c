@@ -8,30 +8,12 @@
 
 #define TAG "GEN2_I"
 
-MfClassicError mf_classic_process_error(Iso14443_3aError error) {
-    MfClassicError ret = MfClassicErrorNone;
-
-    switch(error) {
-    case Iso14443_3aErrorNone:
-        ret = MfClassicErrorNone;
-        break;
-    case Iso14443_3aErrorNotPresent:
-        ret = MfClassicErrorNotPresent;
-        break;
-    case Iso14443_3aErrorColResFailed:
-    case Iso14443_3aErrorCommunication:
-    case Iso14443_3aErrorWrongCrc:
-        ret = MfClassicErrorProtocol;
-        break;
-    case Iso14443_3aErrorTimeout:
-        ret = MfClassicErrorTimeout;
-        break;
-    default:
-        ret = MfClassicErrorProtocol;
-        break;
-    }
-    return ret;
-}
+/* mf_classic_process_error is provided by the private nfc library
+ * (lib/nfc/protocols/mf_classic/mf_classic_poller_i.c) — the duplicate copy
+ * that used to live here was removed to avoid a multiple-definition link error
+ * now that nfc_magic carries the nfc library privately. The declaration comes
+ * from <nfc/protocols/mf_classic/mf_classic_poller_i.h> (already included via
+ * gen2_poller_i.h). */
 
 Gen2PollerError gen2_poller_process_iso3_error(Iso14443_3aError error) {
     Gen2PollerError ret = Gen2PollerErrorNone;

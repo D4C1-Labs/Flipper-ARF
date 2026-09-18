@@ -7,6 +7,10 @@ App(
     fap_icon="icons/meal_pager_10px.png",
     fap_icon_assets="icons",
     fap_category="Sub-GHz",
+    # SubGHz library is no longer in the firmware; carry a private copy.
+    fap_private_libs=[
+        Lib(name="subghz", fap_include_paths=[".", ".."], cflags=["-Wno-error"]),
+    ],
     fap_version="1.3",
     fap_author="leedave",
     fap_weburl="https://github.com/leedave/flipper-zero-meal-pager",

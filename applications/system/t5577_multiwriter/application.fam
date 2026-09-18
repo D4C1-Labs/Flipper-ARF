@@ -13,4 +13,8 @@ App(
     fap_weburl="https://github.com/Leptopt1los/t5577_multiwriter",
     fap_icon="icon.png",
     fap_category="RFID",
+    # LF RFID library is no longer in the firmware; carry a private copy.
+    fap_private_libs=[
+        Lib(name="lfrfid", fap_include_paths=[".", ".."], cflags=["-Wno-error"]),
+    ],
 )
