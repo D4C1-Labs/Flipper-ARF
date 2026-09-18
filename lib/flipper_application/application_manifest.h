@@ -33,6 +33,13 @@ typedef struct {
     uint16_t hardware_target_id;
 } FlipperApplicationManifestBase;
 
+/** Manifest extension flags (matches scripts/fbt/elfmanifest.py). */
+typedef enum {
+    FlipperApplicationFlagDefault = 0,
+    /* 1 << 0 reserved (InsomniaSafe, unused) */
+    FlipperApplicationFlagForceXIP = 1 << 1,
+} FlipperApplicationFlag;
+
 typedef struct {
     FlipperApplicationManifestBase base;
     uint16_t stack_size;
@@ -40,6 +47,10 @@ typedef struct {
     char name[FAP_MANIFEST_MAX_APP_NAME_LENGTH];
     char has_icon;
     char icon[FAP_MANIFEST_MAX_ICON_SIZE];
+    /* Extended field — present only when the .fapmeta section is large enough.
+     * Old FAPs omit it; the loader zero-initialises before reading and only
+     * copies this byte when the section actually contains it. */
+    uint8_t flags;
 } FlipperApplicationManifestV1;
 
 typedef FlipperApplicationManifestV1 FlipperApplicationManifest;

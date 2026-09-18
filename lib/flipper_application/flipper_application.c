@@ -126,7 +126,11 @@ static bool flipper_application_process_manifest_section(
     void* context) {
     FlipperApplicationManifest* manifest = context;
 
-    if(size < sizeof(FlipperApplicationManifest)) {
+    /* Minimum valid manifest is the V1 layout without the trailing extended
+     * flags byte. Old FAPs write exactly that; new FAPs append one flags byte. */
+    const size_t base_size = sizeof(FlipperApplicationManifest) - sizeof(uint8_t);
+
+    if(size < base_size) {
         return false;
     }
 
@@ -134,8 +138,18 @@ static bool flipper_application_process_manifest_section(
         return true;
     }
 
+    /* Zero-init so the flags byte defaults to 0 for old FAPs. */
+    memset(manifest, 0, sizeof(FlipperApplicationManifest));
+
+    /* Never read more than the struct can hold (guards against future
+     * larger manifests). */
+    size_t read_size = size;
+    if(read_size > sizeof(FlipperApplicationManifest)) {
+        read_size = sizeof(FlipperApplicationManifest);
+    }
+
     return storage_file_seek(file, offset, true) &&
-           storage_file_read(file, manifest, size) == size;
+           storage_file_read(file, manifest, read_size) == read_size;
 }
 
 // we can't use const char* as context because we will lose the const qualifier
@@ -158,9 +172,30 @@ static FlipperApplicationPreloadStatus
         return FlipperApplicationPreloadStatusInvalidFile;
     }
 
+    // Load and validate the manifest FIRST so we can honor the ForceXIP flag
+    // (and detect plugins) before the section table / XIP setup runs.
+    if(elf_process_section(
+           app->elf, ".fapmeta", flipper_application_process_manifest_section, &app->manifest) !=
+       ElfProcessSectionResultSuccess) {
+        return FlipperApplicationPreloadStatusInvalidFile;
+    }
+
+    FlipperApplicationPreloadStatus manifest_status = flipper_application_validate_manifest(app);
+    if(manifest_status != FlipperApplicationPreloadStatusSuccess) {
+        return manifest_status;
+    }
+
     // if we are loading full file
     if(load_full) {
-        // load section table
+        // Plugins (stack_size == 0) share the flash region with their host app
+        // and must load into RAM only.
+        if(flipper_application_is_plugin(app)) {
+            elf_file_disable_xip(app->elf);
+        } else if(app->manifest.flags & FlipperApplicationFlagForceXIP) {
+            elf_file_force_xip(app->elf);
+        }
+
+        // load section table (runs XIP setup based on the flags above)
         ElfLoadSectionTableResult load_result = elf_file_load_section_table(app->elf);
         if(load_result == ElfLoadSectionTableResultError) {
             return FlipperApplicationPreloadStatusInvalidFile;
@@ -179,14 +214,7 @@ static FlipperApplicationPreloadStatus
         }
     }
 
-    // load manifest section
-    if(elf_process_section(
-           app->elf, ".fapmeta", flipper_application_process_manifest_section, &app->manifest) !=
-       ElfProcessSectionResultSuccess) {
-        return FlipperApplicationPreloadStatusInvalidFile;
-    }
-
-    return flipper_application_validate_manifest(app);
+    return FlipperApplicationPreloadStatusSuccess;
 }
 
 /* Parse headers, load manifest */

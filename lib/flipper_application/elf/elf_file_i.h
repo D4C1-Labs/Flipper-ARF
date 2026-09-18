@@ -1,5 +1,6 @@
 #pragma once
 #include "elf_file.h"
+#include "elf_file_xip.h"
 #include <m-dict.h>
 
 #ifdef __cplusplus
@@ -16,8 +17,13 @@ typedef int32_t(entry_t)(void*);
 typedef struct ELFSection ELFSection;
 
 struct ELFSection {
-    void* data;
+    void* data; /**< RAM buffer (staging for XIP, or runtime for RAM sections) */
+    Elf32_Addr exec_addr; /**< Runtime address: flash for XIP, same as (Elf32_Addr)data for RAM */
     Elf32_Word size;
+    Elf32_Word sh_flags; /**< Cached ELF section header flags */
+    Elf32_Off file_offset; /**< Offset in ELF file (for deferred loading) */
+    Elf32_Word file_align; /**< Alignment requirement from section header */
+    bool xip; /**< true if section lives in flash XIP region */
 
     size_t rel_count;
     Elf32_Off rel_offset;
@@ -45,6 +51,10 @@ struct ELFFile {
     File* fd;
     const ElfApiInterface* api_interface;
     ELFDebugLinkInfo debug_link_info;
+
+    XipRegion xip_region;
+    bool xip_disabled; /**< When true, skip XIP setup (used for plugins) */
+    bool xip_forced; /**< When true, always use XIP even if app fits in RAM */
 
     ELFSection* preinit_array;
     ELFSection* init_array;

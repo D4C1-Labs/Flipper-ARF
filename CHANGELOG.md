@@ -3,17 +3,35 @@
 ---
 
 ### Added
-- Protocol name allowlist filter: in Receiver Config, a new "Proto Filter"
-  field accepts a comma-separated list of protocol names (e.g. "Ford V2,VAG").
-  When set, the receiver ignores all decoded signals that are not in the list,
-  reducing RAM usage and increasing the chance of capturing the target protocol.
-  Leave empty to disable (default behavior, all protocols accepted).
-  Setting is persisted in last_subghz.settings under the ProtocolFilter key.
+- All SubGHz protocols enabled by default, including the full automotive and
+  keyfob/gate catalog (KIA, Renault, Fiat, Ford, Honda, PSA, VAG, Subaru,
+  Chrysler, Star Line, Scher-Khan and more). Nothing to toggle: every supported
+  protocol is available out of the box.
+- New car preset pack for better range and reception. Adds tuned presets for
+  common remotes (Honda, VAG, PSA, Renault, FCA, KIA) plus general AM/FM
+  sensitivity presets. Your original presets are untouched.
+- GM (General Motors) car remote support: capture and replay.
+- Renault Seed recovery ("Seed BF") for classic Renault remotes. Once
+  recovered, the seed is saved to the file so you don't have to run it again.
+- Visual lock screen menu: a redesigned quick-access grid to toggle SubGHz,
+  Bluetooth, sound/stealth, ProtoPirate, brightness and volume without leaving
+  the menu.
+- SubGHz auto-save on receive: captured signals can be saved automatically, with
+  an option to skip duplicates so your history stays clean.
+- Protocol name filter in Receiver Config ("Proto Filter"): pick which protocols
+  the receiver listens for. Restricting to your target protocol reduces memory
+  use and improves the odds of capturing it. Leave all off to disable.
 
 ### Changed
-- Protocol Filter: replaced free-text input with a dedicated protocol list
-  scene (Proto Filter in Receiver Config). All registered protocols are shown
-  as toggleable items (--- / ONLY). Selecting one or more protocols restricts
-  the receiver to only show those; leaving all as --- disables the filter.
-  The active count is shown inline in Receiver Config ("N set" or "All").
-  Filter is persisted across sessions and cleared by Reset to default.
+- Battery info is now one tap away from the power-off screen.
+
+### Fixed
+- Car remotes: pressing the D-pad to pick a different button (Lock, Unlock,
+  Trunk, Panic, etc.) now sends and shows the correct button across all
+  supported car protocols. Some remotes previously kept sending the same
+  button and never advanced their rolling code.
+- Fewer false detections: the receiver no longer feeds AM signals to FM-only
+  decoders (and vice versa), so protocols like KIA and Fiat stop misreading
+  each other's signals.
+- Fixed freezes when running the long brute-force operations (Hitag2 and Seed
+  recovery); progress now updates smoothly and can be cancelled.

@@ -87,6 +87,21 @@ ElfLoadSectionTableResult elf_file_load_section_table(ELFFile* elf_file);
 ELFFileLoadStatus elf_file_load_sections(ELFFile* elf_file);
 
 /**
+ * @brief Disable Execute-in-Place (XIP) for this ELF.
+ * Used for plugins, which share the flash region with their host app and
+ * therefore must load entirely into RAM. Call before elf_file_load_section_table.
+ * @param elf_file
+ */
+void elf_file_disable_xip(ELFFile* elf_file);
+
+/**
+ * @brief Force Execute-in-Place (XIP) for this ELF even if it would fit in RAM.
+ * Set from the app manifest ForceXIP flag. Call before elf_file_load_section_table.
+ * @param elf_file
+ */
+void elf_file_force_xip(ELFFile* elf_file);
+
+/**
  * @brief Execute ELF file pre-run stage, 
  * call static constructors for example (load stage #3)
  * Must be done before invoking any code from the ELF file

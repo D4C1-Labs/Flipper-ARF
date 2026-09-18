@@ -167,7 +167,12 @@ class AppManager:
                     raise FlipperManifestException(
                         f"App {kw.get('appid')} of type {apptype} cannot have '{app_property}' in manifest"
                     )
-        else:
+
+        # FAP-only properties are valid for any externally-built app type
+        # (EXTERNAL, MENUEXTERNAL, PLUGIN, ...). Built-in firmware apps cannot
+        # use them. This allows MENUEXTERNAL apps (e.g. Sub-GHz) to compile a
+        # private library into the FAP and stream it via XIP.
+        if apptype not in AppBuildset.EXTERNAL_APP_TYPES_MAP:
             for app_property in (
                 "fap_extbuild",
                 "fap_private_libs",

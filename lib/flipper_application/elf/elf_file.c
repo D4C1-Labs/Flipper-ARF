@@ -1,8 +1,11 @@
 #include "elf_file.h"
 #include "elf_file_i.h"
+#include "elf_file_xip.h"
 
 #include <storage/storage.h>
 #include <elf.h>
+#include <furi_hal_flash.h>
+#include <toolbox/crc32_calc.h>
 #include "elf_api_interface.h"
 #include "../api_hashtable/api_hashtable.h"
 
@@ -78,8 +81,13 @@ static ELFSection* elf_file_get_or_put_section(ELFFile* elf, const char* name) {
             strdup(name),
             (ELFSection){
                 .data = NULL,
+                .exec_addr = 0,
                 .sec_idx = 0,
                 .size = 0,
+                .sh_flags = 0,
+                .file_offset = 0,
+                .file_align = 0,
+                .xip = false,
                 .rel_count = 0,
                 .rel_offset = 0,
                 .fast_rel = NULL,
@@ -187,7 +195,7 @@ static Elf32_Addr elf_address_of(ELFFile* elf, Elf32_Sym* sym, const char* sName
     } else {
         ELFSection* symSec = elf_section_of(elf, sym->st_shndx);
         if(symSec) {
-            return ((Elf32_Addr)symSec->data) + sym->st_value;
+            return (symSec->exec_addr) + sym->st_value;
         }
     }
     FURI_LOG_D(TAG, "  Can not find address for symbol %s", sName);
@@ -218,13 +226,18 @@ static JMPTrampoline* elf_create_trampoline(Elf32_Addr addr) {
     return trampoline;
 }
 
-static void elf_relocate_jmp_call(ELFFile* elf, Elf32_Addr relAddr, int type, Elf32_Addr symAddr) {
+static void elf_relocate_jmp_call(
+    ELFFile* elf,
+    Elf32_Addr patchAddr,
+    Elf32_Addr relAddr,
+    int type,
+    Elf32_Addr symAddr) {
     int offset, hi, lo, s, j1, j2, i1, i2, imm10, imm11;
     int to_thumb, is_call, blx_bit = 1 << 12;
 
-    /* Get initial offset */
-    hi = ((uint16_t*)relAddr)[0];
-    lo = ((uint16_t*)relAddr)[1];
+    /* Get initial offset (instruction bytes are read from RAM staging) */
+    hi = ((uint16_t*)patchAddr)[0];
+    lo = ((uint16_t*)patchAddr)[1];
     s = (hi >> 10) & 1;
     j1 = (lo >> 13) & 1;
     j2 = (lo >> 11) & 1;
@@ -284,14 +297,14 @@ static void elf_relocate_jmp_call(ELFFile* elf, Elf32_Addr relAddr, int type, El
     j2 = s ^ (i2 ^ 1);
     imm10 = (offset >> 12) & 0x3ff;
     imm11 = (offset >> 1) & 0x7ff;
-    (*(uint16_t*)relAddr) = (uint16_t)((hi & 0xf800) | (s << 10) | imm10);
-    (*(uint16_t*)(relAddr + 2)) =
+    (*(uint16_t*)patchAddr) = (uint16_t)((hi & 0xf800) | (s << 10) | imm10);
+    (*(uint16_t*)(patchAddr + 2)) =
         (uint16_t)((lo & 0xc000) | (j1 << 13) | blx_bit | (j2 << 11) | imm11);
 }
 
-static void elf_relocate_mov(Elf32_Addr relAddr, int type, Elf32_Addr symAddr) {
-    uint16_t upper_insn = ((uint16_t*)relAddr)[0];
-    uint16_t lower_insn = ((uint16_t*)relAddr)[1];
+static void elf_relocate_mov(Elf32_Addr patchAddr, int type, Elf32_Addr symAddr) {
+    uint16_t upper_insn = ((uint16_t*)patchAddr)[0];
+    uint16_t lower_insn = ((uint16_t*)patchAddr)[1];
 
     /* MOV*<C> <Rd>,#<imm16>
      *
@@ -317,37 +330,52 @@ static void elf_relocate_mov(Elf32_Addr relAddr, int type, Elf32_Addr symAddr) {
     }
 
     /* Re-encode */
-    ((uint16_t*)relAddr)[0] = (upper_insn & 0xFBF0) | (((addr >> 11) & 1) << 10) /* i */
-                              | ((addr >> 12) & 0x000F); /* imm4 */
-    ((uint16_t*)relAddr)[1] = (lower_insn & 0x8F00) | (((addr >> 8) & 0x7) << 12) /* imm3 */
-                              | (addr & 0x00FF); /* imm8 */
+    ((uint16_t*)patchAddr)[0] = (upper_insn & 0xFBF0) | (((addr >> 11) & 1) << 10) /* i */
+                                | ((addr >> 12) & 0x000F); /* imm4 */
+    ((uint16_t*)patchAddr)[1] = (lower_insn & 0x8F00) | (((addr >> 8) & 0x7) << 12) /* imm3 */
+                                | (addr & 0x00FF); /* imm8 */
 }
 
-static bool elf_relocate_symbol(ELFFile* elf, Elf32_Addr relAddr, int type, Elf32_Addr symAddr) {
+/**
+ * @param patchAddr  RAM address where instruction/data bytes are read/written
+ *                   (staging buffer for XIP sections, runtime addr otherwise)
+ * @param relAddr    Runtime address used for PC-relative relocations
+ *                   (flash exec address for XIP sections)
+ */
+static bool elf_relocate_symbol(
+    ELFFile* elf,
+    Elf32_Addr patchAddr,
+    Elf32_Addr relAddr,
+    int type,
+    Elf32_Addr symAddr) {
     switch(type) {
     case R_ARM_TARGET1:
     case R_ARM_ABS32:
-        *((uint32_t*)relAddr) += symAddr;
-        FURI_LOG_D(TAG, "  R_ARM_ABS32 relocated is 0x%08X", (unsigned int)*((uint32_t*)relAddr));
+        *((uint32_t*)patchAddr) += symAddr;
+        FURI_LOG_D(
+            TAG, "  R_ARM_ABS32 relocated is 0x%08X", (unsigned int)*((uint32_t*)patchAddr));
         break;
     case R_ARM_REL32:
-        *((uint32_t*)relAddr) += symAddr - relAddr;
-        FURI_LOG_D(TAG, "  R_ARM_REL32 relocated is 0x%08X", (unsigned int)*((uint32_t*)relAddr));
+        *((uint32_t*)patchAddr) += symAddr - relAddr;
+        FURI_LOG_D(
+            TAG, "  R_ARM_REL32 relocated is 0x%08X", (unsigned int)*((uint32_t*)patchAddr));
         break;
     case R_ARM_THM_PC22:
     case R_ARM_CALL:
     case R_ARM_THM_JUMP24:
-        elf_relocate_jmp_call(elf, relAddr, type, symAddr);
+        elf_relocate_jmp_call(elf, patchAddr, relAddr, type, symAddr);
         FURI_LOG_D(
-            TAG, "  R_ARM_THM_CALL/JMP relocated is 0x%08X", (unsigned int)*((uint32_t*)relAddr));
+            TAG,
+            "  R_ARM_THM_CALL/JMP relocated is 0x%08X",
+            (unsigned int)*((uint32_t*)patchAddr));
         break;
     case R_ARM_THM_MOVW_ABS_NC:
     case R_ARM_THM_MOVT_ABS:
-        elf_relocate_mov(relAddr, type, symAddr);
+        elf_relocate_mov(patchAddr, type, symAddr);
         FURI_LOG_D(
             TAG,
             "  R_ARM_THM_MOVW_ABS_NC/MOVT_ABS relocated is 0x%08X",
-            (unsigned int)*((uint32_t*)relAddr));
+            (unsigned int)*((uint32_t*)patchAddr));
         break;
     default:
         FURI_LOG_E(TAG, "  Undefined relocation %d", type);
@@ -384,7 +412,8 @@ static bool elf_relocate(ELFFile* elf, ELFSection* s) {
 
             int symEntry = ELF32_R_SYM(rel.r_info);
             int relType = ELF32_R_TYPE(rel.r_info);
-            Elf32_Addr relAddr = ((Elf32_Addr)s->data) + rel.r_offset;
+            Elf32_Addr patchAddr = ((Elf32_Addr)s->data) + rel.r_offset;
+            Elf32_Addr relAddr = (s->exec_addr) + rel.r_offset;
 
             if(!address_cache_get(elf->relocation_cache, symEntry, &symAddr)) {
                 Elf32_Sym sym;
@@ -413,7 +442,7 @@ static bool elf_relocate(ELFFile* elf, ELFSection* s) {
                     "  symAddr=%08X relAddr=%08X",
                     (unsigned int)symAddr,
                     (unsigned int)relAddr);
-                if(!elf_relocate_symbol(elf, relAddr, relType, symAddr)) {
+                if(!elf_relocate_symbol(elf, patchAddr, relAddr, relType, symAddr)) {
                     relocate_result = false;
                 }
             } else {
@@ -468,41 +497,81 @@ typedef struct {
     ELFLoadSectionResult result;
 } SectionTypeInfo;
 
+/** Save section metadata without allocating RAM or reading data.
+ *  Actual loading is deferred to elf_materialize_section(), after we know
+ *  which sections can live in the XIP flash region instead of RAM.
+ *  BSS (SHT_NOBITS) is allocated eagerly since it's cheap and always needed.
+ */
 static ELFLoadSectionResult
-    elf_load_section_data(ELFFile* elf, ELFSection* section, Elf32_Shdr* section_header) {
-    if(section_header->sh_size == 0) {
-        FURI_LOG_D(TAG, "No data for section");
+    elf_save_section_metadata(ELFSection* section, Elf32_Shdr* section_header) {
+    section->size = section_header->sh_size;
+    section->file_offset = section_header->sh_offset;
+    section->file_align = section_header->sh_addralign;
+    section->data = NULL;
+
+    if(section_header->sh_type == SHT_NOBITS) {
+        /* BSS: allocate zeroed RAM immediately. */
+        if(section_header->sh_size > 0) {
+            section->data = aligned_malloc(section_header->sh_size, section_header->sh_addralign);
+            if(!section->data) return ELFLoadSectionResultNoMemory;
+            memset(section->data, 0, section_header->sh_size);
+        }
+    }
+
+    return ELFLoadSectionResultSuccess;
+}
+
+/** Allocate RAM and read section data from the ELF file.
+ *  Called after XIP setup so we know which sections need RAM.
+ *  Handles sections > 64 KB via chunked reads.
+ */
+static ELFLoadSectionResult elf_materialize_section(ELFFile* elf, ELFSection* section) {
+    if(section->size == 0 || section->data != NULL) {
+        /* Already materialized (BSS) or empty. */
         return ELFLoadSectionResultSuccess;
     }
 
-    size_t safe_size = section_header->sh_size + 1024;
+    size_t safe_size = section->size + 1024;
 
     furi_kernel_lock();
 
     if(memmgr_heap_get_max_free_block() < safe_size) {
         furi_kernel_unlock();
-        FURI_LOG_E(TAG, "Not enough memory to load section data");
+        FURI_LOG_E(TAG, "Not enough memory to load section data (%lu bytes)", section->size);
         return ELFLoadSectionResultNoMemory;
     }
 
-    section->data = aligned_malloc(section_header->sh_size, section_header->sh_addralign);
-    section->size = section_header->sh_size;
+    section->data = aligned_malloc(section->size, section->file_align);
 
     furi_kernel_unlock();
 
-    if(section_header->sh_type == SHT_NOBITS) {
-        // BSS section, no data to load
-        return ELFLoadSectionResultSuccess;
+    if(!section->data) {
+        return ELFLoadSectionResultNoMemory;
     }
 
-    if((!storage_file_seek(elf->fd, section_header->sh_offset, true)) ||
-       (storage_file_read(elf->fd, section->data, section_header->sh_size) !=
-        section_header->sh_size)) {
-        FURI_LOG_E(TAG, "    seek/read fail");
+    if(!storage_file_seek(elf->fd, section->file_offset, true)) {
+        FURI_LOG_E(TAG, "    seek fail");
+        aligned_free(section->data);
+        section->data = NULL;
         return ELFLoadSectionResultError;
     }
 
-    FURI_LOG_D(TAG, "0x%p", section->data);
+    /* Read section data — chunk reads defensively (FatFS single-call limit). */
+    size_t total_read = 0;
+    while(total_read < section->size) {
+        size_t chunk = section->size - total_read;
+        if(chunk > 0xF000) chunk = 0xF000;
+        size_t got = storage_file_read(elf->fd, (uint8_t*)section->data + total_read, chunk);
+        if(got == 0) {
+            FURI_LOG_E(TAG, "    read fail at %zu/%lu", total_read, section->size);
+            aligned_free(section->data);
+            section->data = NULL;
+            return ELFLoadSectionResultError;
+        }
+        total_read += got;
+    }
+
+    FURI_LOG_D(TAG, "Materialized %lu bytes at 0x%p", section->size, section->data);
     return ELFLoadSectionResultSuccess;
 }
 
@@ -559,6 +628,7 @@ static SectionTypeInfo elf_preload_section(
     if(section_header->sh_flags & SHF_ALLOC) {
         ELFSection* section_p = elf_file_get_or_put_section(elf, name);
         section_p->sec_idx = section_idx;
+        section_p->sh_flags = section_header->sh_flags;
 
         if(section_header->sh_type == SHT_PREINIT_ARRAY) {
             furi_assert(elf->preinit_array == NULL);
@@ -572,10 +642,11 @@ static SectionTypeInfo elf_preload_section(
         }
 
         info.type = SectionTypeData;
-        info.result = elf_load_section_data(elf, section_p, section_header);
+        /* Defer allocation/loading — XIP setup decides RAM vs flash later. */
+        info.result = elf_save_section_metadata(section_p, section_header);
 
         if(info.result != ELFLoadSectionResultSuccess) {
-            FURI_LOG_E(TAG, "Error loading section '%s'", name);
+            FURI_LOG_E(TAG, "Error saving metadata for section '%s'", name);
         }
 
         return info;
@@ -599,14 +670,18 @@ static SectionTypeInfo elf_preload_section(
         return info;
     }
 
-    // Load fast rel section
+    // Load fast rel section (small — load eagerly into RAM now)
     if(str_prefix(name, ".fast.rel")) {
         name = name + strlen(".fast.rel");
         ELFSection* section_p = elf_file_get_or_put_section(elf, name);
         section_p->fast_rel = malloc(sizeof(ELFSection));
+        memset(section_p->fast_rel, 0, sizeof(ELFSection));
 
         info.type = SectionTypeFastRelData;
-        info.result = elf_load_section_data(elf, section_p->fast_rel, section_header);
+        info.result = elf_save_section_metadata(section_p->fast_rel, section_header);
+        if(info.result == ELFLoadSectionResultSuccess) {
+            info.result = elf_materialize_section(elf, section_p->fast_rel);
+        }
 
         if(info.result != ELFLoadSectionResultSuccess) {
             FURI_LOG_E(TAG, "Error loading section '%s'", name);
@@ -730,7 +805,7 @@ static bool elf_relocate_fast(ELFFile* elf, ELFSection* s) {
         if(is_section) {
             ELFSection* symSec = elf_section_of(elf, hash_or_section_index);
             if(symSec) {
-                address = ((Elf32_Addr)symSec->data) + section_value;
+                address = (symSec->exec_addr) + section_value;
             }
         } else {
             address = elf_address_of_by_hash(elf, hash_or_section_index);
@@ -758,8 +833,9 @@ static bool elf_relocate_fast(ELFFile* elf, ELFSection* s) {
             for(uint32_t j = 0; j < offsets_count; j++) {
                 uint32_t offset = *((uint32_t*)start) & 0x00FFFFFF;
                 start += 3;
-                Elf32_Addr relAddr = ((Elf32_Addr)s->data) + offset;
-                elf_relocate_symbol(elf, relAddr, type, address);
+                Elf32_Addr patchAddr = ((Elf32_Addr)s->data) + offset;
+                Elf32_Addr relAddr = (s->exec_addr) + offset;
+                elf_relocate_symbol(elf, patchAddr, relAddr, type, address);
             }
         }
     }
@@ -804,8 +880,441 @@ static void elf_file_call_section_list(ELFSection* section, bool reverse_order) 
 }
 
 /**************************************************************************************************/
+/*********************************** Execute-in-Place (XIP) **************************************/
+/**************************************************************************************************/
+
+/** A section is XIP-eligible if it is allocated, read-only, has file data
+ *  (not BSS) and is non-empty. Writable sections (.data/.bss) always stay
+ *  in RAM. */
+static bool elf_section_is_xip_eligible(const ELFSection* section) {
+    return (section->sh_flags & SHF_ALLOC) && !(section->sh_flags & SHF_WRITE) &&
+           section->size > 0 && section->file_offset != 0;
+}
+
+/** Compute a hash of all RAM section exec_addrs. XIP code in flash contains
+ *  relocated pointers to RAM sections; if those move between launches the
+ *  cache must be re-relocated. */
+static uint32_t elf_compute_ram_addr_hash(ELFFile* elf) {
+    uint32_t hash = 2166136261u; /* FNV-1a offset basis */
+    ELFSectionDict_it_t it;
+    for(ELFSectionDict_it(it, elf->sections); !ELFSectionDict_end_p(it); ELFSectionDict_next(it)) {
+        ELFSectionDict_itref_t* itref = ELFSectionDict_ref(it);
+        ELFSection* sec = &itref->value;
+        if(!sec->xip && sec->data != NULL) {
+            uint32_t addr = (uint32_t)sec->data;
+            for(int b = 0; b < 4; b++) {
+                hash ^= (addr >> (b * 8)) & 0xFF;
+                hash *= 16777619u;
+            }
+        }
+    }
+    return hash;
+}
+
+/** Reset the bump allocator and assign flash addresses to XIP-eligible
+ *  sections. Called on a fresh (cache-miss) load. */
+static void elf_xip_assign_addresses(ELFFile* elf) {
+    elf->xip_region.next_free = elf->xip_region.data_start;
+    elf->xip_region.cache_valid = false;
+    elf->xip_region.needs_rerelocation = false;
+
+    ELFSectionDict_it_t it;
+
+    /* Clear any stale XIP state. */
+    for(ELFSectionDict_it(it, elf->sections); !ELFSectionDict_end_p(it); ELFSectionDict_next(it)) {
+        ELFSectionDict_itref_t* itref = ELFSectionDict_ref(it);
+        itref->value.xip = false;
+    }
+
+    /* Calculate total XIP size needed (page-aligned per section). */
+    size_t xip_total = 0;
+    for(ELFSectionDict_it(it, elf->sections); !ELFSectionDict_end_p(it); ELFSectionDict_next(it)) {
+        ELFSectionDict_itref_t* itref = ELFSectionDict_ref(it);
+        if(elf_section_is_xip_eligible(&itref->value)) {
+            size_t aligned = (itref->value.size + XIP_FLASH_PAGE_SIZE - 1) &
+                             ~((size_t)XIP_FLASH_PAGE_SIZE - 1);
+            xip_total += aligned;
+        }
+    }
+
+    if(xip_total == 0) {
+        FURI_LOG_D(TAG, "No XIP-eligible sections found");
+        xip_region_release(&elf->xip_region);
+        return;
+    }
+
+    if(xip_total > (XIP_REGION_MAX_SIZE - XIP_CACHE_HEADER_SIZE)) {
+        FURI_LOG_E(TAG, "XIP sections too large (%zu bytes), falling back to RAM", xip_total);
+        xip_region_release(&elf->xip_region);
+        return;
+    }
+
+    /* Allocate flash addresses for each XIP-eligible section. */
+    for(ELFSectionDict_it(it, elf->sections); !ELFSectionDict_end_p(it); ELFSectionDict_next(it)) {
+        ELFSectionDict_itref_t* itref = ELFSectionDict_ref(it);
+        ELFSection* sec = &itref->value;
+        if(elf_section_is_xip_eligible(sec)) {
+            uint32_t flash_addr = xip_region_alloc(&elf->xip_region, sec->size, XIP_FLASH_PAGE_SIZE);
+            if(flash_addr == 0) {
+                FURI_LOG_E(TAG, "XIP alloc failed for '%s', falling back to RAM", itref->key);
+                xip_region_release(&elf->xip_region);
+                /* Clear any XIP flags we already set. */
+                ELFSectionDict_it_t it2;
+                for(ELFSectionDict_it(it2, elf->sections); !ELFSectionDict_end_p(it2);
+                    ELFSectionDict_next(it2)) {
+                    ELFSectionDict_ref(it2)->value.xip = false;
+                }
+                return;
+            }
+            sec->exec_addr = flash_addr;
+            sec->xip = true;
+            FURI_LOG_I(TAG, "Section '%s' (%lu bytes) -> XIP 0x%08lX", itref->key, sec->size, flash_addr);
+        }
+    }
+
+    FURI_LOG_I(TAG, "XIP setup: %zu bytes allocated in flash", xip_region_used(&elf->xip_region));
+}
+
+/** Decide whether to use XIP for this ELF, and if so set up section flash
+ *  addresses (either from cache or freshly allocated). */
+static void elf_setup_xip(ELFFile* elf) {
+    /* Plugins must not use XIP — they share the flash region with the main app. */
+    if(elf->xip_disabled) {
+        memset(&elf->xip_region, 0, sizeof(XipRegion));
+        FURI_LOG_D(TAG, "XIP disabled for this ELF (plugin mode)");
+        return;
+    }
+
+    /* If everything fits in RAM, skip XIP (faster, no flash wear). Only count
+     * sections still needing allocation (data == NULL); BSS is pre-allocated. */
+    size_t remaining_alloc_size = 0;
+    ELFSectionDict_it_t ram_it;
+    for(ELFSectionDict_it(ram_it, elf->sections); !ELFSectionDict_end_p(ram_it);
+        ELFSectionDict_next(ram_it)) {
+        ELFSectionDict_itref_t* itref = ELFSectionDict_ref(ram_it);
+        if((itref->value.sh_flags & SHF_ALLOC) && itref->value.data == NULL) {
+            remaining_alloc_size += itref->value.size;
+        }
+    }
+
+    furi_kernel_lock();
+    size_t max_block = memmgr_heap_get_max_free_block();
+    furi_kernel_unlock();
+
+    size_t ram_needed = remaining_alloc_size + 32768; /* 32KB fragmentation margin */
+
+    if(ram_needed <= max_block && !elf->xip_forced) {
+        FURI_LOG_I(
+            TAG,
+            "App fits in RAM (%zu bytes, %zu available) — skipping XIP",
+            remaining_alloc_size,
+            max_block);
+        memset(&elf->xip_region, 0, sizeof(XipRegion));
+        return;
+    }
+
+    if(elf->xip_forced) {
+        FURI_LOG_I(TAG, "XIP forced by app (%zu bytes code)", remaining_alloc_size);
+    }
+
+    xip_region_init(&elf->xip_region);
+    if(!elf->xip_region.active) return;
+
+    /* Check whether cached XIP data is still valid for this app. */
+    if(xip_cache_validate(
+           &elf->xip_region,
+           elf->fd,
+           elf->api_interface->api_version_major,
+           elf->api_interface->api_version_minor)) {
+        const XipCacheHeader* header = xip_cache_get_header(&elf->xip_region);
+        ELFSectionDict_it_t it;
+
+        for(ELFSectionDict_it(it, elf->sections); !ELFSectionDict_end_p(it);
+            ELFSectionDict_next(it)) {
+            ELFSectionDict_itref_t* itref = ELFSectionDict_ref(it);
+            ELFSection* sec = &itref->value;
+
+            if(!elf_section_is_xip_eligible(sec)) {
+                sec->xip = false;
+                continue;
+            }
+
+            bool found = false;
+            for(uint32_t i = 0; i < header->section_count; i++) {
+                if(strncmp(itref->key, header->sections[i].name, 15) == 0 &&
+                   sec->size == header->sections[i].size) {
+                    sec->exec_addr = elf->xip_region.base_addr + header->sections[i].flash_offset;
+                    sec->data = (void*)sec->exec_addr;
+                    sec->xip = true;
+                    found = true;
+                    FURI_LOG_I(
+                        TAG,
+                        "Cache restore: '%s' (%lu bytes) at 0x%08lX",
+                        itref->key,
+                        sec->size,
+                        sec->exec_addr);
+                    break;
+                }
+            }
+
+            if(!found) {
+                FURI_LOG_W(TAG, "Cache miss: section '%s' not found in cache", itref->key);
+                elf->xip_region.cache_valid = false;
+                break;
+            }
+        }
+
+        if(elf->xip_region.cache_valid) {
+            FURI_LOG_I(TAG, "XIP cache hit — reusing flash contents");
+            return;
+        }
+        FURI_LOG_I(TAG, "XIP cache invalidated during restore, doing fresh load");
+    }
+
+    elf_xip_assign_addresses(elf);
+}
+
+/** Stream one XIP section from the ELF file into flash, page by page,
+ *  applying relocations per page. Only needs ~1 page + the relocation
+ *  metadata in RAM at once, not the whole section.
+ *
+ *  @param patch_mode  When true: compare each freshly-relocated page against
+ *                     what is already in flash and only reprogram pages that
+ *                     differ (used for cache-hit in-place re-relocation).
+ *                     When false: program every page.
+ */
+static bool elf_xip_stream_section(ELFFile* elf, ELFSection* sec, bool patch_mode) {
+    const size_t PAGE = XIP_FLASH_PAGE_SIZE;
+
+    /* --- Pre-resolve fast relocation records, if present --- */
+    typedef struct {
+        uint8_t type;
+        Elf32_Addr address;
+        uint32_t offsets_count;
+        const uint8_t* offsets_data; /* 3 bytes per offset */
+    } FastRelRecord;
+
+    FastRelRecord* fast_records = NULL;
+    uint32_t fast_records_count = 0;
+    bool has_fast_rel = false;
+
+    if(sec->fast_rel && sec->fast_rel->data && sec->fast_rel->size > 0) {
+        const uint8_t* fr = sec->fast_rel->data;
+        uint8_t ver = *fr;
+        fr += 1;
+        if(ver == FAST_RELOCATION_VERSION) {
+            fast_records_count = *((uint32_t*)fr);
+            fr += 4;
+            fast_records = malloc(fast_records_count * sizeof(FastRelRecord));
+            if(fast_records) {
+                bool ok = true;
+                for(uint32_t i = 0; i < fast_records_count; i++) {
+                    bool is_section = (*fr & (0x1 << 7)) ? true : false;
+                    fast_records[i].type = *fr & 0x7F;
+                    fr += 1;
+                    uint32_t hash_or_idx = *((uint32_t*)fr);
+                    fr += 4;
+                    uint32_t section_value = ELF_INVALID_ADDRESS;
+                    if(is_section) {
+                        section_value = *((uint32_t*)fr);
+                        fr += 4;
+                    }
+                    fast_records[i].offsets_count = *((uint32_t*)fr);
+                    fr += 4;
+                    fast_records[i].offsets_data = fr;
+                    if(is_section) {
+                        ELFSection* symSec = elf_section_of(elf, hash_or_idx);
+                        fast_records[i].address =
+                            symSec ? (symSec->exec_addr) + section_value : ELF_INVALID_ADDRESS;
+                    } else {
+                        fast_records[i].address = elf_address_of_by_hash(elf, hash_or_idx);
+                    }
+                    if(fast_records[i].address == ELF_INVALID_ADDRESS) {
+                        FURI_LOG_E(TAG, "XIP: unresolved fast rel record %lu", i);
+                        ok = false;
+                    }
+                    fr += 3 * fast_records[i].offsets_count;
+                }
+                if(ok) {
+                    has_fast_rel = true;
+                    FURI_LOG_I(TAG, "XIP stream: fast rel path (%lu records)", fast_records_count);
+                } else {
+                    free(fast_records);
+                    fast_records = NULL;
+                    fast_records_count = 0;
+                }
+            }
+        }
+    }
+
+    /* --- Load standard relocations if fast rel unavailable --- */
+    Elf32_Rel* rels = NULL;
+    size_t rel_count = has_fast_rel ? 0 : sec->rel_count;
+    if(!has_fast_rel && rel_count > 0) {
+        size_t rel_bytes = rel_count * sizeof(Elf32_Rel);
+        rels = malloc(rel_bytes);
+        if(!rels) {
+            FURI_LOG_E(TAG, "XIP: can't alloc rel table (%zu bytes)", rel_bytes);
+            return false;
+        }
+        if(!storage_file_seek(elf->fd, sec->rel_offset, true)) {
+            free(rels);
+            return false;
+        }
+        size_t got_total = 0;
+        while(got_total < rel_bytes) {
+            size_t chunk = rel_bytes - got_total;
+            if(chunk > 0xF000) chunk = 0xF000;
+            size_t got = storage_file_read(elf->fd, (uint8_t*)rels + got_total, chunk);
+            if(got == 0) {
+                free(rels);
+                return false;
+            }
+            got_total += got;
+        }
+
+        /* Pre-resolve all standard-relocation symbol addresses into the cache. */
+        FuriString* sym_name = furi_string_alloc();
+        for(size_t i = 0; i < rel_count; i++) {
+            int symEntry = ELF32_R_SYM(rels[i].r_info);
+            Elf32_Addr tmp;
+            if(address_cache_get(elf->relocation_cache, symEntry, &tmp)) continue;
+            Elf32_Sym sym;
+            furi_string_reset(sym_name);
+            if(!elf_read_symbol(elf, symEntry, &sym, sym_name)) {
+                FURI_LOG_E(TAG, "XIP: symbol read fail");
+                furi_string_free(sym_name);
+                free(rels);
+                return false;
+            }
+            Elf32_Addr symAddr = elf_address_of(elf, &sym, furi_string_get_cstr(sym_name));
+            address_cache_put(elf->relocation_cache, symEntry, symAddr);
+        }
+        furi_string_free(sym_name);
+    }
+
+    /* --- Page-by-page streaming --- */
+    uint8_t* page_buf = malloc(PAGE);
+    if(!page_buf) {
+        FURI_LOG_E(TAG, "XIP: page buffer alloc failed");
+        if(rels) free(rels);
+        if(fast_records) free(fast_records);
+        return false;
+    }
+
+    bool ok = true;
+    for(size_t page_start = 0; page_start < sec->size && ok; page_start += PAGE) {
+        size_t page_len = sec->size - page_start;
+        if(page_len > PAGE) page_len = PAGE;
+
+        /* Fill page: read raw section bytes, zero-pad tail. */
+        memset(page_buf, 0, PAGE);
+        if(!storage_file_seek(elf->fd, sec->file_offset + page_start, true)) {
+            FURI_LOG_E(TAG, "XIP: seek fail");
+            ok = false;
+            break;
+        }
+        size_t got_total = 0;
+        while(got_total < page_len) {
+            size_t got = storage_file_read(elf->fd, page_buf + got_total, page_len - got_total);
+            if(got == 0) {
+                FURI_LOG_E(TAG, "XIP: read fail");
+                ok = false;
+                break;
+            }
+            got_total += got;
+        }
+        if(!ok) break;
+
+        /* Apply relocations that land inside this page. patchAddr targets the
+         * staging page buffer (page_buf), relAddr uses the final flash exec
+         * address so PC-relative offsets are correct. */
+        Elf32_Addr page_flash = sec->exec_addr + page_start;
+
+        if(has_fast_rel) {
+            for(uint32_t r = 0; r < fast_records_count; r++) {
+                const uint8_t* off_ptr = fast_records[r].offsets_data;
+                for(uint32_t j = 0; j < fast_records[r].offsets_count; j++) {
+                    uint32_t off = (off_ptr[0] | (off_ptr[1] << 8) | (off_ptr[2] << 16));
+                    off_ptr += 3;
+                    /* Relocation writes up to 4 bytes; require it fully inside page. */
+                    if(off >= page_start && (off + 4) <= (page_start + page_len)) {
+                        Elf32_Addr patchAddr = (Elf32_Addr)(page_buf + (off - page_start));
+                        Elf32_Addr relAddr = sec->exec_addr + off;
+                        elf_relocate_symbol(
+                            elf, patchAddr, relAddr, fast_records[r].type, fast_records[r].address);
+                    }
+                }
+            }
+        } else {
+            for(size_t i = 0; i < rel_count; i++) {
+                uint32_t off = rels[i].r_offset;
+                if(off >= page_start && (off + 4) <= (page_start + page_len)) {
+                    int symEntry = ELF32_R_SYM(rels[i].r_info);
+                    int relType = ELF32_R_TYPE(rels[i].r_info);
+                    Elf32_Addr symAddr;
+                    if(!address_cache_get(elf->relocation_cache, symEntry, &symAddr)) {
+                        symAddr = ELF_INVALID_ADDRESS;
+                    }
+                    if(symAddr == ELF_INVALID_ADDRESS) {
+                        FURI_LOG_E(TAG, "XIP: unresolved sym in page reloc");
+                        ok = false;
+                        break;
+                    }
+                    Elf32_Addr patchAddr = (Elf32_Addr)(page_buf + (off - page_start));
+                    Elf32_Addr relAddr = sec->exec_addr + off;
+                    if(!elf_relocate_symbol(elf, patchAddr, relAddr, relType, symAddr)) {
+                        ok = false;
+                        break;
+                    }
+                }
+            }
+        }
+        if(!ok) break;
+
+        /* Program the page. In patch mode, skip pages already matching flash. */
+        if(patch_mode) {
+            const uint8_t* flash_ptr = (const uint8_t*)page_flash;
+            if(memcmp(flash_ptr, page_buf, PAGE) == 0) {
+                continue; /* unchanged, no erase/write */
+            }
+        }
+
+        if(!xip_region_program_page(&elf->xip_region, page_flash, page_buf)) {
+            FURI_LOG_E(TAG, "XIP: program page 0x%08lX failed", page_flash);
+            ok = false;
+            break;
+        }
+
+        /* Yield periodically so the BLE stack can service events. */
+        furi_delay_tick(1);
+    }
+
+    free(page_buf);
+    if(rels) free(rels);
+    if(fast_records) free(fast_records);
+
+    if(ok) {
+        /* Section now executes from flash. */
+        sec->data = (void*)sec->exec_addr;
+        FURI_LOG_I(TAG, "XIP section committed at 0x%08lX (%lu bytes)", sec->exec_addr, sec->size);
+    }
+    return ok;
+}
+
+/**************************************************************************************************/
 /********************************************* Public *********************************************/
 /**************************************************************************************************/
+
+void elf_file_disable_xip(ELFFile* elf) {
+    furi_check(elf);
+    elf->xip_disabled = true;
+}
+
+void elf_file_force_xip(ELFFile* elf) {
+    furi_check(elf);
+    elf->xip_forced = true;
+}
 
 ELFFile* elf_file_alloc(Storage* storage, const ElfApiInterface* api_interface) {
     ELFFile* elf = malloc(sizeof(ELFFile));
@@ -814,6 +1323,9 @@ ELFFile* elf_file_alloc(Storage* storage, const ElfApiInterface* api_interface) 
     ELFSectionDict_init(elf->sections);
     AddressCache_init(elf->trampoline_cache);
     elf->init_array_called = false;
+    memset(&elf->xip_region, 0, sizeof(XipRegion));
+    elf->xip_disabled = false;
+    elf->xip_forced = false;
     return elf;
 }
 
@@ -824,13 +1336,19 @@ void elf_file_free(ELFFile* elf) {
         elf_file_call_section_list(elf->fini_array, true);
     }
 
+    /* Release the XIP flash region so the next app can use it. */
+    xip_region_release(&elf->xip_region);
+
     // free sections data
     {
         ELFSectionDict_it_t it;
         for(ELFSectionDict_it(it, elf->sections); !ELFSectionDict_end_p(it);
             ELFSectionDict_next(it)) {
             const ELFSectionDict_itref_t* itref = ELFSectionDict_cref(it);
-            aligned_free(itref->value.data);
+            /* XIP sections point into flash (data == exec_addr) — never free. */
+            if(!itref->value.xip) {
+                aligned_free(itref->value.data);
+            }
             if(itref->value.fast_rel) {
                 if(itref->value.fast_rel->data) {
                     aligned_free(itref->value.fast_rel->data);
@@ -922,17 +1440,58 @@ ElfLoadSectionTableResult elf_file_load_section_table(ELFFile* elf) {
 
     if(result != ElfLoadSectionTableResultSuccess) {
         return result;
-    } else {
-        bool sections_valid =
-            IS_FLAGS_SET(loaded_sections, SectionTypeSymTab | SectionTypeStrTab) |
-            IS_FLAGS_SET(loaded_sections, SectionTypeFastRelData);
-        if(sections_valid) {
-            return ElfLoadSectionTableResultSuccess;
-        } else {
-            FURI_LOG_E(TAG, "No valid sections found");
-            return ElfLoadSectionTableResultError;
+    }
+
+    bool sections_valid = IS_FLAGS_SET(loaded_sections, SectionTypeSymTab | SectionTypeStrTab) |
+                          IS_FLAGS_SET(loaded_sections, SectionTypeFastRelData);
+    if(!sections_valid) {
+        FURI_LOG_E(TAG, "No valid sections found");
+        return ElfLoadSectionTableResultError;
+    }
+
+    /* Relocation cache is needed during XIP setup (cache-hit symbol resolve)
+     * and section streaming; initialise it here. */
+    AddressCache_init(elf->relocation_cache);
+
+    /* Decide RAM vs XIP for read-only sections. Section data has NOT been
+     * loaded yet (deferred) — XIP setup uses only metadata. */
+    elf_setup_xip(elf);
+
+    /* Materialize non-XIP sections into RAM now. XIP sections stay deferred;
+     * they are streamed to flash one page at a time in elf_file_load_sections
+     * to keep peak RAM usage low. */
+    ELFSectionDict_it_t it;
+    for(ELFSectionDict_it(it, elf->sections); !ELFSectionDict_end_p(it); ELFSectionDict_next(it)) {
+        ELFSectionDict_itref_t* itref = ELFSectionDict_ref(it);
+        ELFSection* sec = &itref->value;
+        if(!sec->xip) {
+            ELFLoadSectionResult res = elf_materialize_section(elf, sec);
+            if(res == ELFLoadSectionResultNoMemory) {
+                return ElfLoadSectionTableResultNoMemory;
+            } else if(res != ELFLoadSectionResultSuccess) {
+                return ElfLoadSectionTableResultError;
+            }
+            sec->exec_addr = (Elf32_Addr)sec->data;
         }
     }
+
+    /* If we restored from an XIP cache, check whether RAM sections landed at
+     * the same addresses. If not, the XIP flash contains stale pointers and
+     * must be re-relocated in place. */
+    if(elf->xip_region.active && elf->xip_region.cache_valid) {
+        uint32_t current_hash = elf_compute_ram_addr_hash(elf);
+        const XipCacheHeader* hdr = xip_cache_get_header(&elf->xip_region);
+        if(!hdr || hdr->ram_addr_hash != current_hash) {
+            FURI_LOG_I(
+                TAG,
+                "RAM addresses changed (cached=%08lX, current=%08lX) — will re-relocate XIP",
+                hdr ? hdr->ram_addr_hash : 0,
+                current_hash);
+            elf->xip_region.needs_rerelocation = true;
+        }
+    }
+
+    return ElfLoadSectionTableResultSuccess;
 }
 
 ElfProcessSectionResult elf_process_section(
@@ -970,23 +1529,107 @@ ElfProcessSectionResult elf_process_section(
     return result;
 }
 
+/** Build and commit the XIP cache header describing the sections just
+ *  written to flash, so a future launch of the same app can skip the work. */
+static void elf_xip_commit_cache(ELFFile* elf) {
+    if(!elf->xip_region.active) return;
+
+    XipCacheHeader header;
+    memset(&header, 0, sizeof(header));
+    header.magic = XIP_CACHE_MAGIC;
+    header.file_size = (uint32_t)storage_file_size(elf->fd);
+    storage_file_seek(elf->fd, 0, true);
+    header.file_crc32 = crc32_calc_file(elf->fd, NULL, NULL);
+    storage_file_seek(elf->fd, 0, true);
+    header.api_version = ((uint32_t)elf->api_interface->api_version_major << 16) |
+                         elf->api_interface->api_version_minor;
+    header.ram_addr_hash = elf_compute_ram_addr_hash(elf);
+
+    uint32_t count = 0;
+    ELFSectionDict_it_t it;
+    for(ELFSectionDict_it(it, elf->sections); !ELFSectionDict_end_p(it); ELFSectionDict_next(it)) {
+        ELFSectionDict_itref_t* itref = ELFSectionDict_ref(it);
+        ELFSection* sec = &itref->value;
+        if(sec->xip && count < XIP_CACHE_MAX_SECTIONS) {
+            header.sections[count].flash_offset = sec->exec_addr - elf->xip_region.base_addr;
+            header.sections[count].size = sec->size;
+            strncpy(header.sections[count].name, itref->key, 15);
+            header.sections[count].name[15] = '\0';
+            count++;
+        }
+    }
+    header.section_count = count;
+
+    xip_cache_commit_header(&elf->xip_region, &header);
+}
+
 ELFFileLoadStatus elf_file_load_sections(ELFFile* elf) {
     furi_check(elf->fd != NULL);
     ELFFileLoadStatus status = ELFFileLoadStatusSuccess;
     ELFSectionDict_it_t it;
 
-    AddressCache_init(elf->relocation_cache);
+    /* relocation_cache was initialised in elf_file_load_section_table. */
 
-    for(ELFSectionDict_it(it, elf->sections); !ELFSectionDict_end_p(it); ELFSectionDict_next(it)) {
-        ELFSectionDict_itref_t* itref = ELFSectionDict_ref(it);
-        FURI_LOG_D(TAG, "Relocating section '%s'", itref->key);
-        if(!elf_relocate_section(elf, &itref->value)) {
-            FURI_LOG_E(TAG, "Error relocating section '%s'", itref->key);
-            status = ELFFileLoadStatusMissingImports;
+    bool xip_active = elf->xip_region.active;
+    bool cache_hit = xip_active && elf->xip_region.cache_valid;
+    bool needs_rereloc = xip_active && elf->xip_region.needs_rerelocation;
+
+    if(cache_hit && !needs_rereloc) {
+        /* Fast path: flash already holds fully-relocated code from a previous
+         * launch and RAM sections landed at the same addresses. Only RAM
+         * sections need (re)relocation this launch. */
+        FURI_LOG_I(TAG, "XIP cache hit — relocating RAM sections only");
+        for(ELFSectionDict_it(it, elf->sections); !ELFSectionDict_end_p(it);
+            ELFSectionDict_next(it)) {
+            ELFSectionDict_itref_t* itref = ELFSectionDict_ref(it);
+            ELFSection* sec = &itref->value;
+            if(!sec->xip) {
+                if(!elf_relocate_section(elf, sec)) {
+                    FURI_LOG_E(TAG, "Error relocating RAM section '%s'", itref->key);
+                    status = ELFFileLoadStatusMissingImports;
+                }
+            } else if(sec->fast_rel) {
+                /* XIP section reused from cache — drop unused fast_rel blob. */
+                if(sec->fast_rel->data) aligned_free(sec->fast_rel->data);
+                free(sec->fast_rel);
+                sec->fast_rel = NULL;
+            }
+        }
+    } else {
+        /* Fresh load, or cache hit that needs in-place re-relocation. */
+        for(ELFSectionDict_it(it, elf->sections); !ELFSectionDict_end_p(it);
+            ELFSectionDict_next(it)) {
+            ELFSectionDict_itref_t* itref = ELFSectionDict_ref(it);
+            ELFSection* sec = &itref->value;
+
+            if(sec->xip) {
+                FURI_LOG_D(TAG, "Streaming XIP section '%s' (patch=%d)", itref->key, needs_rereloc);
+                if(!elf_xip_stream_section(elf, sec, needs_rereloc)) {
+                    FURI_LOG_E(TAG, "Error streaming XIP section '%s'", itref->key);
+                    status = ELFFileLoadStatusMissingImports;
+                }
+                /* Free fast_rel blob now that streaming consumed it. */
+                if(sec->fast_rel) {
+                    if(sec->fast_rel->data) aligned_free(sec->fast_rel->data);
+                    free(sec->fast_rel);
+                    sec->fast_rel = NULL;
+                }
+            } else {
+                FURI_LOG_D(TAG, "Relocating section '%s'", itref->key);
+                if(!elf_relocate_section(elf, sec)) {
+                    FURI_LOG_E(TAG, "Error relocating section '%s'", itref->key);
+                    status = ELFFileLoadStatusMissingImports;
+                }
+            }
+        }
+
+        /* Persist the cache header so a future launch can skip this. */
+        if(status == ELFFileLoadStatusSuccess && xip_active) {
+            elf_xip_commit_cache(elf);
         }
     }
 
-    /* Fixing up entry point */
+    /* Fixing up entry point — use exec_addr (flash for XIP .text). */
     if(status == ELFFileLoadStatusSuccess) {
         ELFSection* text_section = elf_file_get_section(elf, ".text");
 
@@ -994,7 +1637,7 @@ ELFFileLoadStatus elf_file_load_sections(ELFFile* elf) {
             FURI_LOG_E(TAG, "No .text section found");
             status = ELFFileLoadStatusUnspecifiedError;
         } else {
-            elf->entry += (uint32_t)text_section->data;
+            elf->entry += (uint32_t)text_section->exec_addr;
         }
     }
 
