@@ -443,6 +443,13 @@ SubGhzProtocolStatus
             kia_v5_custom_to_btn(subghz_custom_btn_get(), kia_v5_original_btn);
         const bool kia_v5_custom_active = (kia_v5_selected_btn != kia_v5_original_btn);
 
+        // [ROLLING_CNT] Rolling multiplier used below to forward-encode the NEXT
+        // counter (like VAG/PSA) so the transmitter UI shows an incrementing
+        // counter on each OK/D-pad press.
+        uint32_t kia_v5_mult = furi_hal_subghz_get_rolling_counter_mult();
+        if(kia_v5_mult == 0U) kia_v5_mult = 1U;
+        bool kia_v5_reencrypted = false;
+
         if(have_serial && have_btn && have_cnt && sub_serial != UINT32_MAX &&
            sub_btn != UINT32_MAX && sub_cnt != UINT32_MAX) {
             // Adopt user-provided values (masked to their protocol widths).
@@ -453,30 +460,55 @@ SubGhzProtocolStatus
             if(kia_v5_custom_active) instance->generic.btn = kia_v5_selected_btn;
             instance->reencrypt_mode = true;
 
+            // [ROLLING_CNT] Advance the counter before re-encrypting.
+            instance->generic.cnt = (uint16_t)((instance->generic.cnt + kia_v5_mult) & 0xFFFFU);
+
             if(!kia_v5_reencrypt_and_upload(instance)) {
                 ret = SubGhzProtocolStatusErrorEncoderGetUpload;
                 break;
             }
-        } else if(kia_v5_custom_active) {
-            // No explicit re-encrypt fields, but the user chose a different
-            // button on the D-pad: re-encrypt from the decoded serial/cnt so the
-            // transmitted frame carries the selected button.
-            instance->generic.btn = kia_v5_selected_btn;
+            kia_v5_reencrypted = true;
+        } else {
+            // No explicit re-encrypt fields OR captured button: re-encrypt from the
+            // decoded serial/cnt so the transmitted frame carries the (possibly
+            // remapped) button AND an advanced counter. This replaces the old pure
+            // replay path so the UI counter advances on every press.
+            if(kia_v5_custom_active) instance->generic.btn = kia_v5_selected_btn;
             instance->reencrypt_mode = true;
 
+            // [ROLLING_CNT] Advance the counter before re-encrypting.
+            instance->generic.cnt = (uint16_t)((instance->generic.cnt + kia_v5_mult) & 0xFFFFU);
+
             if(!kia_v5_reencrypt_and_upload(instance)) {
                 ret = SubGhzProtocolStatusErrorEncoderGetUpload;
                 break;
             }
-        } else {
-            // Pure replay path (unchanged legacy behavior).
-            instance->replay_data = instance->generic.data;
-            instance->replay_crc = kia_v5_calculate_crc(instance->replay_data);
+            kia_v5_reencrypted = true;
+        }
 
-            if(!subghz_protocol_encoder_kia_v5_get_upload(instance)) {
-                ret = SubGhzProtocolStatusErrorEncoderGetUpload;
-                break;
+        // [ROLLING_CNT] Persist the advanced frame so the UI refresh (decoder
+        // re-derives serial/btn/cnt from Yek/Key) shows the incremented counter and
+        // the next TX continues from here. YekHi/YekLo take priority in the decoder,
+        // so rewrite them plus the Key and Cnt consistently.
+        if(kia_v5_reencrypted) {
+            uint64_t yek = kia_v5_bit_reverse_64(instance->generic.data);
+            uint32_t yek_hi = (uint32_t)(yek >> 32);
+            uint32_t yek_lo = (uint32_t)(yek & 0xFFFFFFFF);
+            flipper_format_rewind(flipper_format);
+            flipper_format_insert_or_update_uint32(flipper_format, "YekHi", &yek_hi, 1);
+            flipper_format_rewind(flipper_format);
+            flipper_format_insert_or_update_uint32(flipper_format, "YekLo", &yek_lo, 1);
+
+            uint8_t key_data[8];
+            for(int i = 0; i < 8; i++) {
+                key_data[i] = (uint8_t)((instance->generic.data >> (56 - 8 * i)) & 0xFF);
             }
+            flipper_format_rewind(flipper_format);
+            flipper_format_update_hex(flipper_format, "Key", key_data, 8);
+
+            flipper_format_rewind(flipper_format);
+            uint32_t cnt_store = instance->generic.cnt;
+            flipper_format_insert_or_update_uint32(flipper_format, "Cnt", &cnt_store, 1);
         }
 
         instance->encoder.is_running = true;
@@ -864,6 +896,18 @@ void subghz_protocol_decoder_kia_v5_get_string(void* context, FuriString* output
     uint8_t calculated_crc = kia_v5_calculate_crc(instance->yek);
     bool crc_valid = (instance->crc == calculated_crc);
 
+    // [BUGFIX UI] Re-derive the displayed button from the current D-pad
+    // selection so the transmitter UI reflects subghz_custom_btn_get() (like
+    // psa.c/star_line.c), reusing the encoder mapping (kia_v5_custom_to_btn).
+    // The CRC/key shown reflect the captured (still-valid) frame; the encoder
+    // re-encrypts and recomputes CRC for the transmitted button.
+    subghz_custom_btn_set_max(4);
+    uint8_t display_btn = (uint8_t)instance->generic.btn;
+    uint8_t custom_btn_id = subghz_custom_btn_get();
+    if(custom_btn_id != SUBGHZ_CUSTOM_BTN_OK) {
+        display_btn = kia_v5_custom_to_btn(custom_btn_id, (uint8_t)(instance->generic.btn & 0x0FU));
+    }
+
     furi_string_cat_printf(
         output,
         "%s %dbit\r\n"
@@ -874,7 +918,7 @@ void subghz_protocol_decoder_kia_v5_get_string(void* context, FuriString* output
         instance->generic.data_count_bit,
         (unsigned long long)instance->generic.data,
         (unsigned long)instance->generic.serial,
-        subghz_protocol_kia_v5_get_name_button(instance->generic.btn),
+        subghz_protocol_kia_v5_get_name_button(display_btn),
         (unsigned)instance->crc,
         (unsigned long)instance->generic.cnt,
         crc_valid ? "(OK)" : "(FAIL)");

@@ -557,6 +557,15 @@ SubGhzProtocolStatus
             }
         }
 
+        // [ROLLING_CNT] Forward-encode the NEXT counter, like VAG/PSA. The scene
+        // supplies the base "Cnt" in the fff; advance it by the rolling multiplier
+        // (>=1) so every TX emits a fresh code AND the transmitter UI shows an
+        // incrementing counter (get_string reads generic.cnt, which the decoder
+        // re-derives from the "Cnt" we write back to the fff below).
+        uint32_t mult = furi_hal_subghz_get_rolling_counter_mult();
+        if(mult == 0U) mult = 1U;
+        cnt = (cnt + mult) & 0xFFFFFU;
+
         instance->serial = serial;
         instance->button = (uint8_t)btn;
         instance->count = cnt;
@@ -616,6 +625,14 @@ SubGhzProtocolStatus
         flipper_format_insert_or_update_uint32(flipper_format, "CRC", &temp, 1);
         temp = instance->checksum;
         flipper_format_insert_or_update_uint32(flipper_format, "Checksum", &temp, 1);
+
+        // [ROLLING_CNT] Persist the advanced counter back to the fff so the next
+        // deserialize (UI refresh + next TX) reads the incremented value. This is
+        // what makes the counter visibly advance in the transmitter UI (matches
+        // the VAG/PSA behavior).
+        flipper_format_rewind(flipper_format);
+        temp = instance->count;
+        flipper_format_insert_or_update_uint32(flipper_format, "Cnt", &temp, 1);
 
         instance->encoder.is_running = true;
 
@@ -874,16 +891,55 @@ SubGhzProtocolStatus
         instance->serial = serial;
         instance->button = (uint8_t)btn;
         instance->count = cnt;
-        instance->generic.serial = instance->serial;
-        instance->generic.btn = instance->button;
-        instance->generic.cnt = instance->count;
 
         // [PROTOPIRATE_PORT] custom_btn support
         // Ford mapping: Left=0x1, Up=0x2, OK=0x4, Down=0x8, Right=0x10 (5 buttons)
+        // The captured button is the "original"; the D-pad selects a custom one.
+        const uint8_t original_btn = instance->button;
         if(subghz_custom_btn_get_original() == 0) {
-            subghz_custom_btn_set_original(instance->generic.btn);
+            subghz_custom_btn_set_original(original_btn);
         }
         subghz_custom_btn_set_max(5);
+
+        // [BUGFIX UI+CRC] Re-map the button according to the current custom_btn
+        // selection, exactly like the encoder does. Without this the decoder's
+        // get_string (which drives the transmitter UI) always showed the
+        // captured button, and — because the encoder rewrites CRC/Checksum in
+        // the file for the *new* button while "Key" stayed the captured one —
+        // ford_v0_verify_crc(old_key1, new_key2) reported "BAD".
+        {
+            uint8_t custom_btn_id = subghz_custom_btn_get();
+            switch(custom_btn_id) {
+            case SUBGHZ_CUSTOM_BTN_UP:    instance->button = 0x02U; break;
+            case SUBGHZ_CUSTOM_BTN_DOWN:  instance->button = 0x08U; break;
+            case SUBGHZ_CUSTOM_BTN_LEFT:  instance->button = 0x01U; break;
+            case SUBGHZ_CUSTOM_BTN_RIGHT: instance->button = 0x10U; break;
+            case SUBGHZ_CUSTOM_BTN_OK:
+            default:                      instance->button = original_btn; break;
+            }
+        }
+
+        // Recompute key1/key2 for the (possibly remapped) button so that the
+        // displayed CRC matches the frame that will actually be transmitted.
+        uint8_t checksum =
+            ford_v0_calculate_checksum(instance->serial, instance->count, instance->button);
+        uint64_t rebuilt_key1 = instance->key1;
+        uint8_t header_byte = (uint8_t)(instance->key1 >> 56);
+        encode_ford_v0(
+            header_byte,
+            instance->serial,
+            instance->button,
+            instance->count,
+            checksum,
+            &rebuilt_key1);
+        instance->key1 = rebuilt_key1;
+        uint8_t calculated_crc = ford_v0_calculate_crc_for_tx(instance->key1, checksum);
+        instance->key2 = ((uint16_t)checksum << 8) | calculated_crc;
+
+        instance->generic.data = instance->key1;
+        instance->generic.serial = instance->serial;
+        instance->generic.btn = instance->button;
+        instance->generic.cnt = instance->count;
     }
 
     return ret;

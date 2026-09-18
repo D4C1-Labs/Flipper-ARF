@@ -44,3 +44,7 @@
   each other's signals.
 - Fixed freezes when running the long brute-force operations (Hitag2 and Seed
   recovery); progress now updates smoothly and can be cancelled.
+
+### Want to add or modify an external app?
+
+- If you want to add a new external app or modify one please read: EXTERNAL_LIBS.md

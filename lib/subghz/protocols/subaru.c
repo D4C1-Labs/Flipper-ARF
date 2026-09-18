@@ -485,7 +485,19 @@ void subghz_protocol_decoder_subaru_get_string(void* context, FuriString* output
     
     uint32_t key_hi = (uint32_t)(instance->key >> 32);
     uint32_t key_lo = (uint32_t)(instance->key & 0xFFFFFFFF);
-    
+
+    // [BUGFIX UI] Re-derive the displayed button from the current D-pad
+    // selection so the transmitter UI reflects subghz_custom_btn_get() (like
+    // psa.c/star_line.c), mirroring the encoder remap (see encoder deserialize).
+    subghz_custom_btn_set_max(5);
+    uint8_t selected_custom = subghz_custom_btn_get();
+    uint8_t display_btn;
+    if(selected_custom == SUBGHZ_CUSTOM_BTN_OK) {
+        display_btn = instance->button;
+    } else {
+        display_btn = subaru_get_button_code(selected_custom);
+    }
+
     furi_string_cat_printf(
         output,
         "%s %dbit\r\n"
@@ -497,7 +509,7 @@ void subghz_protocol_decoder_subaru_get_string(void* context, FuriString* output
         key_hi,
         key_lo,
         instance->serial,
-        subaru_get_button_name(instance->button),
+        subaru_get_button_name(display_btn),
         instance->count);
 }
 

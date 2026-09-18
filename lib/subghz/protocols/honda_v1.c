@@ -567,6 +567,16 @@ SubGhzProtocolStatus
         }
     }
 
+    // [ROLLING_CNT] Forward-encode the NEXT counter (like VAG/PSA) so the
+    // transmitter UI shows an incrementing counter on each OK/D-pad press. The Key
+    // is rebuilt from this cnt below and both Key + Cnt are persisted, so the
+    // decoder (which re-derives cnt from the Key) shows the advance on the refresh.
+    {
+        uint32_t mult = furi_hal_subghz_get_rolling_counter_mult();
+        if(mult == 0U) mult = 1U;
+        cnt = (cnt + mult) & HONDA_V1_COUNTER_MASK;
+    }
+
     instance->generic.serial = serial;
     instance->generic.btn = button;
     instance->generic.cnt = cnt & HONDA_V1_COUNTER_MASK;
@@ -817,8 +827,42 @@ void subghz_protocol_decoder_honda_v1_get_string(void* context, FuriString* outp
     SubGhzProtocolDecoderHondaV1* instance = context;
     honda_v1_decode_fields(&instance->generic);
 
-    const uint8_t k2 = instance->k2 & HONDA_V1_NIBBLE_MASK;
-    const bool crc_ok = honda_v1_crc_valid(instance->generic.data, k2);
+    // [BUGFIX UI+CRC] Re-derive the displayed button from the current D-pad
+    // selection so the transmitter UI reflects subghz_custom_btn_get() (like
+    // psa.c/star_line.c), mirroring the encoder remap (see encoder deserialize):
+    // Up=Lock, Down=Unlock, Left=Trunk, Right=Panic, OK=captured. Rebuild the key
+    // and CRC for the selected button so both match the transmitted frame.
+    subghz_custom_btn_set_max(4);
+    uint8_t display_btn = (uint8_t)instance->generic.btn;
+    switch(subghz_custom_btn_get()) {
+    case SUBGHZ_CUSTOM_BTN_UP:
+        display_btn = (uint8_t)HondaV1ButtonLock;
+        break;
+    case SUBGHZ_CUSTOM_BTN_DOWN:
+        display_btn = (uint8_t)HondaV1ButtonUnlock;
+        break;
+    case SUBGHZ_CUSTOM_BTN_LEFT:
+        display_btn = (uint8_t)HondaV1ButtonTrunk;
+        break;
+    case SUBGHZ_CUSTOM_BTN_RIGHT:
+        display_btn = (uint8_t)HondaV1ButtonPanic;
+        break;
+    case SUBGHZ_CUSTOM_BTN_OK:
+    default:
+        break;
+    }
+
+    uint64_t display_data = instance->generic.data;
+    uint8_t k2 = instance->k2 & HONDA_V1_NIBBLE_MASK;
+    if(display_btn != (uint8_t)instance->generic.btn) {
+        display_data = honda_v1_build_key(
+            instance->generic.serial, display_btn, (uint16_t)instance->generic.cnt);
+        uint8_t first = 0U;
+        uint8_t second = 0U;
+        honda_v1_checksum_wire_order(display_data, &first, &second);
+        k2 = second & HONDA_V1_NIBBLE_MASK;
+    }
+    const bool crc_ok = honda_v1_crc_valid(display_data, k2);
 
     furi_string_printf(
         output,
@@ -828,9 +872,9 @@ void subghz_protocol_decoder_honda_v1_get_string(void* context, FuriString* outp
         "CRC:%X [%s] Cnt:%04lX",
         instance->generic.protocol_name,
         (int)instance->generic.data_count_bit,
-        (unsigned long long)instance->generic.data,
+        (unsigned long long)display_data,
         (unsigned long)instance->generic.serial,
-        honda_v1_button_name((uint8_t)instance->generic.btn),
+        honda_v1_button_name(display_btn),
         k2,
         crc_ok ? "OK" : "ERR",
         (unsigned long)instance->generic.cnt);

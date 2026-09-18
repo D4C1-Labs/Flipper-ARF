@@ -1258,14 +1258,32 @@ SubGhzProtocolStatus
         instance->generic.cnt = counter;
 
         // [HITAG2_SEED] Forward re-encode a NEXT code when a SEED is available.
-        // We advance the (scene-tracked) counter by one and encrypt a fresh frame
-        // with the recovered seed. Failure is graceful: fall back to the
+        // We advance the counter by the rolling multiplier and encrypt a fresh
+        // frame with the recovered seed. Failure is graceful: fall back to the
         // captured replay frame + button.
         if(seed_tx) {
-            instance->generic.cnt = (counter + 1U) & 0xFFU;
+            // [ROLLING_CNT] Advance by the rolling multiplier (>=1) like VAG/PSA so
+            // the transmitter UI counter increments on each OK/D-pad press.
+            uint32_t mult = furi_hal_subghz_get_rolling_counter_mult();
+            if(mult == 0U) mult = 1U;
+            instance->generic.cnt = (counter + mult) & 0xFFU;
             if(renault_v1_encoder_reencode_seed(instance)) {
                 instance->generic.data_count_bit = RENAULT_V1_MIN_BITS;
                 instance->packet_bit_count = RENAULT_V1_MIN_BITS;
+
+                // [ROLLING_CNT] Persist the re-encrypted frame (Key + Key_2) and the
+                // advanced counter so the UI refresh (decoder re-derives cnt from the
+                // Key) shows the incremented counter and the next TX continues here.
+                uint8_t key_data[8];
+                renault_v1_u64_to_bytes_be(instance->generic.data, key_data);
+                flipper_format_rewind(flipper_format);
+                flipper_format_insert_or_update_hex(flipper_format, "Key", key_data, sizeof(key_data));
+                flipper_format_rewind(flipper_format);
+                flipper_format_insert_or_update_uint32(
+                    flipper_format, RENAULT_V1_KEY2_FIELD, &instance->key2, 1);
+                flipper_format_rewind(flipper_format);
+                uint32_t cnt_store = instance->generic.cnt;
+                flipper_format_insert_or_update_uint32(flipper_format, "Cnt", &cnt_store, 1);
             } else {
                 // Recovered flag but re-encode failed: revert to captured replay.
                 instance->tx_button = captured_button;
@@ -1447,10 +1465,50 @@ static const char* renault_v1_get_button_name(uint8_t button) {
     return "??";
 }
 
+// [PROTOPIRATE_PORT] custom_btn UI support
+// Re-derive the displayed button from the D-pad selection, mirroring the encoder
+// remap (see encoder deserialize, SEED path): preserve the captured high nibble
+// (type base) and only swap the action nibble. Up=Lock(0x04), Down=Unlock(0x08),
+// Left=Lock variant(0x05), Right=Unlock variant(0x09), OK=captured.
+static uint8_t renault_v1_ui_button(uint8_t custom, uint8_t original_btn) {
+    const uint8_t base = (uint8_t)(original_btn & 0xF0U);
+    uint8_t action = (uint8_t)(original_btn & 0x0FU);
+    switch(custom) {
+    case SUBGHZ_CUSTOM_BTN_UP:
+        action = 0x04U;
+        break;
+    case SUBGHZ_CUSTOM_BTN_DOWN:
+        action = 0x08U;
+        break;
+    case SUBGHZ_CUSTOM_BTN_LEFT:
+        action = 0x05U;
+        break;
+    case SUBGHZ_CUSTOM_BTN_RIGHT:
+        action = 0x09U;
+        break;
+    case SUBGHZ_CUSTOM_BTN_OK:
+    default:
+        return original_btn;
+    }
+    return (uint8_t)(base | action);
+}
+
 void subghz_protocol_decoder_renault_v1_get_string(void* context, FuriString* output) {
     furi_assert(context);
 
     SubGhzProtocolDecoderRenaultV1* instance = context;
+
+    // [BUGFIX UI] Re-derive the displayed button from the current D-pad
+    // selection so the transmitter UI reflects subghz_custom_btn_get() (like
+    // psa.c/star_line.c). The D-pad is only enabled when a 4-byte SEED was
+    // recovered (only then can the encoder forward-encode a changed button),
+    // matching subghz_custom_btn_set_max(seed_tx ? 4 : 0) in the encoder.
+    uint8_t display_btn = (uint8_t)instance->generic.btn;
+    if(instance->seed_recovered == HITAG2_SEED_RECOVERED_YES) {
+        subghz_custom_btn_set_max(4U);
+        display_btn =
+            renault_v1_ui_button(subghz_custom_btn_get(), (uint8_t)instance->generic.btn);
+    }
 
     // Key line: the 6-byte hitag2 key recovered by the Hitag2Hell attack, or "?"
     // when it has not been recovered yet (capture without a matching key/slice).
@@ -1470,7 +1528,7 @@ void subghz_protocol_decoder_renault_v1_get_string(void* context, FuriString* ou
             instance->hitag2_key[4],
             instance->hitag2_key[5],
             instance->generic.serial,
-            renault_v1_get_button_name(instance->generic.btn),
+            renault_v1_get_button_name(display_btn),
             (instance->check_c1 || instance->check_c2) ? "ERR" : "OK",
             instance->generic.cnt);
     } else {
@@ -1483,7 +1541,7 @@ void subghz_protocol_decoder_renault_v1_get_string(void* context, FuriString* ou
             instance->generic.protocol_name,
             instance->packet_bit_count,
             instance->generic.serial,
-            renault_v1_get_button_name(instance->generic.btn),
+            renault_v1_get_button_name(display_btn),
             (instance->check_c1 || instance->check_c2) ? "ERR" : "OK",
             instance->generic.cnt);
     }

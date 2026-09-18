@@ -728,6 +728,36 @@ void subghz_protocol_decoder_honda_v2_get_string(void* context, FuriString* outp
     furi_check(context);
     SubGhzProtocolDecoderHondaV2* instance = context;
 
+    // [BUGFIX UI] Re-derive the displayed button from the current D-pad selection
+    // so the transmitter UI reflects subghz_custom_btn_get() (like psa.c/star_line.c),
+    // mirroring the encoder remap (see encoder deserialize): Up=Lock, Down=Unlock,
+    // OK=captured. Honda V2 has 2 real buttons. Rebuild the key with the selected
+    // button's signature so the shown key matches the TX frame. The check bits
+    // depend only on the counter, so they stay valid.
+    subghz_custom_btn_set_max(4);
+    uint8_t display_btn = instance->button;
+    switch(subghz_custom_btn_get()) {
+    case SUBGHZ_CUSTOM_BTN_UP:
+        display_btn = HONDA_V2_BTN_LOCK;
+        break;
+    case SUBGHZ_CUSTOM_BTN_DOWN:
+        display_btn = HONDA_V2_BTN_UNLOCK;
+        break;
+    case SUBGHZ_CUSTOM_BTN_OK:
+    default:
+        break;
+    }
+
+    uint64_t display_key = instance->key;
+    if(display_btn != instance->button) {
+        uint32_t sig = honda_v2_signature_from_button(display_btn);
+        if(sig != 0U) {
+            display_key = honda_v2_build_key(sig, instance->serial, instance->count);
+        } else {
+            display_btn = instance->button; // unknown signature: keep captured
+        }
+    }
+
     furi_string_cat_printf(
         output,
         "%s %dbit\r\n"
@@ -736,9 +766,9 @@ void subghz_protocol_decoder_honda_v2_get_string(void* context, FuriString* outp
         "CRC:%02X [%s] Cnt:%05lX",
         instance->generic.protocol_name,
         instance->generic.data_count_bit,
-        (unsigned long long)instance->key,
+        (unsigned long long)display_key,
         (unsigned long)instance->serial,
-        honda_v2_button_name(instance->button),
+        honda_v2_button_name(display_btn),
         instance->check,
         instance->check_ok ? "OK" : "BAD",
         (unsigned long)instance->count);
@@ -836,6 +866,17 @@ SubGhzProtocolStatus subghz_protocol_encoder_honda_v2_deserialize(
         flipper_format_rewind(flipper_format);
         if(flipper_format_read_uint32(flipper_format, "Cnt", &u32, 1)) {
             instance->count = u32 & 0x1FFU;
+        }
+
+        // [ROLLING_CNT] Forward-encode the NEXT counter (like VAG/PSA) so the
+        // transmitter UI shows an incrementing counter on each OK/D-pad press. The
+        // Key (and check/tail, which derive from count) is rebuilt from this count
+        // below and both Key + Cnt are persisted, so the decoder re-derives the
+        // advanced counter on the UI refresh.
+        {
+            uint32_t mult = furi_hal_subghz_get_rolling_counter_mult();
+            if(mult == 0U) mult = 1U;
+            instance->count = (instance->count + mult) & 0x1FFU;
         }
 
         flipper_format_rewind(flipper_format);

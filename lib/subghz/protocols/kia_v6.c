@@ -760,8 +760,35 @@ void subghz_protocol_decoder_kia_v6_get_string(void* context, FuriString* output
     uint32_t key1_lo = instance->stored_part1_low;
     uint32_t serial_6 = instance->generic.serial & 0xFFFFFF;
 
+    // [BUGFIX UI] Re-derive the displayed button from the current D-pad
+    // selection so the transmitter UI reflects subghz_custom_btn_get() (like
+    // psa.c/star_line.c), mirroring the encoder remap (see encoder deserialize):
+    // Up=Lock(0x1), Down=Unlock(0x2), Left=Trunk(0x3), Right=Panic(0x4),
+    // OK=captured. kia_v6_decrypt() just reset generic.btn to the captured value,
+    // so apply the remap here. CRC shown is the captured frame's; the encoder
+    // re-encrypts and recomputes CRC for the transmitted button.
+    subghz_custom_btn_set_max(4);
+    uint8_t display_btn = (uint8_t)(instance->generic.btn & 0x0FU);
+    switch(subghz_custom_btn_get()) {
+    case SUBGHZ_CUSTOM_BTN_UP:
+        display_btn = 0x01U; // Lock
+        break;
+    case SUBGHZ_CUSTOM_BTN_DOWN:
+        display_btn = 0x02U; // Unlock
+        break;
+    case SUBGHZ_CUSTOM_BTN_LEFT:
+        display_btn = 0x03U; // Trunk
+        break;
+    case SUBGHZ_CUSTOM_BTN_RIGHT:
+        display_btn = 0x04U; // Panic
+        break;
+    case SUBGHZ_CUSTOM_BTN_OK:
+    default:
+        break;
+    }
+
     const char* btn_name;
-    switch(instance->generic.btn & 0x0F) {
+    switch(display_btn & 0x0F) {
     case 0x01:
         btn_name = "Lock";
         break;
@@ -1008,7 +1035,46 @@ SubGhzProtocolStatus
             instance->generic.btn &= 0x0FU;
         }
 
+        // [ROLLING_CNT] Forward-encode the NEXT counter (like VAG/PSA) so the
+        // transmitter UI shows an incrementing counter on each OK/D-pad press.
+        // kia_v6_encoder_build_upload() re-runs AES with this cnt and refreshes the
+        // stored_part fields; we persist them below so the decoder re-derives the
+        // advanced counter on the UI refresh.
+        {
+            uint32_t mult = furi_hal_subghz_get_rolling_counter_mult();
+            if(mult == 0U) mult = 1U;
+            instance->generic.cnt = instance->generic.cnt + mult;
+        }
+
         kia_v6_encoder_build_upload(instance);
+
+        // [ROLLING_CNT] Persist the re-encrypted AES frame (Key + Key_2/3/4) and the
+        // advanced Cnt so the UI refresh (decoder AES-decrypts the Key) shows the
+        // incremented counter and the next TX continues from here.
+        {
+            instance->generic.data = ((uint64_t)instance->stored_part1_high << 32) |
+                                     instance->stored_part1_low;
+            uint8_t key_data[8];
+            for(int i = 0; i < 8; i++) {
+                key_data[i] = (uint8_t)((instance->generic.data >> (56 - 8 * i)) & 0xFF);
+            }
+            flipper_format_rewind(flipper_format);
+            flipper_format_update_hex(flipper_format, "Key", key_data, 8);
+
+            uint32_t tmp = instance->stored_part2_low;
+            flipper_format_rewind(flipper_format);
+            flipper_format_insert_or_update_uint32(flipper_format, "Key_2", &tmp, 1);
+            tmp = instance->stored_part2_high;
+            flipper_format_rewind(flipper_format);
+            flipper_format_insert_or_update_uint32(flipper_format, "Key_3", &tmp, 1);
+            tmp = instance->data_part3;
+            flipper_format_rewind(flipper_format);
+            flipper_format_insert_or_update_uint32(flipper_format, "Key_4", &tmp, 1);
+
+            uint32_t cnt_store = instance->generic.cnt;
+            flipper_format_rewind(flipper_format);
+            flipper_format_insert_or_update_uint32(flipper_format, "Cnt", &cnt_store, 1);
+        }
 
         instance->encoder.is_running = true;
         ret = SubGhzProtocolStatusOk;
