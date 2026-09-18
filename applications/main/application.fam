@@ -5,7 +5,10 @@ App(
     provides=[
         "gpio",
         "lfrfid",
-        "nfc",
+        # nfc removed from the firmware build (NFC lib no longer linked in the
+        # firmware to free flash for the full SubGHz protocol catalog).
+        # Re-enable by restoring applications/main/nfc/application.fam and
+        # shipping NFC as an external app with a private nfc library.
         "subghz",
         "subghz_remote",
         "subghz_bruteforcer",

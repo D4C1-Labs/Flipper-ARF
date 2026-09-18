@@ -1,8 +1,9 @@
 App(
     appid="subghz",
     name="Sub-GHz",
-    apptype=FlipperAppType.MENUEXTERNAL,
+    apptype=FlipperAppType.APP,
     targets=["f7"],
+    cdefines=["APP_SUBGHZ"],
     entry_point="subghz_app",
     requires=[
         "gui",
@@ -16,13 +17,6 @@ App(
     stack_size=3 * 1024,
     order=1,
     resources="resources",
-    # The SubGHz application UI (scenes/views/helpers) is built as an external
-    # FAP instead of being linked into the firmware. This frees internal flash
-    # so the SubGHz protocol library (which stays in the firmware for all other
-    # SubGHz apps) can enable the FULL protocol catalog, automotive included.
-    # The protocol library is resolved from the firmware API table at load time
-    # (no private lib), so the FAP stays small enough to load into RAM.
-    sources=["*.c*", "!subghz_cli.c", "!subghz_dangerous_freq.c", "!helpers/subghz_chat.c"],
     fap_libs=["assets", "hwdrivers"],
     fap_icon="icon.png",
     fap_category="Sub-GHz",
@@ -41,7 +35,6 @@ App(
     appid="subghz_load_dangerous_settings",
     apptype=FlipperAppType.STARTUP,
     entry_point="subghz_dangerous_freq",
-    requires=["storage"],
-    sources=["subghz_dangerous_freq.c"],
+    requires=["storage", "subghz"],
     order=650,
 )

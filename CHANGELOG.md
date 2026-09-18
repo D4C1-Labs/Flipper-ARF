@@ -23,6 +23,11 @@
   use and improves the odds of capturing it. Leave all off to disable.
 
 ### Changed
+- Sub-GHz now runs from firmware with its complete protocol library built in,
+  so every protocol loads instantly with no external app or plugin to install.
+- NFC is temporarily not included in this build. Freeing the internal flash
+  needed for the full Sub-GHz protocol catalog required removing the NFC stack
+  from the firmware image; NFC will return as a standalone external app.
 - Battery info is now one tap away from the power-off screen.
 
 ### Fixed

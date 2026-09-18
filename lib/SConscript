@@ -29,7 +29,8 @@ libs = env.BuildModules(
         "flipper_format",
         "infrared",
         "subghz",
-        "nfc",
+        # nfc removed from the firmware to free internal flash for the full
+        # SubGHz protocol catalog. NFC ships as external app(s).
         "digital_signal",
         "pulse_reader",
         "signal_reader",

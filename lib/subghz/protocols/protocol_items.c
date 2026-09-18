@@ -24,10 +24,11 @@
  *  ADDING A NEW SUBGHZ PROTOCOL (automotive / keyfob / gate) — READ THIS
  * ============================================================================
  *
- * The full protocol catalog is compiled directly into the firmware image. This
- * fits because the SubGHz application UI is built as an external FAP
- * (applications/main/subghz/application.fam -> apptype MENUEXTERNAL), which
- * frees the internal flash that the protocol library needs.
+ * The full protocol catalog is compiled directly into the firmware image, and
+ * the SubGHz application itself runs from firmware (internal app). This fits
+ * only because the NFC library was removed from the firmware image (see
+ * lib/SConscript and targets/f7/target.json linker_dependencies) to free the
+ * internal flash the full protocol catalog needs.
  *
  * To add a new protocol so the whole project keeps building:
  *
@@ -44,18 +45,22 @@
  *
  * FLASH BUDGET — IMPORTANT:
  *   Internal flash between the firmware and the BLE radio stack is limited
- *   (radio at 0x080D7000). After enabling the full catalog the firmware leaves
- *   only a small margin (~11 KB at the time of writing). Each new heavy
- *   automotive protocol is roughly 2-6 KB of compiled code, so a couple of big
- *   additions can overflow into the C2/radio region. If `./fbt ... updater_package`
- *   warns "Firmware image overlaps C2 region", you must reclaim flash. Options,
- *   cheapest first:
+ *   (BLE Light radio at 0x080D7000 = 860 KB usable). With the full catalog the
+ *   firmware is ~822 KB, leaving only ~37 KB of margin. Each new heavy
+ *   automotive protocol is roughly 2-6 KB of compiled code, so several big
+ *   additions can overflow into the C2/radio region. If
+ *   `./fbt ... updater_package` warns "Firmware image overlaps C2 region", you
+ *   must reclaim flash. Options, cheapest first:
  *     - Remove/comment protocols you don't need from the array below.
- *     - Move another large built-in app to MENUEXTERNAL (like SubGHz already is)
- *       so its UI code leaves the firmware image.
- *     - As a last resort, extract a whole library to a FAP private lib and load
- *       it via the XIP loader (lib/flipper_application/elf/elf_file_xip.*),
- *       which streams a FAP's read-only sections from a free-flash XIP region.
+ *     - Move another large built-in library out of the firmware the way NFC was
+ *       (drop it from lib/SConscript BuildModules and from
+ *       targets/f7/target.json linker_dependencies) and ship its app external.
+ *     - As a last resort, build a big app as an external FAP with a private
+ *       library and stream it via the XIP loader
+ *       (lib/flipper_application/elf/elf_file_xip.*), which executes a FAP's
+ *       read-only sections from a free-flash XIP region instead of RAM. NOTE:
+ *       XIP needs a large contiguous free-flash region (>=64 KB), which this
+ *       firmware layout does not currently have — free flash first.
  * ============================================================================
  */
 const SubGhzProtocol* const subghz_protocol_registry_items[] = {
