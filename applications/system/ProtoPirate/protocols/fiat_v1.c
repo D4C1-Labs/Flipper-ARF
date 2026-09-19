@@ -301,11 +301,10 @@ static void fiat_v1_decode_fields(SubGhzProtocolDecoderFiatV1* instance) {
     fiat_v1_verify_hitag2_key(instance);
 }
 
-static bool
-    fiat_v1_commit(
-        SubGhzProtocolDecoderFiatV1* instance,
-        const uint8_t raw[FIAT_V1_WIRE_BYTES],
-        uint8_t te_variant) {
+static bool fiat_v1_commit(
+    SubGhzProtocolDecoderFiatV1* instance,
+    const uint8_t raw[FIAT_V1_WIRE_BYTES],
+    uint8_t te_variant) {
     if(!fiat_v1_frame_valid(raw)) {
         return false;
     }

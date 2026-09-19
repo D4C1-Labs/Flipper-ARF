@@ -5,13 +5,13 @@
 #include "../scenes/plugins/protopirate_psa_bf_plugin.h"
 
 #include <loader/firmware_api/firmware_api.h>
+#include <lib/flipper_application/plugins/plugin_manager.h>
+#include <lib/flipper_application/plugins/composite_resolver.h>
+#include <notification/notification_messages.h>
 
 /* ProtoPirate private SubGhz API table (api/protopirate_api_table.cpp) — exposes
  * the SubGhz lib symbols the protocol plugins import at runtime. */
 extern const ElfApiInterface* const subghz_application_api_interface;
-#include <lib/flipper_application/plugins/plugin_manager.h>
-#include <lib/flipper_application/plugins/composite_resolver.h>
-#include <notification/notification_messages.h>
 
 #define TAG                "ProtoPiratePsaBfHost"
 #define PSA_BF_PLUGIN_PATH APP_ASSETS_PATH("plugins/protopirate_psa_bf_plugin.fal")

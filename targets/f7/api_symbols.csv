@@ -1,5 +1,5 @@
 entry,status,name,type,params
-Version,+,92.0,,
+Version,+,92.1,,
 Header,+,applications/drivers/subghz/cc1101_ext/cc1101_ext_interconnect.h,,
 Header,+,applications/services/applications.h,,
 Header,+,applications/services/bt/bt_service/bt.h,,
@@ -156,6 +156,7 @@ Header,+,lib/stm32wb_hal/Inc/stm32wbxx_ll_wwdg.h,,
 Header,+,lib/toolbox/api_lock.h,,
 Header,+,lib/toolbox/args.h,,
 Header,+,lib/toolbox/bit_buffer.h,,
+Header,+,lib/toolbox/buffer_stream.h,,
 Header,+,lib/toolbox/cli/cli_ansi.h,,
 Header,+,lib/toolbox/cli/cli_command.h,,
 Header,+,lib/toolbox/cli/cli_registry.h,,
@@ -743,6 +744,15 @@ Function,+,bt_set_settings,void,"Bt*, const BtSettings*"
 Function,+,bt_set_status_changed_callback,void,"Bt*, BtStatusChangedCallback, void*"
 Function,+,bt_settings_load,void,BtSettings*
 Function,+,bt_settings_save,void,const BtSettings*
+Function,+,buffer_get_data,uint8_t*,Buffer*
+Function,+,buffer_get_size,size_t,Buffer*
+Function,+,buffer_reset,void,Buffer*
+Function,+,buffer_stream_alloc,BufferStream*,"size_t, size_t"
+Function,+,buffer_stream_free,void,BufferStream*
+Function,+,buffer_stream_get_overrun_count,size_t,BufferStream*
+Function,+,buffer_stream_receive,Buffer*,"BufferStream*, uint32_t"
+Function,+,buffer_stream_reset,void,BufferStream*
+Function,+,buffer_stream_send_from_isr,_Bool,"BufferStream*, const uint8_t*, size_t"
 Function,+,buffered_file_stream_alloc,Stream*,Storage*
 Function,+,buffered_file_stream_close,_Bool,Stream*
 Function,+,buffered_file_stream_get_error,FS_Error,Stream*

@@ -4,6 +4,7 @@
 #include <subghz/transmitter.h>
 #include <subghz/subghz_setting.h>
 #include <subghz/subghz_keystore.h>
+#include <subghz/subghz_worker.h>
 #include <subghz/devices/devices.h>
 #include <subghz/blocks/generic.h>
 #include <subghz/blocks/decoder.h>
@@ -158,6 +159,135 @@ static constexpr auto subghz_app_api_table = sort(create_array_t<sym_entry>(
         subghz_transmitter_yield,
         LevelDuration,
         (void* context)),
+    /* RX-path symbols imported by protopirate_config_plugin (v3.4) */
+    API_METHOD(
+        subghz_devices_init,
+        void,
+        (void)),
+    API_METHOD(
+        subghz_devices_deinit,
+        void,
+        (void)),
+    API_METHOD(
+        subghz_devices_begin,
+        bool,
+        (const SubGhzDevice* device)),
+    API_METHOD(
+        subghz_devices_end,
+        void,
+        (const SubGhzDevice* device)),
+    API_METHOD(
+        subghz_devices_get_by_name,
+        const SubGhzDevice*,
+        (const char* device_name)),
+    API_METHOD(
+        subghz_devices_is_connect,
+        bool,
+        (const SubGhzDevice* device)),
+    API_METHOD(
+        subghz_environment_alloc,
+        SubGhzEnvironment*,
+        (void)),
+    API_METHOD(
+        subghz_environment_free,
+        void,
+        (SubGhzEnvironment* instance)),
+    API_METHOD(
+        subghz_environment_load_keystore,
+        bool,
+        (SubGhzEnvironment* instance, const char* filename)),
+    API_METHOD(
+        subghz_devices_flush_rx,
+        void,
+        (const SubGhzDevice* device)),
+    API_METHOD(
+        subghz_devices_get_rssi,
+        float,
+        (const SubGhzDevice* device)),
+    API_METHOD(
+        subghz_devices_is_frequency_valid,
+        bool,
+        (const SubGhzDevice* device, uint32_t frequency)),
+    API_METHOD(
+        subghz_devices_set_async_mirror_pin,
+        void,
+        (const SubGhzDevice* device, const GpioPin* gpio)),
+    API_METHOD(
+        subghz_devices_set_rx,
+        void,
+        (const SubGhzDevice* device)),
+    API_METHOD(
+        subghz_devices_sleep,
+        void,
+        (const SubGhzDevice* device)),
+    API_METHOD(
+        subghz_devices_start_async_rx,
+        void,
+        (const SubGhzDevice* device, void* callback, void* context)),
+    API_METHOD(
+        subghz_devices_stop_async_rx,
+        void,
+        (const SubGhzDevice* device)),
+    API_METHOD(
+        subghz_environment_set_protocol_registry,
+        void,
+        (SubGhzEnvironment* instance, const SubGhzProtocolRegistry* protocol_registry_items)),
+    API_METHOD(
+        subghz_receiver_alloc_init,
+        SubGhzReceiver*,
+        (SubGhzEnvironment* environment)),
+    API_METHOD(
+        subghz_receiver_free,
+        void,
+        (SubGhzReceiver* instance)),
+    API_METHOD(
+        subghz_receiver_set_filter,
+        void,
+        (SubGhzReceiver* instance, SubGhzProtocolFlag filter)),
+    API_METHOD(
+        subghz_setting_get_default_frequency,
+        uint32_t,
+        (SubGhzSetting* instance)),
+    API_METHOD(
+        subghz_setting_get_frequency,
+        uint32_t,
+        (SubGhzSetting* instance, size_t idx)),
+    API_METHOD(
+        subghz_setting_get_frequency_count,
+        size_t,
+        (SubGhzSetting* instance)),
+    API_METHOD(
+        subghz_setting_get_frequency_default_index,
+        uint32_t,
+        (SubGhzSetting* instance)),
+    API_METHOD(
+        subghz_setting_get_hopper_frequency,
+        uint32_t,
+        (SubGhzSetting* instance, size_t idx)),
+    API_METHOD(
+        subghz_setting_get_hopper_frequency_count,
+        size_t,
+        (SubGhzSetting* instance)),
+    API_METHOD(
+        subghz_worker_free,
+        void,
+        (SubGhzWorker* instance)),
+    API_METHOD(
+        subghz_worker_is_running,
+        bool,
+        (SubGhzWorker* instance)),
+    API_METHOD(
+        subghz_worker_rx_callback,
+        void,
+        (bool level, uint32_t duration, void* context)),
+    API_METHOD(
+        subghz_worker_start,
+        void,
+        (SubGhzWorker* instance)),
+    API_METHOD(
+        subghz_worker_stop,
+        void,
+        (SubGhzWorker* instance)),
     API_VARIABLE(subghz_device_cc1101_preset_ook_270khz_async_regs, const uint8_t[]),
     API_VARIABLE(subghz_device_cc1101_preset_ook_650khz_async_regs, const uint8_t[]),
     API_VARIABLE(subghz_device_cc1101_preset_2fsk_dev2_38khz_async_regs, const uint8_t[]),

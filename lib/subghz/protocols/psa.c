@@ -19,6 +19,7 @@ static const SubGhzBlockConst subghz_protocol_psa_const = {
 
 #define PSA_TE_SHORT_125 0x7d
 #define PSA_TE_LONG_250 0xfa
+#define PSA_TE_LONG_300 0x12c
 #define PSA_TE_END_1000 1000
 #define PSA_TE_END_500 500
 #define PSA_TOLERANCE_99 99
@@ -676,7 +677,10 @@ void subghz_protocol_decoder_psa_feed(void* context, bool level, uint32_t durati
                 } else {
                     tolerance = duration - PSA_TE_SHORT_125;
                 }
-                if(tolerance > PSA_TOLERANCE_49) {
+                if(tolerance > 40) {
+                    return;
+                }
+                if(duration > 180) {
                     return;
                 }
                 new_state = PSADecoderState3;
@@ -960,43 +964,43 @@ void subghz_protocol_decoder_psa_feed(void* context, bool level, uint32_t durati
         break;
 
     case PSADecoderState3:
-        if(level) {
-            return;
+        // Fixed-TE preamble path (te_short=125us, te_long=250us), aligned with
+        // ProtoPirate reference decoder.
+        if(duration >= 250) {
+            if(duration >= PSA_TE_LONG_250 && duration < PSA_TE_LONG_300) {
+                if(instance->pattern_counter > PSA_PATTERN_THRESHOLD_2) {
+                    new_state = PSADecoderState4;
+                    instance->decode_data_low = 0;
+                    instance->decode_data_high = 0;
+                    instance->decode_count_bit = 0;
+                    manchester_advance(instance->manchester_state, ManchesterEventReset,
+                                     &instance->manchester_state, NULL);
+                    instance->state = new_state;
+                    instance->pattern_counter = 0;
+                    instance->prev_duration = duration;
+                    return;
+                }
+            }
+            new_state = PSADecoderState0;
+            instance->pattern_counter = 0;
+            break;
         }
 
-        // Adaptive AM preamble: accept 76-174us, average to detect actual TE
-        if(duration >= 76 && duration <= 174) {
-            if(prev_dur >= 76 && prev_dur <= 174) {
+        if(duration < PSA_TE_SHORT_125) {
+            tolerance = PSA_TE_SHORT_125 - duration;
+        } else {
+            tolerance = duration - PSA_TE_SHORT_125;
+        }
+
+        if(tolerance < PSA_TOLERANCE_50) {
+            uint32_t prev_diff = psa_abs_diff(prev_dur, PSA_TE_SHORT_125);
+            if(prev_diff <= PSA_TOLERANCE_49) {
                 instance->pattern_counter++;
-                instance->te_sum += duration;
-                instance->te_count++;
             } else {
                 instance->pattern_counter = 0;
-                instance->te_sum = duration;
-                instance->te_count = 1;
             }
             instance->prev_duration = duration;
             return;
-        } else {
-            // Check if this is the preamble-to-data transition (2x detected TE)
-            uint32_t te_avg = (instance->te_count > 0) ?
-                (instance->te_sum / instance->te_count) : PSA_TE_SHORT_125;
-            uint32_t te_long_expected = te_avg * 2;
-            uint32_t long_diff = psa_abs_diff(duration, te_long_expected);
-
-            if(long_diff <= te_avg && instance->pattern_counter > PSA_PATTERN_THRESHOLD_2) {
-                instance->te_detected = te_avg;
-                new_state = PSADecoderState4;
-                instance->decode_data_low = 0;
-                instance->decode_data_high = 0;
-                instance->decode_count_bit = 0;
-                manchester_advance(instance->manchester_state, ManchesterEventReset,
-                                 &instance->manchester_state, NULL);
-                instance->state = new_state;
-                instance->pattern_counter = 0;
-                instance->prev_duration = duration;
-                return;
-            }
         }
 
         new_state = PSADecoderState0;
@@ -1009,16 +1013,63 @@ void subghz_protocol_decoder_psa_feed(void* context, bool level, uint32_t durati
             break;
         }
 
-        uint32_t te_s = instance->te_detected ? instance->te_detected : PSA_TE_SHORT_125;
-        uint32_t te_l = te_s * 2;
-        uint32_t te_tol = te_s / 2;
-        uint32_t midpoint = (te_s + te_l) / 2;
+        // Fixed-TE Manchester decode (te_short=125us, te_long=250us), aligned with
+        // ProtoPirate reference decoder. Bits are consumed on the falling edge (!level);
+        // the end marker is a HIGH pulse (level) near PSA_TE_END_500.
+        if(!level) {
+            uint8_t manchester_input;
+            bool decoded_bit = false;
 
-        // End marker check: HIGH pulse beyond long range at 80 bits
-        if(level && instance->decode_count_bit == PSA_KEY2_BITS && duration > midpoint) {
-            uint32_t end_expected = te_s * 4;
-            uint32_t end_diff = psa_abs_diff(duration, end_expected);
-            if(end_diff <= te_s * 2) {
+            if(duration < PSA_TE_SHORT_125) {
+                tolerance = PSA_TE_SHORT_125 - duration;
+                if(tolerance > PSA_TOLERANCE_49) {
+                    return;
+                }
+                manchester_input = ((level ^ 1) & 0x7f) << 1;
+            } else {
+                tolerance = duration - PSA_TE_SHORT_125;
+                if(tolerance < PSA_TOLERANCE_50) {
+                    manchester_input = ((level ^ 1) & 0x7f) << 1;
+                } else if(duration >= PSA_TE_LONG_250 && duration < PSA_TE_LONG_300) {
+                    if(level == 0) {
+                        manchester_input = 6;
+                    } else {
+                        manchester_input = 4;
+                    }
+                } else {
+                    return;
+                }
+            }
+
+            if(instance->decode_count_bit < PSA_KEY2_BITS &&
+               manchester_advance(instance->manchester_state,
+                                (ManchesterEvent)manchester_input,
+                                &instance->manchester_state,
+                                &decoded_bit)) {
+                uint32_t carry = (instance->decode_data_low >> 31) & 1;
+                instance->decode_data_low = (instance->decode_data_low << 1) | (decoded_bit ? 1 : 0);
+                instance->decode_data_high = (instance->decode_data_high << 1) | carry;
+                instance->decode_count_bit++;
+
+                if(instance->decode_count_bit == PSA_KEY1_BITS) {
+                    instance->key1_low = instance->decode_data_low;
+                    instance->key1_high = instance->decode_data_high;
+                    instance->decode_data_low = 0;
+                    instance->decode_data_high = 0;
+                }
+            }
+        } else if(level) {
+            uint32_t end_diff;
+            if(duration < PSA_TE_END_500) {
+                end_diff = PSA_TE_END_500 - duration;
+            } else {
+                end_diff = duration - PSA_TE_END_500;
+            }
+            if(end_diff <= 99) {
+                if(instance->decode_count_bit != PSA_KEY2_BITS) {
+                    return;
+                }
+
                 instance->validation_field = (uint16_t)(instance->decode_data_low & 0xFFFF);
                 instance->key2_low = instance->decode_data_low;
                 instance->key2_high = instance->decode_data_high;
@@ -1058,51 +1109,8 @@ void subghz_protocol_decoder_psa_feed(void* context, bool level, uint32_t durati
                 new_state = PSADecoderState0;
                 instance->state = new_state;
                 return;
-            }
-        }
-
-        // Manchester decode: process BOTH high and low pulses (unlike original AM path)
-        if(duration > te_l + te_tol) {
-            if(duration > 10000) {
-                new_state = PSADecoderState0;
-                break;
-            }
-            return;
-        }
-
-        uint8_t manchester_input;
-        bool decoded_bit = false;
-
-        if(duration <= midpoint) {
-            if(psa_abs_diff(duration, te_s) > te_tol) {
+            } else {
                 return;
-            }
-            manchester_input = level ? ManchesterEventShortLow : ManchesterEventShortHigh;
-        } else {
-            if(psa_abs_diff(duration, te_l) > te_tol) {
-                return;
-            }
-            manchester_input = level ? ManchesterEventLongLow : ManchesterEventLongHigh;
-        }
-
-        if(instance->decode_count_bit < PSA_KEY2_BITS) {
-            if(manchester_advance(instance->manchester_state,
-                                 (ManchesterEvent)manchester_input,
-                                 &instance->manchester_state,
-                                 &decoded_bit)) {
-                uint32_t carry = (instance->decode_data_low >> 31) & 1;
-                // PSA AM uses inverted Manchester convention
-                decoded_bit = !decoded_bit;
-                instance->decode_data_low = (instance->decode_data_low << 1) | (decoded_bit ? 1 : 0);
-                instance->decode_data_high = (instance->decode_data_high << 1) | carry;
-                instance->decode_count_bit++;
-
-                if(instance->decode_count_bit == PSA_KEY1_BITS) {
-                    instance->key1_low = instance->decode_data_low;
-                    instance->key1_high = instance->decode_data_high;
-                    instance->decode_data_low = 0;
-                    instance->decode_data_high = 0;
-                }
             }
         }
         break;

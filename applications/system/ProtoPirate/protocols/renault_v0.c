@@ -9,16 +9,16 @@
 _Static_assert(
     RENAULT_V0_UPLOAD_CAPACITY <= PP_SHARED_UPLOAD_CAPACITY,
     "RENAULT_V0_UPLOAD_CAPACITY exceeds shared upload slab");
-#define RENAULT_V0_TE_SHORT_US       0x7DU
-#define RENAULT_V0_TE_LONG_US        0xFAU
-#define RENAULT_V0_TE_DELTA_US       0x45U
-#define RENAULT_V0_PREAMBLE_PAIRS    16U
-#define RENAULT_V0_BURST_COUNT       3U
-#define RENAULT_V0_INTER_BURST_US    0x61A8U
-#define RENAULT_V0_FINAL_LOW_US      250U
-#define RENAULT_V0_SYNC_HIGH_US      1000U
-#define RENAULT_V0_REPEAT            1U
-#define RENAULT_V0_KEY2_FIELD        "Key2"
+#define RENAULT_V0_TE_SHORT_US    0x7DU
+#define RENAULT_V0_TE_LONG_US     0xFAU
+#define RENAULT_V0_TE_DELTA_US    0x45U
+#define RENAULT_V0_PREAMBLE_PAIRS 16U
+#define RENAULT_V0_BURST_COUNT    3U
+#define RENAULT_V0_INTER_BURST_US 0x61A8U
+#define RENAULT_V0_FINAL_LOW_US   250U
+#define RENAULT_V0_SYNC_HIGH_US   1000U
+#define RENAULT_V0_REPEAT         1U
+#define RENAULT_V0_KEY2_FIELD     "Key2"
 
 typedef enum {
     RenaultV0DecoderStepReset = 0,
@@ -268,8 +268,8 @@ static bool renault_v0_emit(
     bool level,
     uint32_t duration) {
     const size_t prev = *index;
-    *index = pp_emit_merge(
-        instance->encoder.upload, prev, RENAULT_V0_UPLOAD_CAPACITY, level, duration);
+    *index =
+        pp_emit_merge(instance->encoder.upload, prev, RENAULT_V0_UPLOAD_CAPACITY, level, duration);
     if(*index > prev) {
         return true;
     }

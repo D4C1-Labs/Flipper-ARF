@@ -145,8 +145,7 @@ static bool emulate_write_hitag2_key(FlipperFormat* flipper_format, const uint8_
         return false;
     }
     flipper_format_rewind(flipper_format);
-    if(!flipper_format_insert_or_update_hex(
-           flipper_format, EMU_PRESET_KEY_HITAG2_KEY, key, 6U)) {
+    if(!flipper_format_insert_or_update_hex(flipper_format, EMU_PRESET_KEY_HITAG2_KEY, key, 6U)) {
         return false;
     }
     uint32_t epoch = 0U;
@@ -313,7 +312,7 @@ static const uint8_t tx_power_value[TX_PRESET_VALUES_COUNT] = {
     0x0E, // -20dBm
     0x12, // -30dBm
 
-    // AM Power Values for 1st PA Table Byte.
+    // AM Power Values for 2nd PA Table Byte.
     0xC0, // 12dBm
     0xCD, // 7dBm
     0x86, // 5dBm
@@ -936,7 +935,15 @@ static void emulate_draw_callback(Canvas* canvas, void* model) {
         (ctx->freq % 1000000) / 10000);
     canvas_draw_str(canvas, 2, 30, info_str);
 
-    snprintf(info_str, sizeof(info_str), "CNT:%04lX", (unsigned long)ctx->current_counter);
+    if(ctx->current_counter > 0xFFFF) {
+        snprintf(
+            info_str,
+            sizeof(info_str),
+            "CNT:...%03lX",
+            (unsigned long)ctx->current_counter & 0xFFF);
+    } else {
+        snprintf(info_str, sizeof(info_str), "CNT:%04lX", (unsigned long)ctx->current_counter);
+    }
     canvas_draw_str(canvas, 68, 20, info_str);
 
     if(ctx->current_counter > ctx->original_counter) {
@@ -1200,14 +1207,13 @@ static void plugin_on_enter(void* context) {
        furi_string_equal(ctx->protocol_name, "Mitsu v0") ||
        furi_string_equal(ctx->protocol_name, "Mitsubishi V0") ||
        furi_string_equal(ctx->protocol_name, "Mitsubishi v0")) {
-        uint32_t kia_v0_type =
-            furi_string_equal(ctx->protocol_name, "Honda V0") ? 3U :
-            (furi_string_equal(ctx->protocol_name, "Mitsu V0") ||
-             furi_string_equal(ctx->protocol_name, "Mitsu v0") ||
-             furi_string_equal(ctx->protocol_name, "Mitsubishi V0") ||
-             furi_string_equal(ctx->protocol_name, "Mitsubishi v0")) ?
-                4U :
-                2U;
+        uint32_t kia_v0_type = furi_string_equal(ctx->protocol_name, "Honda V0") ? 3U :
+                               (furi_string_equal(ctx->protocol_name, "Mitsu V0") ||
+                                furi_string_equal(ctx->protocol_name, "Mitsu v0") ||
+                                furi_string_equal(ctx->protocol_name, "Mitsubishi V0") ||
+                                furi_string_equal(ctx->protocol_name, "Mitsubishi v0")) ?
+                                                                                   4U :
+                                                                                   2U;
         furi_string_set(ctx->protocol_name, KIA_PROTOCOL_V0_NAME);
         flipper_format_rewind(ctx->flipper_format);
         flipper_format_insert_or_update_string_cstr(
@@ -1255,8 +1261,8 @@ static void plugin_on_enter(void* context) {
         uint8_t raw[13] = {0};
         bool have_raw = false;
         flipper_format_rewind(ctx->flipper_format);
-        if(flipper_format_read_hex(ctx->flipper_format, "Raw", raw, sizeof(raw)) && raw[0] == 0x00U &&
-           raw[1] == 0x01U) {
+        if(flipper_format_read_hex(ctx->flipper_format, "Raw", raw, sizeof(raw)) &&
+           raw[0] == 0x00U && raw[1] == 0x01U) {
             have_raw = true;
         }
 
@@ -1267,8 +1273,10 @@ static void plugin_on_enter(void* context) {
             } else {
                 uint8_t key_bytes[8] = {0};
                 flipper_format_rewind(ctx->flipper_format);
-                if(flipper_format_read_hex(ctx->flipper_format, "Key", key_bytes, sizeof(key_bytes))) {
-                    ctx->serial = ((uint32_t)key_bytes[0] << 24U) | ((uint32_t)key_bytes[1] << 16U) |
+                if(flipper_format_read_hex(
+                       ctx->flipper_format, "Key", key_bytes, sizeof(key_bytes))) {
+                    ctx->serial = ((uint32_t)key_bytes[0] << 24U) |
+                                  ((uint32_t)key_bytes[1] << 16U) |
                                   ((uint32_t)key_bytes[2] << 8U) | key_bytes[3];
                 }
             }
@@ -1279,8 +1287,7 @@ static void plugin_on_enter(void* context) {
             }
         }
         if(have_raw && (ctx->current_counter > 0x3FFU || ctx->original_counter > 0x3FFU)) {
-            const uint32_t ctrl =
-                ((uint32_t)(raw[6] & 0x0FU) << 6U) | ((uint32_t)raw[7] >> 2U);
+            const uint32_t ctrl = ((uint32_t)(raw[6] & 0x0FU) << 6U) | ((uint32_t)raw[7] >> 2U);
             ctx->original_counter = ctrl;
             ctx->current_counter = ctrl;
             flipper_format_rewind(ctx->flipper_format);

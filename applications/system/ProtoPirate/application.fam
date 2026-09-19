@@ -17,6 +17,8 @@ _ENABLE_EMULATE = ProtoPirateDefineEnabled("ENABLE_EMULATE_FEATURE")
 
 _MAIN_APP_SOURCES = [
     "*.c*",
+    "!helpers/protopirate_models.c",
+    "!helpers/variable_item_list.c",
     "!protocols/plugins",
     "!scenes/plugins",
     "!protocols",
@@ -69,7 +71,7 @@ App(
     requires=["gui"],
     stack_size=8 * 1024,
     fap_description="Decode car key fob signals from Sub-GHz",
-    fap_version="3.3",
+    fap_version="3.4",
     fap_icon="images/protopirate_10px.png",
     fap_category="Sub-GHz",
     fap_icon_assets="images",
@@ -441,5 +443,39 @@ App(
         "protocols/protocols_common.c",
     ],
     fap_icon_assets="images",
+    fal_embedded=True,
+)
+
+App(
+    appid="protopirate_config_plugin",
+    apptype=FlipperAppType.PLUGIN,
+    entry_point="protopirate_config_plugin_ep",
+    requires=["proto_pirate"],
+    sources=[
+        "helpers/protopirate_protocol_plugin_host.c",
+        "helpers/protopirate_models.c",
+        "helpers/protopirate_txrx.c",
+        "helpers/variable_item_list.c",
+        "protocols/protocol_items.c",
+        "protocols/protocols_common.c",
+        "scenes/plugins/protopirate_config_plugin.c",
+        # XIP adaptation: SubGhz lib is private to this app, so the config
+        # plugin (which drags in the protocol-plugin host + RX radio stack via
+        # protopirate_txrx.c) must be self-contained. These app-level sources
+        # define the protopirate_* symbols the host stack references, and the
+        # api table provides subghz_application_api_interface for the nested
+        # protocol-registry plugin resolver.
+        "helpers/protopirate_radio.c",
+        "helpers/radio_device_loader.c",
+        "views/protopirate_receiver.c",
+        "protopirate_history.c",
+        "helpers/protopirate_storage.c",
+        "api/protopirate_api_table.cpp",
+    ],
+    fap_icon_assets="images",
+    # Generate the icon bundle header as "proto_pirate_icons.h" (matching the
+    # main app) so the upstream views/protopirate_receiver.c include resolves
+    # unchanged — keeps upstream sources untouched for easy future updates.
+    fap_icon_assets_symbol="proto_pirate",
     fal_embedded=True,
 )

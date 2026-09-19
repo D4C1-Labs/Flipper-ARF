@@ -3,12 +3,12 @@
 #include "../protocols/protocol_items.h"
 
 #include <loader/firmware_api/firmware_api.h>
+#include <stdio.h>
+#include <string.h>
 
 /* ProtoPirate private SubGhz API table (api/protopirate_api_table.cpp) — exposes
  * the SubGhz lib symbols the protocol plugins import at runtime. */
 extern const ElfApiInterface* const subghz_application_api_interface;
-#include <stdio.h>
-#include <string.h>
 
 #define TAG "ProtoPirateProtocolPlugin"
 #ifdef ENABLE_EMULATE_FEATURE

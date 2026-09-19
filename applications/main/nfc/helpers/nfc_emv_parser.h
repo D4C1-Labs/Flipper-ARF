@@ -4,6 +4,10 @@
 #include <stdbool.h>
 #include <storage/storage.h>
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 /** Get EMV application name by number
  * @param storage Storage instance
  * @param aid - AID number array
@@ -38,3 +42,7 @@ bool nfc_emv_parser_get_currency_name(
     Storage* storage,
     uint16_t currency_code,
     FuriString* currency_name);
+
+#ifdef __cplusplus
+}
+#endif

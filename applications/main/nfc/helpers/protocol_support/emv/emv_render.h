@@ -5,6 +5,10 @@
 #include "../nfc_protocol_support_render_common.h"
 #include <stdint.h>
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 void nfc_render_emv_info(const EmvData* data, NfcProtocolFormatType format_type, FuriString* str);
 
 void nfc_render_emv_data(const EmvData* data, FuriString* str);
@@ -28,3 +32,7 @@ void nfc_render_emv_transactions(const EmvApplication* data, FuriString* str);
 void nfc_render_emv_uid(const uint8_t* uid, const uint8_t uid_len, FuriString* str);
 
 void nfc_render_emv_header(FuriString* str);
+
+#ifdef __cplusplus
+}
+#endif

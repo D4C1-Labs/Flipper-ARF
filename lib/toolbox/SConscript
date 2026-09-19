@@ -34,6 +34,7 @@ env.Append(
         File("stream/file_stream.h"),
         File("stream/string_stream.h"),
         File("stream/buffered_file_stream.h"),
+        File("buffer_stream.h"),
         File("strint.h"),
         File("pipe.h"),
         File("protocols/protocol_dict.h"),
