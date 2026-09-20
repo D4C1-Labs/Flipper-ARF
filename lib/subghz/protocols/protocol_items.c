@@ -50,7 +50,8 @@
  *   automotive protocol is roughly 2-6 KB of compiled code, so several big
  *   additions can overflow into the C2/radio region. If
  *   `./fbt ... updater_package` warns "Firmware image overlaps C2 region", you
- *   must reclaim flash. Options, cheapest first:
+ *   mgit status
+ust reclaim flash. Options, cheapest first:
  *     - Remove/comment protocols you don't need from the array below.
  *     - Move another large built-in library out of the firmware the way NFC was
  *       (drop it from lib/SConscript BuildModules and from
@@ -166,10 +167,10 @@ const SubGhzProtocol* const subghz_protocol_registry_items[] = {
     //&subghz_protocol_gm,
 
     // [UNLEASHED_PORT] New protocols from Unleashed firmware (disabled by default)
-    &subghz_protocol_allstar_firefly,
-    &subghz_protocol_ditec_gol4,
-    &subghz_protocol_nord_ice,
-    &subghz_protocol_telcoma_edge,
+    //&subghz_protocol_allstar_firefly,
+    //&subghz_protocol_ditec_gol4,
+    //&subghz_protocol_nord_ice,
+    //&subghz_protocol_telcoma_edge,
 
 };
 
