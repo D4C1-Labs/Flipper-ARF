@@ -1130,7 +1130,29 @@ static bool elf_xip_stream_section(ELFFile* elf, ELFSection* sec, bool patch_mod
                         fast_records[i].address = elf_address_of_by_hash(elf, hash_or_idx);
                     }
                     if(fast_records[i].address == ELF_INVALID_ADDRESS) {
-                        FURI_LOG_E(TAG, "XIP: unresolved fast rel record %lu", i);
+                        /* Diagnostic: report which symbol/section failed to
+                         * resolve. A common culprit is a libgcc/compiler-rt
+                         * helper (e.g. __paritysi2) not exported in the SDK
+                         * table (api_symbols.csv) — see EXTERNAL_LIBS.md. */
+                        if(is_section) {
+                            FURI_LOG_E(
+                                TAG,
+                                "XIP: unresolved fast rel record %lu SECTION idx=%lu val=%lX",
+                                i,
+                                (unsigned long)hash_or_idx,
+                                (unsigned long)section_value);
+                        } else {
+                            FuriString* sym_name = furi_string_alloc();
+                            bool found =
+                                elf_file_find_string_by_hash(elf, hash_or_idx, sym_name);
+                            FURI_LOG_E(
+                                TAG,
+                                "XIP: unresolved fast rel record %lu HASH=%lX name=%s",
+                                i,
+                                (unsigned long)hash_or_idx,
+                                found ? furi_string_get_cstr(sym_name) : "<unknown>");
+                            furi_string_free(sym_name);
+                        }
                         ok = false;
                     }
                     fr += 3 * fast_records[i].offsets_count;

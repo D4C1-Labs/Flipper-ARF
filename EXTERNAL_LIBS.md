@@ -250,10 +250,40 @@ sort -u -o /tmp/resolvable.txt /tmp/resolvable.txt
   | grep -vE "^__|uxTopUsedPriority"
 ```
 
-Known-harmless leftovers (resolved at final `.fal`/loader link): `__aeabi_*`,
-`__paritysi2`, `__popcountsi2`, `uxTopUsedPriority`. Also ignore `FF_*` style
-`extern const char[]` if the app defines them in one of its own `.c` (e.g.
-`protocols_common.c`) — check with `grep`.
+Known-harmless leftovers: `uxTopUsedPriority` (linker builtin). Also ignore
+`FF_*` style `extern const char[]` if the app defines them in one of its own
+`.c` (e.g. `protocols_common.c`) — check with `grep`.
+
+**IMPORTANT — libgcc/compiler-rt helpers under XIP.** Helpers the compiler emits
+(`__paritysi2`, `__popcountsi2`, `__aeabi_*`, etc.) are NOT self-contained in the
+`.fap`: they show up as undefined (`U`) and must be resolved against the firmware
+at load time, exactly like any other imported symbol. They live in `firmware.elf`
+(`arm-none-eabi-nm build/f7-firmware-C/firmware.elf | grep __paritysi2`) but are
+only reachable by apps if they are also in the SDK table
+(`targets/f7/api_symbols.csv` with status `+`). If a helper is missing there:
+- A **non-XIP** app (fits in RAM) often still appears to run because that code
+  path may never execute — the app loads. This is why several stock apps that use
+  `__paritysi2` "work".
+- A **ForceXIP** app (subghz, nfc) **hard-crashes the Flipper with an OOM reboot**
+  at load: the XIP fast-relocation pass hits the unresolved hash mid-stream and
+  aborts. Log: `XIP: unresolved fast rel record N`.
+
+The `nm` offline check above will NOT flag these (they're technically resolvable
+against firmware — they're just not in the table). To find the exact culprit,
+temporarily log the hash+name in `elf_file.c` where the XIP fast-rel loop sets
+`unresolved fast rel record` (use `elf_file_find_string_by_hash`).
+
+Fix: **declare the helper's prototype in
+`targets/f7/platform_specific/intrinsic_export.h`** (an SDK header that exists
+exactly to expose libgcc/compiler-rt intrinsics which have no normal header),
+then rebuild twice so the SDK checker adds it to `api_symbols.csv` and finalizes
+the version. Do NOT hand-edit `api_symbols.csv` for these — the checker
+regenerates the table from headers and will delete rows it can't trace to a
+header (it reported `Removed: {__paritysi2, __popcountsi2}` when we tried).
+Added this way: `__paritysi2` and `__popcountsi2` (both `int (unsigned int)`),
+needed by the SubGhz/NFC protocol code (bit parity/popcount) under XIP.
+`__aeabi_f2d`/`__aeabi_uldivmod` were already declared there (that's why
+`lfrfid`, which only uses `__aeabi_f2d`, never crashed).
 
 ## Fix depending on where the symbol lives
 
