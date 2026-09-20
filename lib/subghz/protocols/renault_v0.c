@@ -1060,7 +1060,17 @@ SubGhzProtocolStatus
             flipper_format_rewind(flipper_format);
             flipper_format_read_uint32(flipper_format, "Btn", &btn_u32, 1);
             flipper_format_rewind(flipper_format);
-            flipper_format_read_uint32(flipper_format, "Cnt", &cnt_u32, 1);
+            const bool got_cnt = flipper_format_read_uint32(flipper_format, "Cnt", &cnt_u32, 1);
+
+            // [ROLLING_CNT] Forward-encode the NEXT counter (like VAG/PSA) when the
+            // press comes from the plain transmitter (no scene-supplied "Cnt"), so
+            // the UI counter advances on each OK/D-pad press. If the scene already
+            // wrote an incremented "Cnt", honor it as-is.
+            if(!got_cnt) {
+                uint32_t mult = furi_hal_subghz_get_rolling_counter_mult();
+                if(mult == 0U) mult = 1U;
+                cnt_u32 = (cnt_u32 + mult) & 0xFFU;
+            }
 
             // [PROTOPIRATE_PORT] custom_btn support
             // Renault V0 Type13 (rolling) supports two buttons:
@@ -1156,6 +1166,13 @@ SubGhzProtocolStatus
                     break;
                 }
             }
+
+            // [ROLLING_CNT] Persist the advanced counter so the UI refresh (decoder
+            // re-derives cnt from the re-written Key) and the next TX continue from
+            // the advanced value.
+            flipper_format_rewind(flipper_format);
+            uint32_t cnt_store = instance->generic.cnt;
+            flipper_format_insert_or_update_uint32(flipper_format, "Cnt", &cnt_store, 1);
         }
 
         instance->encoder.is_running = true;
@@ -1322,6 +1339,30 @@ void subghz_protocol_decoder_renault_v0_get_string(void* context, FuriString* ou
 
     SubGhzProtocolDecoderRenaultV0* instance = context;
 
+    // [BUGFIX UI] Re-derive the displayed button from the current D-pad
+    // selection so the transmitter UI reflects subghz_custom_btn_get() (like
+    // psa.c/star_line.c). The D-pad only does anything for Type13 (rolling)
+    // captures; other types are replay-only, so keep the captured button there.
+    uint8_t display_btn = (uint8_t)instance->generic.btn;
+    if(instance->type_id == RenaultV0Type13) {
+        subghz_custom_btn_set_max(4);
+        uint8_t custom_btn_id = subghz_custom_btn_get();
+        switch(custom_btn_id) {
+        case SUBGHZ_CUSTOM_BTN_UP:
+            display_btn = 0x06U; // Lock
+            break;
+        case SUBGHZ_CUSTOM_BTN_DOWN:
+            display_btn = 0x0AU; // Unlock
+            break;
+        case SUBGHZ_CUSTOM_BTN_OK:
+        case SUBGHZ_CUSTOM_BTN_LEFT:  // Type13 has no Trunk/Panic
+        case SUBGHZ_CUSTOM_BTN_RIGHT:
+        default:
+            display_btn = (uint8_t)instance->generic.btn;
+            break;
+        }
+    }
+
     furi_string_cat_printf(
         output,
         "%s %dbit\r\n"
@@ -1332,7 +1373,7 @@ void subghz_protocol_decoder_renault_v0_get_string(void* context, FuriString* ou
         instance->packet_bit_count,
         instance->generic.data,
         instance->generic.serial,
-        renault_v0_get_button_name(instance->type_id, instance->generic.btn),
+        renault_v0_get_button_name(instance->type_id, display_btn),
         (instance->check_c1 || instance->check_c2) ? "ERR" : "OK",
         instance->generic.cnt);
 }

@@ -357,7 +357,18 @@ SubGhzProtocolStatus
         bool got_cnt = flipper_format_read_uint32(flipper_format, "Cnt", &cnt_u32, 1);
 
         if(got_serial) instance->generic.serial = ser_u32;
-        if(got_cnt) instance->generic.cnt = cnt_u32 & 0xFFFF;
+        // [ROLLING_CNT] If the scene supplied a "Cnt" (car-emulate) use it as-is;
+        // otherwise (plain transmitter OK/D-pad press) forward-encode the NEXT
+        // counter with the rolling multiplier so the UI shows an incrementing
+        // counter, matching VAG/PSA. get_upload() re-packs generic.cnt into the Key
+        // and we persist Key+Cnt below, so the decoder shows the advanced value.
+        if(got_cnt) {
+            instance->generic.cnt = cnt_u32 & 0xFFFF;
+        } else {
+            uint32_t mult = furi_hal_subghz_get_rolling_counter_mult();
+            if(mult == 0U) mult = 1U;
+            instance->generic.cnt = (instance->generic.cnt + mult) & 0xFFFF;
+        }
 
         // [PROTOPIRATE_PORT] custom_btn support
         // Mazda Siemens button codes (see mazda_get_btn_name):
@@ -638,6 +649,25 @@ static const char* mazda_get_btn_name(uint8_t btn) {
     }
 }
 
+// [PROTOPIRATE_PORT] custom_btn UI support
+// Re-derive the displayed button from the D-pad selection, mirroring the encoder
+// remap (see encoder deserialize): Up=Lock(0x10), Down=Unlock(0x20),
+// Left=Trunk(0x40), Right/OK=captured.
+static uint8_t mazda_ui_button(uint8_t custom, uint8_t original_btn) {
+    switch(custom) {
+    case SUBGHZ_CUSTOM_BTN_UP:
+        return 0x10U; // Lock
+    case SUBGHZ_CUSTOM_BTN_DOWN:
+        return 0x20U; // Unlock
+    case SUBGHZ_CUSTOM_BTN_LEFT:
+        return 0x40U; // Trunk
+    case SUBGHZ_CUSTOM_BTN_RIGHT:
+    case SUBGHZ_CUSTOM_BTN_OK:
+    default:
+        return original_btn;
+    }
+}
+
 void subghz_protocol_decoder_mazda_siemens_get_string(void* context, FuriString* output) {
     furi_assert(context);
     SubGhzProtocolDecoderMazdaSiemens* instance = context;
@@ -649,6 +679,14 @@ void subghz_protocol_decoder_mazda_siemens_get_string(void* context, FuriString*
 
     const uint8_t chk = instance->generic.data & 0xFF;
 
+    // [BUGFIX UI] Re-derive the displayed button from the current D-pad
+    // selection so the transmitter UI reflects subghz_custom_btn_get() (like
+    // psa.c/star_line.c). CRC shown is the captured frame's checksum (data&0xFF);
+    // the encoder recomputes the real checksum for the transmitted button.
+    subghz_custom_btn_set_max(4);
+    uint8_t display_btn =
+        mazda_ui_button(subghz_custom_btn_get(), (uint8_t)instance->generic.btn);
+
     furi_string_cat_printf(
         output,
         "%s %dbit\r\n"
@@ -659,7 +697,7 @@ void subghz_protocol_decoder_mazda_siemens_get_string(void* context, FuriString*
         instance->generic.data_count_bit,
         (uint64_t)instance->generic.data,
         (uint32_t)instance->generic.serial,
-        mazda_get_btn_name(instance->generic.btn),
+        mazda_get_btn_name(display_btn),
         chk,
         (uint32_t)instance->generic.cnt);
 }

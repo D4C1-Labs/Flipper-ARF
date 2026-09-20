@@ -455,6 +455,19 @@ SubGhzProtocolStatus
             instance->generic.btn = instance->btn;
         }
 
+        // [ROLLING_CNT] Forward-encode the NEXT counter (like VAG/PSA) so the
+        // transmitter UI shows an incrementing counter on each OK/D-pad press, then
+        // persist "Cnt" so the decoder reads the advanced value on the UI refresh.
+        {
+            uint32_t mult = furi_hal_subghz_get_rolling_counter_mult();
+            if(mult == 0U) mult = 1U;
+            instance->cnt = (uint16_t)((instance->cnt + mult) & 0xFFFFU);
+            instance->generic.cnt = instance->cnt;
+            flipper_format_rewind(flipper_format);
+            uint32_t cnt_store = instance->cnt;
+            flipper_format_insert_or_update_uint32(flipper_format, "Cnt", &cnt_store, 1);
+        }
+
         flipper_format_rewind(flipper_format);
         uint32_t version_temp;
         if(flipper_format_read_uint32(flipper_format, "KIAVersion", &version_temp, 1)) {
@@ -790,6 +803,23 @@ SubGhzProtocolStatus
         if(flipper_format_read_uint32(flipper_format, "CRC", &temp, 1)) {
             instance->crc = (uint8_t)temp;
         }
+
+        // [ROLLING_CNT] Read Serial/Btn/Cnt so get_string shows the current values,
+        // in particular the incremented counter the encoder re-wrote before the UI
+        // refresh. (The decoder's live-decode path fills these from the frame; on
+        // the transmitter refresh they only live in the fff.)
+        flipper_format_rewind(flipper_format);
+        if(flipper_format_read_uint32(flipper_format, "Serial", &temp, 1)) {
+            instance->generic.serial = temp;
+        }
+        flipper_format_rewind(flipper_format);
+        if(flipper_format_read_uint32(flipper_format, "Btn", &temp, 1)) {
+            instance->generic.btn = (uint8_t)temp;
+        }
+        flipper_format_rewind(flipper_format);
+        if(flipper_format_read_uint32(flipper_format, "Cnt", &temp, 1)) {
+            instance->generic.cnt = temp;
+        }
     }
 
     return ret;
@@ -812,12 +842,43 @@ static const char* subghz_protocol_kia_v3_v4_get_name_button(uint8_t btn) {
     }
 }
 
+// [PROTOPIRATE_PORT] custom_btn UI support
+// Map the current D-pad selection to a Kia V3/V4 button code, mirroring the
+// encoder remap (see encoder deserialize): Up=Lock(0x1), Down=Unlock(0x2),
+// Left=Trunk(0x3), Right=Panic(0x4), OK=captured.
+static uint8_t kia_v3_v4_ui_button(uint8_t custom, uint8_t original_btn) {
+    switch(custom) {
+    case SUBGHZ_CUSTOM_BTN_UP:
+        return 0x1U; // Lock
+    case SUBGHZ_CUSTOM_BTN_DOWN:
+        return 0x2U; // Unlock
+    case SUBGHZ_CUSTOM_BTN_LEFT:
+        return 0x3U; // Trunk
+    case SUBGHZ_CUSTOM_BTN_RIGHT:
+        return 0x4U; // Panic
+    case SUBGHZ_CUSTOM_BTN_OK:
+    default:
+        return original_btn;
+    }
+}
+
 void subghz_protocol_decoder_kia_v3_v4_get_string(void* context, FuriString* output) {
     furi_assert(context);
     SubGhzProtocolDecoderKiaV3V4* instance = context;
 
     uint32_t key_hi = (uint32_t)(instance->generic.data >> 32);
     uint32_t key_lo = (uint32_t)(instance->generic.data & 0xFFFFFFFF);
+
+    // [BUGFIX UI] Re-derive the displayed button from the current D-pad
+    // selection so the transmitter UI reflects subghz_custom_btn_get() (like
+    // psa.c/star_line.c). CRC shown is the captured frame's CRC (no OK/BAD flag);
+    // the encoder recomputes the real CRC for the transmitted button.
+    subghz_custom_btn_set_max(4);
+    uint8_t display_btn = (uint8_t)instance->generic.btn;
+    uint8_t custom_btn_id = subghz_custom_btn_get();
+    if(custom_btn_id != SUBGHZ_CUSTOM_BTN_OK) {
+        display_btn = kia_v3_v4_ui_button(custom_btn_id, (uint8_t)instance->generic.btn);
+    }
 
     furi_string_cat_printf(
         output,
@@ -830,7 +891,7 @@ void subghz_protocol_decoder_kia_v3_v4_get_string(void* context, FuriString* out
         key_hi,
         key_lo,
         instance->generic.serial,
-        subghz_protocol_kia_v3_v4_get_name_button(instance->generic.btn),
+        subghz_protocol_kia_v3_v4_get_name_button(display_btn),
         instance->crc,
         instance->generic.cnt);
 }

@@ -405,6 +405,16 @@ SubGhzProtocolStatus
             instance->generic.btn &= 0x0FU;
         }
 
+        // [ROLLING_CNT] Forward-encode the NEXT counter (like VAG/PSA) so the
+        // transmitter UI shows an incrementing counter on each OK/D-pad press. The
+        // Key is re-encoded from this cnt below and both Key + Cnt are persisted, so
+        // the decoder shows the advanced value on the UI refresh.
+        {
+            uint32_t mult = furi_hal_subghz_get_rolling_counter_mult();
+            if(mult == 0U) mult = 1U;
+            instance->generic.cnt = (instance->generic.cnt + mult) & 0xFFFFU;
+        }
+
         instance->generic.data = kia_v7_encode_key(
             instance->fixed_high_byte,
             instance->generic.serial,
@@ -432,6 +442,15 @@ SubGhzProtocolStatus
         kia_v7_u64_to_bytes_be(instance->generic.data, key_data);
         if(!flipper_format_update_hex(flipper_format, "Key", key_data, sizeof(key_data))) {
             break;
+        }
+
+        // [ROLLING_CNT] Persist the advanced counter so the decoder deserialize (which
+        // reads "Cnt" and would otherwise overwrite the Key-derived cnt with a stale
+        // value) shows the incremented counter on the UI refresh.
+        {
+            flipper_format_rewind(flipper_format);
+            uint32_t cnt_store = instance->generic.cnt;
+            flipper_format_insert_or_update_uint32(flipper_format, "Cnt", &cnt_store, 1);
         }
 
         instance->encoder.is_running = true;
@@ -631,6 +650,29 @@ void kia_protocol_decoder_v7_get_string(void* context, FuriString* output) {
     SubGhzProtocolDecoderKiaV7* instance = context;
     kia_v7_decode_key_decoder(instance);
 
+    // [BUGFIX UI] Re-derive the displayed button from the current D-pad
+    // selection so the transmitter UI reflects subghz_custom_btn_get() (like
+    // psa.c/star_line.c), mirroring the encoder remap (see encoder deserialize):
+    // Up=Lock(0x1), Down=Unlock(0x2), Left=Trunk(0x3), OK=captured. CRC shown is
+    // the captured frame's; the encoder recomputes the real CRC for the TX button.
+    subghz_custom_btn_set_max(4);
+    uint8_t display_btn = (uint8_t)(instance->decoded_button & 0x0FU);
+    switch(subghz_custom_btn_get()) {
+    case SUBGHZ_CUSTOM_BTN_UP:
+        display_btn = 0x01U; // Lock
+        break;
+    case SUBGHZ_CUSTOM_BTN_DOWN:
+        display_btn = 0x02U; // Unlock
+        break;
+    case SUBGHZ_CUSTOM_BTN_LEFT:
+        display_btn = 0x03U; // Trunk
+        break;
+    case SUBGHZ_CUSTOM_BTN_OK:
+    case SUBGHZ_CUSTOM_BTN_RIGHT:
+    default:
+        break;
+    }
+
     furi_string_cat_printf(
         output,
         "%s %dbit\r\n"
@@ -641,7 +683,7 @@ void kia_protocol_decoder_v7_get_string(void* context, FuriString* output) {
         instance->generic.data_count_bit,
         instance->generic.data,
         instance->generic.serial & 0x0FFFFFFFU,
-        kia_v7_get_button_name(instance->decoded_button),
+        kia_v7_get_button_name(display_btn),
         instance->crc_calculated,
         instance->generic.cnt & 0xFFFFU,
         instance->crc_valid ? "OK" : "ERR");

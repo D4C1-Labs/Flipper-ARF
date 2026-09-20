@@ -29,7 +29,7 @@ static const SubGhzBlockConst kia_protocol_v0_const = {
 #define KIA_V0_SUZUKI_GAP      2000U
 #define KIA_V0_SUZUKI_GAP_SPAN 500U
 
-#define KIA_V0_TYPE1_SYNC           750U
+#define KIA_V0_TYPE1_SYNC                750U
 #define KIA_V0_TYPE1_PREAMBLE_PAIRS      0x13FU
 #define KIA_V0_TYPE2_PREAMBLE_PAIRS      0x140U
 #define KIA_V0_TAIL_PREAMBLE_PAIRS       0x0FU
@@ -37,7 +37,7 @@ static const SubGhzBlockConst kia_protocol_v0_const = {
 #define KIA_V0_MITSU_PREAMBLE_MIN        72U
 #define KIA_V0_MITSU_PREAMBLE_MAX        88U
 
-#define KIA_V0_UPLOAD_CAPACITY                                                          \
+#define KIA_V0_UPLOAD_CAPACITY                                                       \
     ((KIA_V0_TYPE2_PREAMBLE_PAIRS * 2U) + 2U + (KIA_V0_BIT_COUNT_SUZUKI * 2U) + 3U + \
      (KIA_V0_MITSU_TAIL_PREAMBLE_PAIRS * 2U) + (KIA_V0_BIT_COUNT_SUZUKI * 2U) + 4U)
 _Static_assert(

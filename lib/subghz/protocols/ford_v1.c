@@ -849,6 +849,26 @@ static const char* ford_v1_get_button_name(uint8_t btn) {
     }
 }
 
+// [PROTOPIRATE_PORT] custom_btn UI support
+// Map the current D-pad selection to a Ford V1 button code, mirroring the encoder
+// remap (see encoder deserialize): Up=Unlock(0x2), Down=Panic(0x8), Left=Lock(0x1),
+// Right=Trunk(0x4), OK=captured.
+static uint8_t ford_v1_ui_button(uint8_t custom, uint8_t original_btn) {
+    switch(custom) {
+    case SUBGHZ_CUSTOM_BTN_UP:
+        return 0x02U; // Unlock
+    case SUBGHZ_CUSTOM_BTN_DOWN:
+        return 0x08U; // Panic
+    case SUBGHZ_CUSTOM_BTN_LEFT:
+        return 0x01U; // Lock
+    case SUBGHZ_CUSTOM_BTN_RIGHT:
+        return 0x04U; // Trunk
+    case SUBGHZ_CUSTOM_BTN_OK:
+    default:
+        return original_btn;
+    }
+}
+
 void subghz_protocol_decoder_ford_v1_get_string(void* context, FuriString* output) {
     furi_check(context);
     SubGhzProtocolDecoderFordV1* instance = context;
@@ -870,6 +890,18 @@ void subghz_protocol_decoder_ford_v1_get_string(void* context, FuriString* outpu
         uint16_t check_crc = ford_v1_crc16(&raw[3], 12);
         crc_ok = (check_crc == calc_crc);
 
+        // [BUGFIX UI] Re-derive the displayed button from the current D-pad
+        // selection so the transmitter UI reflects subghz_custom_btn_get() (like
+        // psa.c/star_line.c). Only meaningful when encryption is supported (the
+        // encoder can only forward-encode a changed button then). The CRC shown
+        // is the captured frame's; the encoder recomputes it for the TX button.
+        subghz_custom_btn_set_max(4);
+        uint8_t display_btn = (uint8_t)(instance->generic.btn & 0x0FU);
+        uint8_t custom_btn_id = subghz_custom_btn_get();
+        if(custom_btn_id != SUBGHZ_CUSTOM_BTN_OK) {
+            display_btn = ford_v1_ui_button(custom_btn_id, (uint8_t)(instance->generic.btn & 0x0FU));
+        }
+
         furi_string_cat_printf(
             output,
             "%s %dbit\r\n"
@@ -881,7 +913,7 @@ void subghz_protocol_decoder_ford_v1_get_string(void* context, FuriString* outpu
             instance->generic.data_count_bit,
             (unsigned long long)key1,
             (unsigned long)instance->generic.serial,
-            ford_v1_get_button_name(instance->generic.btn),
+            ford_v1_get_button_name(display_btn),
             (unsigned long)crc16,
             (unsigned long)instance->generic.cnt,
             crc_ok ? "OK" : "ERR");
@@ -977,46 +1009,51 @@ static void ford_v1_encoder_keys_from_raw(SubGhzProtocolEncoderFordV1* instance)
     instance->crc_calc = (uint16_t)(((uint16_t)raw[15] << 8) | raw[16]);
 }
 
-__attribute__((weak)) bool subghz_block_generic_global_counter_override_get(uint32_t* cnt_p) {
-    UNUSED(cnt_p);
-    return false;
-}
+// [ROLLING_CNT] Weak fallback no longer needed here (the real symbol lives in
+// blocks/generic.c and the counter is advanced inline below). Commented out.
+// __attribute__((weak)) bool subghz_block_generic_global_counter_override_get(uint32_t* cnt_p) {
+//     UNUSED(cnt_p);
+//     return false;
+// }
 
-static uint32_t ford_v1_encoder_preset_hop_read_stub(void) {
-    return 0;
-}
-
-static void ford_v1_encoder_apply_counter_cap(uint32_t* cnt_p, uint32_t cap) {
-    uint32_t ee = ford_v1_encoder_preset_hop_read_stub();
-    if(ee == 0x80000001u) {
-        uint32_t u3 = *cnt_p;
-        uint32_t r2 = u3 + 1u;
-        if(r2 > cap) {
-            *cnt_p = 0;
-            return;
-        }
-        if(u3 == 0u) {
-            *cnt_p = r2;
-            return;
-        }
-        uint32_t capm1 = cap - 1u;
-        if(u3 == capm1) {
-            *cnt_p = capm1;
-            return;
-        }
-        *cnt_p = r2;
-        return;
-    }
-    if(subghz_block_generic_global_counter_override_get(cnt_p)) {
-        return;
-    }
-    uint32_t sum = ee + *cnt_p;
-    if(sum <= cap) {
-        *cnt_p = sum;
-        return;
-    }
-    *cnt_p = 0;
-}
+// [ROLLING_CNT] The counter is now advanced inline in the encoder deserialize
+// using furi_hal_subghz_get_rolling_counter_mult() (see below), so these two
+// helpers are unused. Commented out to avoid -Wunused-function.
+// static uint32_t ford_v1_encoder_preset_hop_read_stub(void) {
+//     return 0;
+// }
+//
+// static void ford_v1_encoder_apply_counter_cap(uint32_t* cnt_p, uint32_t cap) {
+//     uint32_t ee = ford_v1_encoder_preset_hop_read_stub();
+//     if(ee == 0x80000001u) {
+//         uint32_t u3 = *cnt_p;
+//         uint32_t r2 = u3 + 1u;
+//         if(r2 > cap) {
+//             *cnt_p = 0;
+//             return;
+//         }
+//         if(u3 == 0u) {
+//             *cnt_p = r2;
+//             return;
+//         }
+//         uint32_t capm1 = cap - 1u;
+//         if(u3 == capm1) {
+//             *cnt_p = capm1;
+//             return;
+//         }
+//         *cnt_p = r2;
+//         return;
+//     }
+//     if(subghz_block_generic_global_counter_override_get(cnt_p)) {
+//         return;
+//     }
+//     uint32_t sum = ee + *cnt_p;
+//     if(sum <= cap) {
+//         *cnt_p = sum;
+//         return;
+//     }
+//     *cnt_p = 0;
+// }
 
 static void ford_v1_encoder_patch_key1_low_bits(SubGhzProtocolEncoderFordV1* instance) {
     uint64_t k = instance->generic.data;
@@ -1231,7 +1268,16 @@ SubGhzProtocolStatus
         {
             uint8_t btn_rf = (uint8_t)(instance->generic.btn & 0x0FU);
 
-            ford_v1_encoder_apply_counter_cap(&instance->generic.cnt, 0xFFFFFU);
+            // [ROLLING_CNT] Forward-encode the NEXT counter (like VAG/PSA) so the
+            // transmitter UI shows an incrementing counter on each OK/D-pad press.
+            // (The old ford_v1_encoder_apply_counter_cap() relied on a stub that
+            // returned 0 and never advanced.) The raw frame is rebuilt from this cnt
+            // below and "Cnt" is persisted (L~1298), so the decoder shows the advance.
+            {
+                uint32_t mult = furi_hal_subghz_get_rolling_counter_mult();
+                if(mult == 0U) mult = 1U;
+                instance->generic.cnt = (instance->generic.cnt + mult) & 0xFFFFFU;
+            }
 
             uint8_t work[9];
             memcpy(work, instance->plain9, 9);

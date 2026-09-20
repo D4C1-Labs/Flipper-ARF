@@ -335,6 +335,25 @@ void subghz_protocol_decoder_suzuki_get_string(void *context, FuriString *output
     SubGhzProtocolDecoderSuzuki *instance = context;
     
     uint64_t data = instance->generic.data;
+
+    // [BUGFIX UI+CRC] Re-derive the displayed button from the current D-pad
+    // selection so the transmitter UI reflects subghz_custom_btn_get() (like
+    // psa.c/star_line.c). Rebuild the key with the selected button (bits 12..15)
+    // and recompute the CRC-8 (bits 4..11) so both the button and CRC shown match
+    // the frame the encoder will transmit, mirroring its remap.
+    subghz_custom_btn_set_max(4);
+    uint8_t display_btn = (uint8_t)(instance->generic.btn & 0x0FU);
+    uint8_t custom_btn_id = subghz_custom_btn_get();
+    if(custom_btn_id != SUBGHZ_CUSTOM_BTN_OK) {
+        display_btn = suzuki_custom_to_btn(custom_btn_id);
+    }
+
+    if(display_btn != (uint8_t)(instance->generic.btn & 0x0FU)) {
+        data = (data & ~((uint64_t)0xFULL << 12)) | ((uint64_t)(display_btn & 0xF) << 12);
+        uint8_t new_crc = suzuki_calculate_crc(data);
+        data = (data & ~((uint64_t)0xFFULL << 4)) | ((uint64_t)new_crc << 4);
+    }
+
     uint32_t key_high = (data >> 32) & 0xFFFFFFFF;
     uint32_t key_low = data & 0xFFFFFFFF;
     uint8_t received_crc = (data >> 4) & 0xFF;
@@ -353,7 +372,7 @@ void subghz_protocol_decoder_suzuki_get_string(void *context, FuriString *output
         key_high,
         key_low,
         instance->generic.serial,
-        suzuki_get_button_name(instance->generic.btn),
+        suzuki_get_button_name(display_btn),
         received_crc,
         crc_valid ? "OK" : "ERR",
         instance->generic.cnt);

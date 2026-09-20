@@ -662,12 +662,42 @@ uint8_t subghz_protocol_decoder_honda_static_get_hash_data(void* context) {
                      (data >> 40U) ^ (data >> 48U) ^ (data >> 56U));
 }
 
+// [PROTOPIRATE_PORT] custom_btn UI support
+// Map the current D-pad selection to a Honda Static button code, mirroring the
+// encoder remap (see encoder deserialize): Up=0x1, Down=0x4, Left=0x8, Right=0x5,
+// OK=captured.
+static uint8_t honda_static_ui_button(uint8_t custom, uint8_t original_btn) {
+    switch(custom) {
+    case SUBGHZ_CUSTOM_BTN_UP:
+        return 0x1U;
+    case SUBGHZ_CUSTOM_BTN_DOWN:
+        return 0x4U;
+    case SUBGHZ_CUSTOM_BTN_LEFT:
+        return 0x8U;
+    case SUBGHZ_CUSTOM_BTN_RIGHT:
+        return 0x5U;
+    case SUBGHZ_CUSTOM_BTN_OK:
+    default:
+        return original_btn;
+    }
+}
+
 void subghz_protocol_decoder_honda_static_get_string(void* context, FuriString* output) {
     furi_check(context);
 
     SubGhzProtocolDecoderHondaStatic* instance = context;
     HondaStaticFields decoded;
     honda_static_unpack_compact(instance->generic.data, &decoded);
+
+    // [BUGFIX UI] Re-derive the displayed button from the current D-pad selection
+    // so the transmitter UI reflects subghz_custom_btn_get() (like psa.c/star_line.c),
+    // reusing the encoder mapping (honda_static_ui_button).
+    subghz_custom_btn_set_max(5);
+    uint8_t display_btn = decoded.button;
+    uint8_t custom_btn_id = subghz_custom_btn_get();
+    if(custom_btn_id != SUBGHZ_CUSTOM_BTN_OK) {
+        display_btn = honda_static_ui_button(custom_btn_id, decoded.button);
+    }
 
     furi_string_printf(
         output,
@@ -679,7 +709,7 @@ void subghz_protocol_decoder_honda_static_get_string(void* context, FuriString* 
         instance->generic.data_count_bit,
         (unsigned long long)instance->generic.data,
         (unsigned long)decoded.serial,
-        honda_static_button_name(decoded.button),
+        honda_static_button_name(display_btn),
         (unsigned long)decoded.counter);
 }
 

@@ -939,7 +939,26 @@ SubGhzProtocolStatus
             kia_v0_custom_to_btn(custom_btn_id, instance->type, original_btn);
     }
 
+    // [ROLLING_CNT] Forward-encode the NEXT counter (like VAG/PSA) so the
+    // transmitter UI shows an incrementing counter on each OK/D-pad press.
+    {
+        uint32_t mult = furi_hal_subghz_get_rolling_counter_mult();
+        if(mult == 0U) mult = 1U;
+        instance->generic.cnt = (instance->generic.cnt + mult) & 0xFFFFU;
+    }
+
     kia_v0_encoder_sync_from_generic(instance);
+
+    // [ROLLING_CNT] Persist the advanced Cnt so the UI refresh (kia_v0's decoder
+    // deserialize reads "Cnt" directly, then rebuilds the Key from it) shows the
+    // incremented counter and the next TX continues from the advanced value. The
+    // Key is intentionally NOT rewritten here: it is stored with a type-specific
+    // bit width and the decoder reconstructs it from Serial/Btn/Cnt anyway.
+    {
+        flipper_format_rewind(flipper_format);
+        uint32_t cnt_store = instance->generic.cnt;
+        flipper_format_insert_or_update_uint32(flipper_format, "Cnt", &cnt_store, 1);
+    }
 
     instance->encoder.front = 0;
     instance->encoder.is_running = true;
@@ -1358,6 +1377,18 @@ void subghz_protocol_decoder_kia_get_string(void* context, FuriString* output) {
     KiaV0Fields fields;
     kia_v0_parse_data(&instance->generic, instance->type, &fields, &instance->packet_bit_count);
 
+    // [BUGFIX UI] Re-derive the displayed button from the current D-pad
+    // selection so the transmitter UI reflects subghz_custom_btn_get() (like
+    // psa.c/star_line.c), reusing the same mapping as the encoder
+    // (kia_v0_custom_to_btn). CRC shown is the captured frame's CRC; the encoder
+    // recomputes the real CRC for the transmitted button.
+    subghz_custom_btn_set_max((instance->type == KIA_V0_TYPE_HONDA) ? 7 : 4);
+    uint8_t display_btn = fields.button;
+    uint8_t custom_btn_id = subghz_custom_btn_get();
+    if(custom_btn_id != SUBGHZ_CUSTOM_BTN_OK) {
+        display_btn = kia_v0_custom_to_btn(custom_btn_id, instance->type, fields.button);
+    }
+
     // [PROTOPIRATE_PORT] Honda serial is 24-bit (6 hex), others 28-bit (7 hex)
     const char* sn_fmt =
         (instance->type == KIA_V0_TYPE_HONDA) ?
@@ -1370,7 +1401,7 @@ void subghz_protocol_decoder_kia_get_string(void* context, FuriString* output) {
         instance->packet_bit_count,
         (unsigned long long)instance->generic.data,
         (unsigned long)fields.serial,
-        kia_v0_button_name(fields.button, instance->type),
+        kia_v0_button_name(display_btn, instance->type),
         fields.crc,
         fields.crc_valid ? "OK" : "ERR",
         fields.counter);

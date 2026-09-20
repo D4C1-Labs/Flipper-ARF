@@ -182,6 +182,27 @@ static const char* fiat_v1_button_name(uint8_t button) {
     }
 }
 
+// [PROTOPIRATE_PORT] custom_btn UI support
+// Maps the current D-pad selection to the Fiat V1 button code, mirroring the
+// encoder remap (see encoder deserialize): Up=0x8, Down=0x4, Left=0x2,
+// Right=0x1, OK=captured. Used by get_string so the transmitter UI shows the
+// button the user actually selected, not the captured one.
+static uint8_t fiat_v1_custom_to_btn(uint8_t custom, uint8_t original_btn) {
+    switch(custom) {
+    case SUBGHZ_CUSTOM_BTN_UP:
+        return 0x8U; // Unlock
+    case SUBGHZ_CUSTOM_BTN_DOWN:
+        return 0x4U; // Lock
+    case SUBGHZ_CUSTOM_BTN_LEFT:
+        return 0x2U; // Trunk
+    case SUBGHZ_CUSTOM_BTN_RIGHT:
+        return 0x1U; // Close
+    case SUBGHZ_CUSTOM_BTN_OK:
+    default:
+        return original_btn;
+    }
+}
+
 static uint8_t fiat_v1_frame_xor(const uint8_t raw[FIAT_V1_WIRE_BYTES]) {
     uint8_t value = 0x01U;
     for(uint8_t i = 0U; i < FIAT_V1_WIRE_BYTES - 1U; i++) {
@@ -797,6 +818,18 @@ SubGhzProtocolStatus
         }
     }
 
+    // [ROLLING_CNT] Forward-encode the NEXT counter (like VAG/PSA) so the
+    // transmitter UI shows an incrementing counter on each OK/D-pad press. Only
+    // meaningful when a Hitag2 key is available (we re-encode a fresh valid
+    // frame); the no-key branch is replay-only and must not advance. The advanced
+    // Raw frame is written back to the fff below so the decoder re-derives the new
+    // counter on the UI refresh.
+    if(key_loaded) {
+        uint32_t mult = furi_hal_subghz_get_rolling_counter_mult();
+        if(mult == 0U) mult = 1U;
+        control = (control + mult) & 0x03FFU;
+    }
+
     control &= 0x03FFU;
     button &= 0x0FU;
     instance->generic.serial = serial;
@@ -821,6 +854,16 @@ SubGhzProtocolStatus
             instance->hop,
             instance->tail_bits);
         instance->frame_xor = instance->raw_data[12];
+
+        // [ROLLING_CNT] Persist the advanced frame so the UI refresh
+        // (decoder deserialize reads "Raw") shows the incremented counter, and the
+        // next TX continues from here.
+        flipper_format_rewind(flipper_format);
+        flipper_format_insert_or_update_hex(
+            flipper_format, FIAT_V1_RAW_FIELD, instance->raw_data, FIAT_V1_WIRE_BYTES);
+        flipper_format_rewind(flipper_format);
+        uint32_t cnt_store = control;
+        flipper_format_insert_or_update_uint32(flipper_format, "Cnt", &cnt_store, 1);
     } else {
         // NO KEY: byte-identical REPLAY of the captured frame. The key is only
         // needed to synthesize the NEXT signal (changed button / advanced
@@ -1082,6 +1125,18 @@ void subghz_protocol_decoder_fiat_v1_get_string(void* context, FuriString* outpu
     // Key line: the 6-byte hitag2 key recovered by the Hitag2Hell attack, or
     // "?" when it has not been recovered yet (capture without a matching key).
     if(instance->hitag2_key_valid) {
+        // [BUGFIX UI] Re-derive the displayed button from the current D-pad
+        // selection. This get_string is what draws the transmitter UI, so it
+        // must reflect subghz_custom_btn_get() (like psa.c/star_line.c),
+        // otherwise the label always showed the captured button. The D-pad is
+        // only meaningful when the Hitag2 key is available (the encoder can only
+        // forward-encode a changed button then), so we only remap in this branch.
+        subghz_custom_btn_set_max(4);
+        uint8_t display_btn = instance->generic.btn;
+        uint8_t custom = subghz_custom_btn_get();
+        if(custom != SUBGHZ_CUSTOM_BTN_OK) {
+            display_btn = fiat_v1_custom_to_btn(custom, instance->generic.btn);
+        }
         furi_string_cat_printf(
             output,
             "%s %ubit\r\n"
@@ -1097,7 +1152,7 @@ void subghz_protocol_decoder_fiat_v1_get_string(void* context, FuriString* outpu
             instance->hitag2_key[4],
             instance->hitag2_key[5],
             (unsigned long)instance->generic.serial,
-            fiat_v1_button_name(instance->generic.btn),
+            fiat_v1_button_name(display_btn),
             (unsigned long)instance->generic.cnt);
     } else {
         furi_string_cat_printf(

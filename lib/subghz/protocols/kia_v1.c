@@ -290,6 +290,17 @@ SubGhzProtocolStatus
             }
         }
 
+        // [ROLLING_CNT] Forward-encode the NEXT counter (like VAG/PSA) so the
+        // transmitter UI shows an incrementing counter on each OK/D-pad press.
+        // get_upload() below re-packs serial/btn/cnt/crc into generic.data, so we
+        // just advance generic.cnt first; then persist the new Key + Cnt so the UI
+        // refresh (decoder re-derives cnt from the Key) shows the advance.
+        {
+            uint32_t mult = furi_hal_subghz_get_rolling_counter_mult();
+            if(mult == 0U) mult = 1U;
+            instance->generic.cnt = (instance->generic.cnt + mult) & 0xFFFU;
+        }
+
         instance->encoder.repeat = 10;
 
         if(instance->encoder.upload == NULL) {
@@ -298,6 +309,21 @@ SubGhzProtocolStatus
                 malloc(instance->encoder.size_upload * sizeof(LevelDuration));
         }
         subghz_protocol_encoder_kia_v1_get_upload(instance);
+
+        // [ROLLING_CNT] Persist the advanced Key (re-packed by get_upload) and Cnt.
+        // The "Key" field is always 8 bytes big-endian (see block_generic_serialize),
+        // so a fixed 8-byte update matches the on-disk format for any bit width.
+        {
+            uint8_t key_data[8];
+            for(int i = 0; i < 8; i++) {
+                key_data[i] = (uint8_t)((instance->generic.data >> (56 - 8 * i)) & 0xFF);
+            }
+            flipper_format_rewind(flipper_format);
+            flipper_format_update_hex(flipper_format, "Key", key_data, 8);
+            flipper_format_rewind(flipper_format);
+            uint32_t cnt_store = instance->generic.cnt;
+            flipper_format_insert_or_update_uint32(flipper_format, "Cnt", &cnt_store, 1);
+        }
 
         instance->encoder.is_running = true;
 
@@ -533,13 +559,71 @@ static const char* subghz_protocol_kia_v1_get_name_button(uint8_t btn) {
     return name;
 }
 
+// [PROTOPIRATE_PORT] custom_btn UI support
+// Map the current D-pad selection to a Kia V1 button code, mirroring the encoder
+// remap (see decoder deserialize): Up=Lock(0x1), Down=Unlock(0x2), Left=Trunk(0x3),
+// Right/OK=captured.
+static uint8_t kia_v1_ui_button(uint8_t custom, uint8_t original_btn) {
+    switch(custom) {
+    case SUBGHZ_CUSTOM_BTN_UP:
+        return 0x1U; // Lock
+    case SUBGHZ_CUSTOM_BTN_DOWN:
+        return 0x2U; // Unlock
+    case SUBGHZ_CUSTOM_BTN_LEFT:
+        return 0x3U; // Trunk
+    case SUBGHZ_CUSTOM_BTN_RIGHT:
+    case SUBGHZ_CUSTOM_BTN_OK:
+    default:
+        return original_btn;
+    }
+}
+
 void subghz_protocol_decoder_kia_v1_get_string(void* context, FuriString* output) {
     furi_assert(context);
     SubGhzProtocolDecoderKiaV1* instance = context;
 
     subghz_protocol_kia_v1_check_remote_controller(instance);
-    uint32_t code_found_hi = instance->generic.data >> 32;
-    uint32_t code_found_lo = instance->generic.data & 0xFFFFFFFF;
+
+    // [BUGFIX UI+CRC] Re-derive the displayed button from the current D-pad
+    // selection so the transmitter UI reflects subghz_custom_btn_get() (like
+    // psa.c/star_line.c). Rebuild the key with the selected button and recompute
+    // the CRC over it so both the button and CRC shown match the frame the
+    // encoder will actually transmit (avoids a stale "WRONG" CRC after a change).
+    subghz_custom_btn_set_max(4);
+    uint8_t display_btn = (uint8_t)instance->generic.btn;
+    uint8_t custom_btn_id = subghz_custom_btn_get();
+    if(custom_btn_id != SUBGHZ_CUSTOM_BTN_OK) {
+        display_btn = kia_v1_ui_button(custom_btn_id, (uint8_t)(instance->generic.btn & 0x0FU));
+    }
+
+    uint64_t display_data = instance->generic.data;
+    uint8_t display_crc = instance->crc;
+    bool display_crc_ok = instance->crc_check;
+    if(display_btn != (uint8_t)instance->generic.btn) {
+        // Inject the selected button into the key and recompute the CRC-4.
+        display_data = (display_data & ~((uint64_t)0xFFULL << 16)) |
+                       ((uint64_t)display_btn << 16);
+
+        uint32_t serial = (uint32_t)(display_data >> 24);
+        uint16_t cnt = (uint16_t)((((display_data >> 4) & 0xF) << 8) |
+                                  ((display_data >> 8) & 0xFF));
+        uint8_t cnt_high = (cnt >> 8) & 0xF;
+        uint8_t char_data[7];
+        char_data[0] = (serial >> 24) & 0xFF;
+        char_data[1] = (serial >> 16) & 0xFF;
+        char_data[2] = (serial >> 8) & 0xFF;
+        char_data[3] = serial & 0xFF;
+        char_data[4] = display_btn;
+        char_data[5] = cnt & 0xFF;
+        char_data[6] = cnt_high;
+        display_crc = kia_v1_crc4(char_data, 7, 1);
+        // Place the fresh CRC into the low nibble so the displayed key is valid.
+        display_data = (display_data & ~((uint64_t)0xFULL)) | (display_crc & 0xF);
+        display_crc_ok = true;
+    }
+
+    uint32_t code_found_hi = display_data >> 32;
+    uint32_t code_found_lo = display_data & 0xFFFFFFFF;
 
     furi_string_cat_printf(
         output,
@@ -552,8 +636,8 @@ void subghz_protocol_decoder_kia_v1_get_string(void* context, FuriString* output
         code_found_hi,
         code_found_lo,
         instance->generic.serial,
-        subghz_protocol_kia_v1_get_name_button(instance->generic.btn),
-        instance->crc,
-        instance->crc_check ? "OK" : "WRONG",
+        subghz_protocol_kia_v1_get_name_button(display_btn),
+        display_crc,
+        display_crc_ok ? "OK" : "WRONG",
         instance->generic.cnt);
 }

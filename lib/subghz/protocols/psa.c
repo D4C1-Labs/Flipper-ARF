@@ -19,6 +19,7 @@ static const SubGhzBlockConst subghz_protocol_psa_const = {
 
 #define PSA_TE_SHORT_125 0x7d
 #define PSA_TE_LONG_250 0xfa
+#define PSA_TE_LONG_300 0x12c
 #define PSA_TE_END_1000 1000
 #define PSA_TE_END_500 500
 #define PSA_TOLERANCE_99 99
@@ -30,6 +31,16 @@ static const SubGhzBlockConst subghz_protocol_psa_const = {
 #define PSA_MAX_BITS 0x79
 #define PSA_KEY1_BITS 0x40
 #define PSA_KEY2_BITS 0x50
+
+// Adaptive AM (OOK) demod tuning (ported from psa.js). The AM preamble is a
+// Manchester square wave whose half-bit varies by model (te ~65..125us); we
+// measure it adaptively and realign the frame afterwards.
+#define PSA_AM_PRE_MIN 60          // widest accepted preamble half-bit
+#define PSA_AM_PRE_MAX 200         // half-bit upper bound (covers 175us jitter)
+#define PSA_AM_PRE_THRESHOLD 8     // good half-bit pulses required to lock
+#define PSA_AM_PRE_GLITCH_DECAY 2  // counter penalty per out-of-band glitch
+#define PSA_AM_PRE_MAX_GLITCH 3    // consecutive glitches tolerated before reset
+#define PSA_AM_RESYNC_BITS 8       // stray pulse within first N bits -> resync
 
 #define TEA_DELTA 0x9E3779B9U
 #define TEA_ROUNDS 32
@@ -150,6 +161,12 @@ struct SubGhzProtocolDecoderPSA {
     uint32_t te_sum;
     uint16_t te_count;
     uint32_t te_detected;
+
+    // Adaptive AM (OOK) demod state (ported from psa.js).
+    uint8_t pre_glitch;      // consecutive preamble glitches tolerated
+    uint8_t am_await_high;   // skip the wake-up marker before Manchester data
+    uint8_t am_bits[96];     // raw decoded Manchester bit buffer for realignment
+    uint8_t am_bits_len;     // number of valid bits in am_bits
 };
 
 struct SubGhzProtocolEncoderPSA {
@@ -637,6 +654,13 @@ void subghz_protocol_decoder_psa_reset(void* context) {
     instance->decrypted_crc = 0;
     instance->decrypted_seed = 0;
     instance->decrypted_type = 0;
+
+    instance->pre_glitch = 0;
+    instance->am_await_high = 0;
+    instance->am_bits_len = 0;
+    instance->te_sum = 0;
+    instance->te_count = 0;
+    instance->te_detected = 0;
 }
 
 #define PSA_FIRE_CALLBACK_IF_NEW(instance)                                          \
@@ -651,6 +675,158 @@ void subghz_protocol_decoder_psa_reset(void* context) {
             }                                                                        \
         }                                                                            \
     } while(0)
+
+// ---- Adaptive AM (OOK) helpers (ported from psa.js) ----------------------
+
+// Append a decoded Manchester bit to the raw AM bit buffer (for later frame
+// realignment) AND into the streaming decode accumulator (key1 latch at 64).
+static void psa_add_am_bit(SubGhzProtocolDecoderPSA* instance, uint8_t bit) {
+    bit = bit ? 1 : 0;
+    // Buffer, dropping the oldest bit when full (mirrors JS am_bits cap of 96).
+    if(instance->am_bits_len >= 96) {
+        for(uint8_t i = 1; i < 96; i++) {
+            instance->am_bits[i - 1] = instance->am_bits[i];
+        }
+        instance->am_bits[95] = bit;
+    } else {
+        instance->am_bits[instance->am_bits_len++] = bit;
+    }
+    // Streaming accumulator with key1 latch at KEY1_BITS.
+    uint32_t carry = (instance->decode_data_low >> 31) & 1;
+    instance->decode_data_low = (instance->decode_data_low << 1) | bit;
+    instance->decode_data_high = (instance->decode_data_high << 1) | carry;
+    instance->decode_count_bit++;
+    if(instance->decode_count_bit == PSA_KEY1_BITS) {
+        instance->key1_low = instance->decode_data_low;
+        instance->key1_high = instance->decode_data_high;
+        instance->decode_data_low = 0;
+        instance->decode_data_high = 0;
+    }
+}
+
+// Build key1_high/key1_low/key2_low from am_bits at a given start offset.
+// Returns true (and fills the out params + sync nibble) if enough bits exist.
+static bool psa_am_frame_at(
+    const SubGhzProtocolDecoderPSA* instance,
+    uint8_t off,
+    uint32_t* hi,
+    uint32_t* lo,
+    uint32_t* k2,
+    uint8_t* nib) {
+    if(instance->am_bits_len < off + 80) return false;
+    uint32_t h = 0, l = 0, k = 0;
+    uint8_t i;
+    for(i = 0; i < 32; i++) h = (h << 1) | instance->am_bits[off + i];
+    for(i = 32; i < 64; i++) l = (l << 1) | instance->am_bits[off + i];
+    for(i = 64; i < 80; i++) k = (k << 1) | instance->am_bits[off + i];
+    *hi = h;
+    *lo = l;
+    *k2 = k;
+    *nib = (uint8_t)((h >> 16) & 0xF);
+    return true;
+}
+
+// A genuine PSA key1 (8 bytes) has several distinct byte values. Preamble/noise
+// windows that happen to pass the 0xA sync nibble tend to be highly repetitive
+// (all-AA / all-55 / all-FF), so require >= 4 distinct bytes to reject them.
+static bool psa_am_varied(uint32_t hi, uint32_t lo) {
+    uint8_t vals[8] = {
+        (uint8_t)((hi >> 24) & 0xFF),
+        (uint8_t)((hi >> 16) & 0xFF),
+        (uint8_t)((hi >> 8) & 0xFF),
+        (uint8_t)(hi & 0xFF),
+        (uint8_t)((lo >> 24) & 0xFF),
+        (uint8_t)((lo >> 16) & 0xFF),
+        (uint8_t)((lo >> 8) & 0xFF),
+        (uint8_t)(lo & 0xFF)};
+    uint8_t n = 0;
+    for(uint8_t i = 0; i < 8; i++) {
+        bool seen = false;
+        for(uint8_t j = 0; j < i; j++) {
+            if(vals[j] == vals[i]) {
+                seen = true;
+                break;
+            }
+        }
+        if(!seen) n++;
+    }
+    return n >= 4;
+}
+
+// AM completion with frame realignment. Scans bit offsets [0..min(8,len-80)] for
+// a 64-bit window whose key1_high sync nibble is 0xA and that carries real data
+// (>= 4 distinct bytes), then picks the alignment with the most leading 1-bits
+// above the sync nibble (the all-ones preamble tail). Fires the callback on
+// success. Returns true if a frame was fired. Mirrors psa.js _complete AM path.
+static bool psa_am_complete(SubGhzProtocolDecoderPSA* instance) {
+    if(instance->am_bits_len < 80) return false;
+
+    uint8_t max_off = instance->am_bits_len - 80;
+    if(max_off > 8) max_off = 8;
+
+    int16_t best_off = -1;
+    int16_t best_score = -1;
+    uint32_t hi = 0, lo = 0, k2 = 0;
+    uint8_t nib = 0;
+
+    for(uint8_t off = 0; off <= max_off; off++) {
+        if(!psa_am_frame_at(instance, off, &hi, &lo, &k2, &nib)) continue;
+        if(nib != 0xA) continue;
+        if(!psa_am_varied(hi, lo)) continue;
+        int16_t score = 0;
+        int8_t bit = 31;
+        while(bit >= 20 && ((hi >> bit) & 1)) {
+            score++;
+            bit--;
+        }
+        if(score > best_score) {
+            best_score = score;
+            best_off = (int16_t)off;
+        }
+    }
+
+    if(best_off < 0) {
+        instance->decode_data_low = 0;
+        instance->decode_data_high = 0;
+        instance->decode_count_bit = 0;
+        instance->am_bits_len = 0;
+        instance->state = PSADecoderState0;
+        return false;
+    }
+
+    psa_am_frame_at(instance, (uint8_t)best_off, &hi, &lo, &k2, &nib);
+    instance->key1_high = hi;
+    instance->key1_low = lo;
+    instance->key2_low = k2;
+    instance->key2_high = 0;
+    instance->validation_field = (uint16_t)(k2 & 0xFFFF);
+    instance->mode_serialize = 2;
+    instance->status_flag = 0x80;
+
+    uint8_t buffer[48] = {0};
+    psa_setup_byte_buffer(buffer, instance->key1_low, instance->key1_high, instance->key2_low);
+    if(psa_direct_xor_decrypt(instance, buffer)) {
+        instance->mode_serialize = 0x23;
+        instance->decrypted = 0x50;
+    } else {
+        instance->decrypted = 0x00;
+        instance->mode_serialize = 0x36;
+    }
+
+    instance->generic.data = ((uint64_t)instance->key1_high << 32) | instance->key1_low;
+    instance->generic.data_count_bit = 64;
+    instance->decoder.decode_data = instance->generic.data;
+    instance->decoder.decode_count_bit = 64;
+
+    PSA_FIRE_CALLBACK_IF_NEW(instance);
+
+    instance->decode_data_low = 0;
+    instance->decode_data_high = 0;
+    instance->decode_count_bit = 0;
+    instance->am_bits_len = 0;
+    instance->state = PSADecoderState0;
+    return true;
+}
 
 void subghz_protocol_decoder_psa_feed(void* context, bool level, uint32_t duration) {
     furi_assert(context);
@@ -676,7 +852,10 @@ void subghz_protocol_decoder_psa_feed(void* context, bool level, uint32_t durati
                 } else {
                     tolerance = duration - PSA_TE_SHORT_125;
                 }
-                if(tolerance > PSA_TOLERANCE_49) {
+                if(tolerance > 40) {
+                    return;
+                }
+                if(duration > 180) {
                     return;
                 }
                 new_state = PSADecoderState3;
@@ -699,6 +878,9 @@ void subghz_protocol_decoder_psa_feed(void* context, bool level, uint32_t durati
         instance->te_sum = duration;
         instance->te_count = 1;
         instance->te_detected = 0;
+        instance->pre_glitch = 0;
+        instance->am_await_high = 0;
+        instance->am_bits_len = 0;
         instance->prev_duration = duration;
         manchester_advance(instance->manchester_state, ManchesterEventReset,
                          &instance->manchester_state, NULL);
@@ -787,9 +969,14 @@ void subghz_protocol_decoder_psa_feed(void* context, bool level, uint32_t durati
                         instance->mode_serialize = 0x36;
                     }
 
-                    // Only fire callback if decrypted or validation nibble matches
+                    // Fire only if decrypted OR the frame carries the PSA sync
+                    // nibble 0xA at bits [19..16] of key1_high (FF5A / C1AA /
+                    // 9FBA ...). The old gate compared the key2 low nibble
+                    // (validation_field), which is part of the rolling code and
+                    // therefore random -- it wrongly rejected most Lock/Close
+                    // captures.
                     if(instance->decrypted != 0x50 &&
-                       (instance->validation_field & 0xf) != 0xa) {
+                       ((instance->key1_high >> 16) & 0xF) != 0xA) {
                         instance->decode_data_low = 0;
                         instance->decode_data_high = 0;
                         instance->decode_count_bit = 0;
@@ -923,7 +1110,7 @@ void subghz_protocol_decoder_psa_feed(void* context, bool level, uint32_t durati
 
                 instance->validation_field = (uint16_t)(instance->decode_data_low & 0xFFFF);
 
-                if((instance->validation_field & 0xf) == 0xa) {
+                if(((instance->key1_high >> 16) & 0xF) == 0xA) {
                     instance->key2_low = instance->decode_data_low;
                     instance->key2_high = instance->decode_data_high;
                     instance->mode_serialize = 1;
@@ -959,155 +1146,203 @@ void subghz_protocol_decoder_psa_feed(void* context, bool level, uint32_t durati
         }
         break;
 
-    case PSADecoderState3:
+    case PSADecoderState3: {
+        // Adaptive AM preamble (ported from psa.js). The AM preamble is a
+        // Manchester square wave (0101...); we measure ONE full period per bit
+        // (prev high + this low) and take te = period/2, which is robust to OOK
+        // duty-cycle distortion (e.g. Peugeot Boxer high~130/low~75 => te~102).
         if(level) {
+            instance->prev_duration = duration;
             return;
         }
+        uint32_t high = prev_dur;         // the high pulse preceding this low
+        uint32_t period = high + duration; // one preamble bit-cell
+        uint32_t te_avg3 =
+            (instance->te_count > 0) ? (instance->te_sum / instance->te_count) : PSA_TE_SHORT_125;
+        if(te_avg3 < PSA_AM_PRE_MIN) te_avg3 = PSA_TE_SHORT_125;
+        uint32_t period_est = te_avg3 * 2;
+        uint32_t cell_mid = period_est + (period_est >> 1);              // 1.5*period
+        uint32_t cell_hi = period_est + period_est + (period_est >> 1); // 2.5*period
+        uint32_t cell_min = PSA_AM_PRE_MIN * 2;
+        bool is_cell =
+            (period >= cell_min && period <= cell_mid && high >= PSA_AM_PRE_MIN &&
+             high <= PSA_AM_PRE_MAX && duration >= PSA_AM_PRE_MIN && duration <= PSA_AM_PRE_MAX);
+        bool is_boundary = (!is_cell && period > cell_mid && period <= cell_hi);
 
-        // Adaptive AM preamble: accept 76-174us, average to detect actual TE
-        if(duration >= 76 && duration <= 174) {
-            if(prev_dur >= 76 && prev_dur <= 174) {
-                instance->pattern_counter++;
-                instance->te_sum += duration;
-                instance->te_count++;
-            } else {
-                instance->pattern_counter = 0;
-                instance->te_sum = duration;
-                instance->te_count = 1;
+        if(is_cell) {
+            instance->pattern_counter++;
+            instance->pre_glitch = 0;
+            instance->te_sum += (period >> 1);
+            instance->te_count++;
+            if(instance->te_count > 32) {
+                instance->te_sum = te_avg3 * 8;
+                instance->te_count = 8;
             }
             instance->prev_duration = duration;
             return;
-        } else {
-            // Check if this is the preamble-to-data transition (2x detected TE)
-            uint32_t te_avg = (instance->te_count > 0) ?
-                (instance->te_sum / instance->te_count) : PSA_TE_SHORT_125;
-            uint32_t te_long_expected = te_avg * 2;
-            uint32_t long_diff = psa_abs_diff(duration, te_long_expected);
+        }
 
-            if(long_diff <= te_avg && instance->pattern_counter > PSA_PATTERN_THRESHOLD_2) {
-                instance->te_detected = te_avg;
-                new_state = PSADecoderState4;
-                instance->decode_data_low = 0;
-                instance->decode_data_high = 0;
-                instance->decode_count_bit = 0;
-                manchester_advance(instance->manchester_state, ManchesterEventReset,
-                                 &instance->manchester_state, NULL);
-                instance->state = new_state;
-                instance->pattern_counter = 0;
+        if(is_boundary && instance->pattern_counter >= PSA_AM_PRE_THRESHOLD) {
+            // Preamble satisfied and the first ~2-period cell is the
+            // preamble->data boundary: lock te and enter Manchester.
+            instance->te_detected = te_avg3;
+            instance->decode_data_low = 0;
+            instance->decode_data_high = 0;
+            instance->decode_count_bit = 0;
+            instance->am_bits_len = 0;
+            manchester_advance(
+                instance->manchester_state, ManchesterEventReset, &instance->manchester_state, NULL);
+            instance->am_await_high = 0;
+            instance->state = PSADecoderState4;
+            instance->pattern_counter = 0;
+            instance->pre_glitch = 0;
+            instance->prev_duration = duration;
+            return;
+        }
+
+        if(instance->pattern_counter >= PSA_AM_PRE_THRESHOLD) {
+            // Preamble satisfied but the separator wasn't a textbook double:
+            // enter Manchester with am_await_high so state 4 skips the wake-up
+            // marker and begins on the first data high.
+            instance->te_detected = te_avg3;
+            instance->decode_data_low = 0;
+            instance->decode_data_high = 0;
+            instance->decode_count_bit = 0;
+            instance->am_bits_len = 0;
+            manchester_advance(
+                instance->manchester_state, ManchesterEventReset, &instance->manchester_state, NULL);
+            instance->am_await_high = 1;
+            instance->state = PSADecoderState4;
+            instance->pattern_counter = 0;
+            instance->pre_glitch = 0;
+            instance->prev_duration = duration;
+            return;
+        }
+
+        // Otherwise decay rather than hard reset so a single noise spike can't
+        // wipe an otherwise valid preamble run.
+        instance->pre_glitch++;
+        if(instance->pattern_counter >= PSA_AM_PRE_GLITCH_DECAY) {
+            instance->pattern_counter -= PSA_AM_PRE_GLITCH_DECAY;
+        } else {
+            instance->pattern_counter = 0;
+        }
+        if(instance->pre_glitch <= PSA_AM_PRE_MAX_GLITCH && instance->pattern_counter > 0) {
+            instance->prev_duration = duration;
+            return;
+        }
+        new_state = PSADecoderState0;
+        instance->pattern_counter = 0;
+        instance->pre_glitch = 0;
+        break;
+    }
+
+    case PSADecoderState4: {
+        // Adaptive AM Manchester decode at te_detected (ported from psa.js).
+        // Bits are buffered in am_bits; on a terminator, psa_am_complete() scans
+        // for the alignment whose sync nibble is 0xA (fixes OOK misalignment).
+        uint32_t te_s = instance->te_detected ? instance->te_detected : PSA_TE_SHORT_125;
+        uint32_t te_l = te_s * 2;
+        uint32_t te_tol = (te_s * 7) / 10; // 0.7*te
+        uint32_t midpoint = te_s + (te_s >> 1); // 1.5*te
+
+        if(instance->am_await_high) {
+            // Skip the long wake-up marker (long high, then any trailing low),
+            // then start Manchester on the next pulse.
+            if(duration > te_l + te_tol) {
                 instance->prev_duration = duration;
                 return;
             }
+            instance->am_await_high = 0;
+            manchester_advance(
+                instance->manchester_state, ManchesterEventReset, &instance->manchester_state, NULL);
+            instance->decode_data_low = 0;
+            instance->decode_data_high = 0;
+            instance->decode_count_bit = 0;
+            instance->am_bits_len = 0;
+            // fall through to process this pulse as the first symbol
         }
 
-        new_state = PSADecoderState0;
-        instance->pattern_counter = 0;
-        break;
+        // Completion: a full frame's worth of bits plus a terminator (long pulse
+        // > 2*te+tol, NOT an ordinary data symbol). The offset search realigns.
+        if(instance->decode_count_bit >= PSA_KEY2_BITS && duration > te_l + te_tol) {
+            if(psa_am_complete(instance)) return;
+        }
 
-    case PSADecoderState4: {
         if(instance->decode_count_bit >= PSA_MAX_BITS) {
-            new_state = PSADecoderState0;
-            break;
+            if(!psa_am_complete(instance)) {
+                new_state = PSADecoderState0;
+            }
+            if(instance->state == PSADecoderState0) break;
+            return;
         }
 
-        uint32_t te_s = instance->te_detected ? instance->te_detected : PSA_TE_SHORT_125;
-        uint32_t te_l = te_s * 2;
-        uint32_t te_tol = te_s / 2;
-        uint32_t midpoint = (te_s + te_l) / 2;
-
-        // End marker check: HIGH pulse beyond long range at 80 bits
-        if(level && instance->decode_count_bit == PSA_KEY2_BITS && duration > midpoint) {
-            uint32_t end_expected = te_s * 4;
-            uint32_t end_diff = psa_abs_diff(duration, end_expected);
-            if(end_diff <= te_s * 2) {
-                instance->validation_field = (uint16_t)(instance->decode_data_low & 0xFFFF);
-                instance->key2_low = instance->decode_data_low;
-                instance->key2_high = instance->decode_data_high;
-                instance->mode_serialize = 2;
-                instance->status_flag = 0x80;
-
-                uint8_t buffer[48] = {0};
-                psa_setup_byte_buffer(buffer, instance->key1_low, instance->key1_high, instance->key2_low);
-                if(psa_direct_xor_decrypt(instance, buffer)) {
-                    instance->mode_serialize = 0x23;
-                    instance->decrypted = 0x50;
-                } else {
-                    instance->decrypted = 0x00;
-                    instance->mode_serialize = 0x36;
-                }
-
-                if(instance->decrypted != 0x50 &&
-                   (instance->validation_field & 0xf) != 0xa) {
-                    instance->decode_data_low = 0;
-                    instance->decode_data_high = 0;
-                    instance->decode_count_bit = 0;
-                    new_state = PSADecoderState0;
-                    instance->state = new_state;
-                    return;
-                }
-
-                instance->generic.data = ((uint64_t)instance->key1_high << 32) | instance->key1_low;
-                instance->generic.data_count_bit = 64;
-                instance->decoder.decode_data = instance->generic.data;
-                instance->decoder.decode_count_bit = 64;
-
-                PSA_FIRE_CALLBACK_IF_NEW(instance);
-
+        if(duration > te_l + te_tol) {
+            if(instance->decode_count_bit >= PSA_KEY2_BITS) {
+                if(psa_am_complete(instance)) return;
+            }
+            if(instance->decode_count_bit < PSA_AM_RESYNC_BITS) {
                 instance->decode_data_low = 0;
                 instance->decode_data_high = 0;
                 instance->decode_count_bit = 0;
-                new_state = PSADecoderState0;
-                instance->state = new_state;
+                instance->am_bits_len = 0;
+                manchester_advance(
+                    instance->manchester_state, ManchesterEventReset, &instance->manchester_state,
+                    NULL);
                 return;
             }
-        }
-
-        // Manchester decode: process BOTH high and low pulses (unlike original AM path)
-        if(duration > te_l + te_tol) {
             if(duration > 10000) {
                 new_state = PSADecoderState0;
+                instance->am_bits_len = 0;
                 break;
             }
             return;
         }
 
-        uint8_t manchester_input;
-        bool decoded_bit = false;
-
+        uint8_t manchester_input4;
         if(duration <= midpoint) {
             if(psa_abs_diff(duration, te_s) > te_tol) {
-                return;
-            }
-            manchester_input = level ? ManchesterEventShortLow : ManchesterEventShortHigh;
-        } else {
-            if(psa_abs_diff(duration, te_l) > te_tol) {
-                return;
-            }
-            manchester_input = level ? ManchesterEventLongLow : ManchesterEventLongHigh;
-        }
-
-        if(instance->decode_count_bit < PSA_KEY2_BITS) {
-            if(manchester_advance(instance->manchester_state,
-                                 (ManchesterEvent)manchester_input,
-                                 &instance->manchester_state,
-                                 &decoded_bit)) {
-                uint32_t carry = (instance->decode_data_low >> 31) & 1;
-                // PSA AM uses inverted Manchester convention
-                decoded_bit = !decoded_bit;
-                instance->decode_data_low = (instance->decode_data_low << 1) | (decoded_bit ? 1 : 0);
-                instance->decode_data_high = (instance->decode_data_high << 1) | carry;
-                instance->decode_count_bit++;
-
-                if(instance->decode_count_bit == PSA_KEY1_BITS) {
-                    instance->key1_low = instance->decode_data_low;
-                    instance->key1_high = instance->decode_data_high;
+                if(instance->decode_count_bit < PSA_AM_RESYNC_BITS) {
                     instance->decode_data_low = 0;
                     instance->decode_data_high = 0;
+                    instance->decode_count_bit = 0;
+                    instance->am_bits_len = 0;
+                    manchester_advance(
+                        instance->manchester_state, ManchesterEventReset,
+                        &instance->manchester_state, NULL);
                 }
+                return;
             }
+            manchester_input4 = level ? ManchesterEventShortLow : ManchesterEventShortHigh;
+        } else {
+            if(psa_abs_diff(duration, te_l) > te_tol) {
+                if(instance->decode_count_bit < PSA_AM_RESYNC_BITS) {
+                    instance->decode_data_low = 0;
+                    instance->decode_data_high = 0;
+                    instance->decode_count_bit = 0;
+                    instance->am_bits_len = 0;
+                    manchester_advance(
+                        instance->manchester_state, ManchesterEventReset,
+                        &instance->manchester_state, NULL);
+                }
+                return;
+            }
+            manchester_input4 = level ? ManchesterEventLongLow : ManchesterEventLongHigh;
+        }
+
+        bool decoded_bit4 = false;
+        if(manchester_advance(
+               instance->manchester_state,
+               (ManchesterEvent)manchester_input4,
+               &instance->manchester_state,
+               &decoded_bit4)) {
+            psa_add_am_bit(instance, decoded_bit4 ? 1 : 0);
         }
         break;
     }
     }
+
+    if(new_state == PSADecoderState0) instance->am_bits_len = 0;
 
     instance->state = new_state;
     instance->prev_duration = duration;

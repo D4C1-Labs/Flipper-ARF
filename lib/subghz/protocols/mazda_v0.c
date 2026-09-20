@@ -467,6 +467,16 @@ SubGhzProtocolStatus
         }
 
         instance->generic.btn &= 0x0FU;
+
+        // [ROLLING_CNT] Forward-encode the NEXT counter (like VAG/PSA) so the
+        // transmitter UI shows an incrementing counter on each OK/D-pad press. The
+        // Key is re-encoded from this cnt below and "Cnt" is persisted, so the
+        // decoder (which reads "Cnt") shows the advanced value on the UI refresh.
+        {
+            uint32_t mult = furi_hal_subghz_get_rolling_counter_mult();
+            if(mult == 0U) mult = 1U;
+            instance->generic.cnt = (instance->generic.cnt + mult);
+        }
         instance->generic.cnt &= 0xFFFFFU;
 
         instance->generic.data = mazda_v0_encode_key(
@@ -496,6 +506,12 @@ SubGhzProtocolStatus
             mazda_v0_calculate_checksum(instance->serial, instance->button, instance->count);
         flipper_format_rewind(flipper_format);
         flipper_format_insert_or_update_uint32(flipper_format, "Checksum", &chk, 1);
+
+        // [ROLLING_CNT] Persist the advanced counter so the decoder (which reads
+        // "Cnt") shows the incremented value on the UI refresh.
+        flipper_format_rewind(flipper_format);
+        uint32_t cnt_store = instance->count;
+        flipper_format_insert_or_update_uint32(flipper_format, "Cnt", &cnt_store, 1);
 
         instance->encoder.is_running = true;
 
@@ -736,9 +752,36 @@ void subghz_protocol_decoder_mazda_v0_get_string(void* context, FuriString* outp
 
     mazda_v0_decode_key(&instance->generic);
 
-    const uint8_t raw_crc = instance->generic.data & 0xFF;
+    // [BUGFIX UI+CRC] Re-derive the displayed button from the current D-pad
+    // selection so the transmitter UI reflects subghz_custom_btn_get() (like
+    // psa.c/star_line.c), mirroring the encoder remap (see encoder deserialize):
+    // Up=Lock(0x1), Down=Boot(0x4), Right=Remote(0x8), Left/OK=captured. The CRC
+    // shown is recomputed for the selected button so it matches the TX frame.
+    subghz_custom_btn_set_max(4);
+    uint8_t display_btn = (uint8_t)(instance->generic.btn & 0x0FU);
+    switch(subghz_custom_btn_get()) {
+    case SUBGHZ_CUSTOM_BTN_UP:
+        display_btn = 0x1U; // Lock
+        break;
+    case SUBGHZ_CUSTOM_BTN_DOWN:
+        display_btn = 0x4U; // Boot
+        break;
+    case SUBGHZ_CUSTOM_BTN_RIGHT:
+        display_btn = 0x8U; // Remote
+        break;
+    case SUBGHZ_CUSTOM_BTN_OK:
+    case SUBGHZ_CUSTOM_BTN_LEFT:
+    default:
+        break;
+    }
+
     const uint8_t calc_crc = mazda_v0_calculate_checksum(
-        instance->generic.serial, instance->generic.btn, instance->generic.cnt);
+        instance->generic.serial, display_btn, instance->generic.cnt);
+    // When the D-pad changed the button, show the recomputed CRC (the value the
+    // encoder will transmit); otherwise show the captured raw CRC.
+    const uint8_t raw_crc = (display_btn == (uint8_t)(instance->generic.btn & 0x0FU)) ?
+                                (uint8_t)(instance->generic.data & 0xFF) :
+                                calc_crc;
 
     furi_string_cat_printf(
         output,
@@ -750,7 +793,7 @@ void subghz_protocol_decoder_mazda_v0_get_string(void* context, FuriString* outp
         instance->generic.data_count_bit,
         (unsigned long long)instance->generic.data,
         (unsigned long)instance->generic.serial,
-        mazda_v0_get_button_name(instance->generic.btn),
+        mazda_v0_get_button_name(display_btn),
         raw_crc,
         (unsigned long)(instance->generic.cnt & 0xFFFFFU),
         (raw_crc == calc_crc) ? "OK" : "BAD");
