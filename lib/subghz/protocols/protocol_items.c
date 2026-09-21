@@ -136,7 +136,7 @@ const SubGhzProtocol* const subghz_protocol_registry_items[] = {
     &renault_v1_protocol,
     //&subghz_protocol_bmw_cas4,
     &subghz_protocol_subaru, 
-    &subghz_protocol_mazda_siemens,
+    //&subghz_protocol_mazda_siemens,
     &subghz_protocol_kia_v0,       
     &subghz_protocol_kia_v1,
     &subghz_protocol_kia_v2,       
