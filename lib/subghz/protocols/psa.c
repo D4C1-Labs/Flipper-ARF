@@ -761,6 +761,16 @@ static bool psa_am_varied(uint32_t hi, uint32_t lo) {
 static bool psa_am_complete(SubGhzProtocolDecoderPSA* instance) {
     if(instance->am_bits_len < 80) return false;
 
+    // A genuine PSA frame terminates at a DETERMINISTIC buffer length:
+    //   80 -> FM/state-2 path (64 key1 + 16 validation, then end marker)
+    //   88 -> AM/state-4 path (PSA_KEY2_BITS + 8 realignment slack)
+    // A Fiat/Marelli frame (Peugeot Boxer, Fiat Ducato, Citroen Jumper -- same
+    // Hitag2 PCF7946 hardware) is 102 bits of continuous Manchester, so PSA
+    // force-terminates it at random lengths (83/85/87/96...). Accept only the
+    // two PSA-native lengths so the Fiat V1 decoder claims the Marelli frames
+    // instead. (Fixes PSA/FiatV1 cross-detection.)
+    if(instance->am_bits_len != 80 && instance->am_bits_len != 88) return false;
+
     uint8_t max_off = instance->am_bits_len - 80;
     if(max_off > 8) max_off = 8;
 

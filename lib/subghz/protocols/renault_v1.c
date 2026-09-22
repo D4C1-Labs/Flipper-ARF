@@ -269,7 +269,7 @@ const SubGhzProtocol renault_v1_protocol = {
     .name = RENAULT_PROTOCOL_V1_NAME,
     .type = SubGhzProtocolTypeDynamic,
     .flag = SubGhzProtocolFlag_Decodable | SubGhzProtocolFlag_315 | SubGhzProtocolFlag_433 |
-            SubGhzProtocolFlag_868 | SubGhzProtocolFlag_AM | SubGhzProtocolFlag_Save |
+            SubGhzProtocolFlag_868 | SubGhzProtocolFlag_AM | SubGhzProtocolFlag_FM | SubGhzProtocolFlag_Save |
             SubGhzProtocolFlag_Load | SubGhzProtocolFlag_Send,
 
     .encoder = &subghz_protocol_renault_v1_encoder,
