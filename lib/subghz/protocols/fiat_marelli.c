@@ -272,41 +272,26 @@ SubGhzProtocolStatus
             instance->te_detected = te;
         }
 
-        // [PROTOPIRATE_PORT] custom_btn support
-        // Fiat Marelli button codes live in the high nibble of frame byte 6,
-        // which is bits [15:12] of the 64-bit generic.data key.
-        //   Up    = 0x7 (Lock)
-        //   Down  = 0xB (Unlock)
-        //   Left  = 0xD (Trunk)
-        //   OK    = original captured button (byte-identical replay)
-        //   Right unsupported -> fall through to original.
-        // NOTE: bytes 8-12 are an encrypted payload keyed to the captured
-        // (button, counter); this port only rewrites the button nibble and the
-        // CRC8 (done in rebuild). When OK is selected the frame is unchanged.
+        // [PROTOPIRATE_PORT] Fiat Marelli is REPLAY-ONLY.
+        // The frame has a forward-computable CRC8 (raw_data[12]) BUT the rolling
+        // security lives in the ENCRYPTED payload bytes 8-11 (shown as "Key" in the
+        // decoder), which are keyed to the captured (button, counter) via a cipher
+        // we do not have. Rewriting the plaintext button nibble and re-CRC'ing would
+        // leave the encrypted payload keyed to the ORIGINAL button/counter, so the
+        // car would reject the frame. There is likewise no way to forward-compute a
+        // NEXT counter's encrypted payload. Matching ProtoPirate (MARELLI has no
+        // dedicated encoder; the emulate plugin's catch-all returns the original
+        // button), we replay the captured frame byte-identically and never pretend
+        // to change the button or increment the counter.
         {
             const uint8_t original_btn = (uint8_t)((instance->generic.data >> 12U) & 0x0FU);
             if(subghz_custom_btn_get_original() == 0) {
                 subghz_custom_btn_set_original(original_btn);
             }
-            subghz_custom_btn_set_max(4);
-            uint8_t custom_btn_id = subghz_custom_btn_get();
-            uint8_t remapped = original_btn;
-            switch(custom_btn_id) {
-            case SUBGHZ_CUSTOM_BTN_UP:    remapped = 0x7U;          break; // Lock
-            case SUBGHZ_CUSTOM_BTN_OK:    remapped = original_btn;  break;
-            case SUBGHZ_CUSTOM_BTN_DOWN:  remapped = 0xBU;          break; // Unlock
-            case SUBGHZ_CUSTOM_BTN_LEFT:  remapped = 0xDU;          break; // Trunk
-            default:                      remapped = original_btn;  break;
-            }
-            if(remapped != original_btn) {
-                // Rewrite the button nibble (bits [15:12]) in generic.data so the
-                // rebuild-from-fields step below re-encodes the frame with the
-                // new button and recomputes the CRC8.
-                instance->generic.data =
-                    (instance->generic.data & ~((uint64_t)0x0FU << 12U)) |
-                    ((uint64_t)(remapped & 0x0FU) << 12U);
-                instance->generic.btn = remapped;
-            }
+            // Replay-only: advertise a single button (OK) and never rewrite the
+            // button nibble / counter; generic.data is left exactly as captured.
+            subghz_custom_btn_set_max(1);
+            instance->generic.btn = original_btn;
         }
 
         fiat_marelli_encoder_rebuild_raw_data(instance);
@@ -631,6 +616,17 @@ SubGhzProtocolStatus subghz_protocol_decoder_fiat_marelli_serialize(
 
         uint32_t te = instance->te_detected;
         flipper_format_write_uint32(flipper_format, "TE", &te, 1);
+
+        // [PROTOPIRATE_PORT] Persist Serial/Btn/Cnt so the captured button and the
+        // base counter survive a save/reload, matching the KIA family template.
+        // Marelli is replay-only, but the car-emulate scene seeds its counter
+        // display from "Cnt".
+        uint32_t serial = instance->generic.serial;
+        uint32_t btn = instance->generic.btn;
+        uint32_t cnt = instance->generic.cnt;
+        flipper_format_write_uint32(flipper_format, "Serial", &serial, 1);
+        flipper_format_write_uint32(flipper_format, "Btn", &btn, 1);
+        flipper_format_write_uint32(flipper_format, "Cnt", &cnt, 1);
     }
 
     return ret;

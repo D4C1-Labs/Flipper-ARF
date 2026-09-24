@@ -193,8 +193,6 @@ static const RenaultV0TypeEntry* renault_v0_find_type_by_checks(
     uint32_t key2,
     bool* c1_ok,
     bool* c2_ok);
-static bool renault_v0_checksum_hi2xor_valid(uint8_t hi2xor);
-static bool renault_v0_button_valid_generic(uint8_t button);
 static bool renault_v0_preamble_bits_valid(uint8_t preamble_bits);
 static uint8_t renault_v0_default_preamble_bits(RenaultV0TypeId type_id);
 static bool renault_v0_type_preamble_bits_valid(RenaultV0TypeId type_id, uint8_t preamble_bits);
@@ -362,26 +360,6 @@ static const RenaultV0TypeEntry* renault_v0_find_type_by_checks(
     }
 
     return NULL;
-}
-
-static bool renault_v0_checksum_hi2xor_valid(uint8_t hi2xor) {
-    return (hi2xor == 0x00U) || (hi2xor == 0x03U);
-}
-
-static bool renault_v0_button_valid_generic(uint8_t button) {
-    if((button == 0x06U) || (button == 0x0AU)) {
-        return true;
-    }
-    if((button >= 0x04U) && (button <= 0x0BU)) {
-        return true;
-    }
-    if((button >= 0x44U) && (button <= 0x4BU)) {
-        return true;
-    }
-    if((button >= 0xC4U) && (button <= 0xCBU)) {
-        return true;
-    }
-    return false;
 }
 
 static bool renault_v0_preamble_bits_valid(uint8_t preamble_bits) {
@@ -612,23 +590,22 @@ static bool renault_v0_classify_frame(uint64_t data, uint32_t key2, RenaultV0Dec
     attempt->c2_ok = c2_ok;
     attempt->ic_ok = ic_ok;
 
-    if(type && c1_ok && c2_ok && renault_v0_type_button_valid(type->id, button)) {
+    // [SPLIT V0/V1] Renault V0 now ONLY owns type 0x13 (the proprietary matrix
+    // crypto). ALL non-13 variants (0x04/0x0C/0x1A/0x3B/0x3F and the synthesized
+    // "Dynamic") were split out into "Renault V1" (Hitag2-based, Hell-recoverable).
+    // Reject non-13 here so V1 can claim them. V1 conversely rejects 0x13, making
+    // the two protocols mutually exclusive regardless of registry order.
+    if(type && c1_ok && c2_ok && (type->id == RenaultV0Type13) &&
+       renault_v0_type_button_valid(type->id, button)) {
         attempt->type_id = type->id;
         attempt->type_tag = type->value;
         return true;
     }
 
-    const bool dynamic_c1_ok =
-        renault_v0_button_valid_generic(button) && (serial != 0U) && (serial <= 0xFFFFFFU);
-    const bool dynamic_c2_ok = renault_v0_checksum_hi2xor_valid(checksum_high2_xor);
-    attempt->c1_ok = dynamic_c1_ok;
-    attempt->c2_ok = dynamic_c2_ok;
-
-    if(dynamic_c1_ok && dynamic_c2_ok) {
-        attempt->type_id = RenaultV0TypeDynamic;
-        attempt->type_tag = checksum_low6;
-        return true;
-    }
+    // Dynamic and all other non-13 known types belong to Renault V1 now. Silence
+    // the now-unused high-2-xor/checksum locals that only fed the Dynamic path.
+    (void)checksum_high2_xor;
+    (void)checksum_low6;
 
     return false;
 }
@@ -1083,7 +1060,17 @@ SubGhzProtocolStatus
             flipper_format_rewind(flipper_format);
             flipper_format_read_uint32(flipper_format, "Btn", &btn_u32, 1);
             flipper_format_rewind(flipper_format);
-            flipper_format_read_uint32(flipper_format, "Cnt", &cnt_u32, 1);
+            const bool got_cnt = flipper_format_read_uint32(flipper_format, "Cnt", &cnt_u32, 1);
+
+            // [ROLLING_CNT] Forward-encode the NEXT counter (like VAG/PSA) when the
+            // press comes from the plain transmitter (no scene-supplied "Cnt"), so
+            // the UI counter advances on each OK/D-pad press. If the scene already
+            // wrote an incremented "Cnt", honor it as-is.
+            if(!got_cnt) {
+                uint32_t mult = furi_hal_subghz_get_rolling_counter_mult();
+                if(mult == 0U) mult = 1U;
+                cnt_u32 = (cnt_u32 + mult) & 0xFFU;
+            }
 
             // [PROTOPIRATE_PORT] custom_btn support
             // Renault V0 Type13 (rolling) supports two buttons:
@@ -1179,6 +1166,13 @@ SubGhzProtocolStatus
                     break;
                 }
             }
+
+            // [ROLLING_CNT] Persist the advanced counter so the UI refresh (decoder
+            // re-derives cnt from the re-written Key) and the next TX continue from
+            // the advanced value.
+            flipper_format_rewind(flipper_format);
+            uint32_t cnt_store = instance->generic.cnt;
+            flipper_format_insert_or_update_uint32(flipper_format, "Cnt", &cnt_store, 1);
         }
 
         instance->encoder.is_running = true;
@@ -1345,6 +1339,30 @@ void subghz_protocol_decoder_renault_v0_get_string(void* context, FuriString* ou
 
     SubGhzProtocolDecoderRenaultV0* instance = context;
 
+    // [BUGFIX UI] Re-derive the displayed button from the current D-pad
+    // selection so the transmitter UI reflects subghz_custom_btn_get() (like
+    // psa.c/star_line.c). The D-pad only does anything for Type13 (rolling)
+    // captures; other types are replay-only, so keep the captured button there.
+    uint8_t display_btn = (uint8_t)instance->generic.btn;
+    if(instance->type_id == RenaultV0Type13) {
+        subghz_custom_btn_set_max(4);
+        uint8_t custom_btn_id = subghz_custom_btn_get();
+        switch(custom_btn_id) {
+        case SUBGHZ_CUSTOM_BTN_UP:
+            display_btn = 0x06U; // Lock
+            break;
+        case SUBGHZ_CUSTOM_BTN_DOWN:
+            display_btn = 0x0AU; // Unlock
+            break;
+        case SUBGHZ_CUSTOM_BTN_OK:
+        case SUBGHZ_CUSTOM_BTN_LEFT:  // Type13 has no Trunk/Panic
+        case SUBGHZ_CUSTOM_BTN_RIGHT:
+        default:
+            display_btn = (uint8_t)instance->generic.btn;
+            break;
+        }
+    }
+
     furi_string_cat_printf(
         output,
         "%s %dbit\r\n"
@@ -1355,7 +1373,7 @@ void subghz_protocol_decoder_renault_v0_get_string(void* context, FuriString* ou
         instance->packet_bit_count,
         instance->generic.data,
         instance->generic.serial,
-        renault_v0_get_button_name(instance->type_id, instance->generic.btn),
+        renault_v0_get_button_name(instance->type_id, display_btn),
         (instance->check_c1 || instance->check_c2) ? "ERR" : "OK",
         instance->generic.cnt);
 }

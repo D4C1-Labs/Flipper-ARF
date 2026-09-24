@@ -6,6 +6,8 @@
 #include "../blocks/generic.h"
 #include "../blocks/math.h"
 
+#include "../blocks/custom_btn_i.h"
+
 #define TAG "SubGhzProtocolIntertechnoV3"
 
 #define CH_PATTERN "%c%c%c%c"
@@ -179,6 +181,11 @@ SubGhzProtocolStatus subghz_protocol_encoder_intertechno_v3_deserialize(
         // Optional value
         flipper_format_read_uint32(
             flipper_format, "Repeat", (uint32_t*)&instance->encoder.repeat, 1);
+
+        // Intertechno V3 only carries an on/off state (no distinct directional
+        // button values). Enable the D-pad so it is shown, but every direction
+        // re-sends the originally captured code unchanged.
+        subghz_custom_btn_set_max(4);
 
         if(!subghz_protocol_encoder_intertechno_v3_get_upload(instance)) {
             ret = SubGhzProtocolStatusErrorEncoderGetUpload;

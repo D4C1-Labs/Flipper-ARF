@@ -6,6 +6,8 @@
 #include "../blocks/generic.h"
 #include "../blocks/math.h"
 
+#include "../blocks/custom_btn_i.h"
+
 /*
  * Help
  * https://pdf1.alldatasheet.com/datasheet-pdf/view/82103/HOLTEK/HT640.html
@@ -100,6 +102,28 @@ void subghz_protocol_encoder_holtek_free(void* context) {
     free(instance);
 }
 
+// Holtek button layout: the low 16 bits of data are 4 nibbles, one per
+// button position (1..4). The pressed position holds the button "code"
+// (e.g. ON=0xE, OFF=0xB); every other nibble is 0xA.
+// This helper returns the D-pad target position (1..4), keeping the same code.
+static uint8_t subghz_protocol_holtek_get_btn_position(uint8_t original_position) {
+    uint8_t custom_btn_id = subghz_custom_btn_get();
+
+    switch(custom_btn_id) {
+    case SUBGHZ_CUSTOM_BTN_UP:
+        return 1;
+    case SUBGHZ_CUSTOM_BTN_DOWN:
+        return 2;
+    case SUBGHZ_CUSTOM_BTN_LEFT:
+        return 3;
+    case SUBGHZ_CUSTOM_BTN_RIGHT:
+        return 4;
+    case SUBGHZ_CUSTOM_BTN_OK:
+    default:
+        return original_position;
+    }
+}
+
 /**
  * Generating an upload from data.
  * @param instance Pointer to a SubGhzProtocolEncoderHoltek instance
@@ -158,6 +182,44 @@ SubGhzProtocolStatus
         // Optional value
         flipper_format_read_uint32(
             flipper_format, "Repeat", (uint32_t*)&instance->encoder.repeat, 1);
+
+        // Parse button position/code from the low 16 bits of the data word and
+        // enable the D-pad custom buttons.
+        if((instance->generic.data & HOLTEK_HEADER_MASK) == HOLTEK_HEADER) {
+            uint16_t btn_word = instance->generic.data & 0xFFFF;
+            uint8_t position = 0;
+            uint8_t code = 0;
+            if((btn_word & 0xF) != 0xA) {
+                position = 1;
+                code = btn_word & 0xF;
+            } else if(((btn_word >> 4) & 0xF) != 0xA) {
+                position = 2;
+                code = (btn_word >> 4) & 0xF;
+            } else if(((btn_word >> 8) & 0xF) != 0xA) {
+                position = 3;
+                code = (btn_word >> 8) & 0xF;
+            } else if(((btn_word >> 12) & 0xF) != 0xA) {
+                position = 4;
+                code = (btn_word >> 12) & 0xF;
+            }
+
+            if(position != 0) {
+                // Original button as reported by the decoder: position<<4 | code
+                uint8_t original_btn = (position << 4) | code;
+                if(subghz_custom_btn_get_original() == 0) {
+                    subghz_custom_btn_set_original(original_btn);
+                }
+                subghz_custom_btn_set_max(4);
+
+                // Re-encode: move the code to the selected position, others 0xA
+                uint8_t new_position = subghz_protocol_holtek_get_btn_position(position);
+                uint16_t new_word = 0xAAAA;
+                new_word &= ~(uint16_t)(0xF << ((new_position - 1) * 4));
+                new_word |= (uint16_t)(code & 0xF) << ((new_position - 1) * 4);
+                instance->generic.data =
+                    (instance->generic.data & ~(uint64_t)0xFFFF) | (uint64_t)new_word;
+            }
+        }
 
         if(!subghz_protocol_encoder_holtek_get_upload(instance)) {
             ret = SubGhzProtocolStatusErrorEncoderGetUpload;

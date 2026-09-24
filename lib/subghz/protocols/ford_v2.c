@@ -149,6 +149,26 @@ static const char* ford_v2_button_name(uint8_t btn) {
     }
 }
 
+// [PROTOPIRATE_PORT] custom_btn UI support
+// Map the current D-pad selection to a Ford V2 button code, mirroring the encoder
+// remap (see encoder deserialize): Up=Unlock(0x11), Down=Trunk(0x13),
+// Left=Panic(0x14), Right=RemoteStart(0x15), OK=captured.
+static uint8_t ford_v2_ui_button(uint8_t custom, uint8_t original_btn) {
+    switch(custom) {
+    case SUBGHZ_CUSTOM_BTN_UP:
+        return 0x11U; // Unlock
+    case SUBGHZ_CUSTOM_BTN_DOWN:
+        return 0x13U; // Trunk
+    case SUBGHZ_CUSTOM_BTN_LEFT:
+        return 0x14U; // Panic
+    case SUBGHZ_CUSTOM_BTN_RIGHT:
+        return 0x15U; // RemoteStart
+    case SUBGHZ_CUSTOM_BTN_OK:
+    default:
+        return original_btn;
+    }
+}
+
 static void ford_v2_decoder_extract_from_raw(SubGhzProtocolDecoderFordV2* instance) {
     const uint8_t* k = instance->raw_bytes;
 
@@ -466,15 +486,60 @@ static SubGhzProtocolStatus ford_v2_encoder_deserialize_read_header(
     return SubGhzProtocolStatusOk;
 }
 
-static SubGhzProtocolStatus
-    ford_v2_encoder_deserialize_validate_and_pack(SubGhzProtocolEncoderFordV2* instance) {
+// [PROTOPIRATE_PORT] Pack a 16-bit counter into the plaintext Ford V2 layout:
+// raw[7] bits6..0 = cnt bits15..9, raw[8] = cnt bits8..1, raw[9] bit7 = cnt bit0.
+// raw[7] bit7 (button parity) and raw[9] bits6..0 (tail) are preserved.
+static void ford_v2_encoder_pack_counter(uint8_t* raw, uint16_t cnt) {
+    raw[7] = (uint8_t)((raw[7] & 0x80U) | (uint8_t)((cnt >> 9) & 0x7FU));
+    raw[8] = (uint8_t)((cnt >> 1) & 0xFFU);
+    raw[9] = (uint8_t)((raw[9] & 0x7FU) | (uint8_t)((cnt & 1U) << 7));
+}
+
+static SubGhzProtocolStatus ford_v2_encoder_deserialize_validate_and_pack(
+    SubGhzProtocolEncoderFordV2* instance,
+    FlipperFormat* flipper_format) {
     ford_v2_encoder_rebuild_raw_from_payload(instance);
+
+    // [PROTOPIRATE_PORT] Optional Serial/Btn/Cnt overrides written by the
+    // car-emulate scene. The frame is plaintext (counter stored across bytes
+    // 7..9 with only parity), so we can forward-compute the NEXT code by
+    // re-packing the incremented counter and re-deriving the button parity.
+    uint32_t ser_ovr = UINT32_MAX;
+    uint32_t btn_ovr = UINT32_MAX;
+    uint32_t cnt_ovr = UINT32_MAX;
+    flipper_format_rewind(flipper_format);
+    const bool got_serial =
+        flipper_format_read_uint32(flipper_format, "Serial", &ser_ovr, 1);
+    flipper_format_rewind(flipper_format);
+    const bool got_btn = flipper_format_read_uint32(flipper_format, "Btn", &btn_ovr, 1);
+    flipper_format_rewind(flipper_format);
+    const bool got_cnt = flipper_format_read_uint32(flipper_format, "Cnt", &cnt_ovr, 1);
+
+    if(got_serial) {
+        instance->raw_bytes[2] = (uint8_t)(ser_ovr >> 24);
+        instance->raw_bytes[3] = (uint8_t)(ser_ovr >> 16);
+        instance->raw_bytes[4] = (uint8_t)(ser_ovr >> 8);
+        instance->raw_bytes[5] = (uint8_t)(ser_ovr);
+    }
+
+    // [ROLLING_CNT] Forward-encode the NEXT counter (like VAG/PSA) so the
+    // transmitter UI shows an incrementing counter on each OK/D-pad press. The
+    // packed raw frame carries this cnt and it is persisted below (L~638), so the
+    // decoder re-derives the advanced value on the UI refresh.
+    if(got_cnt) {
+        uint32_t mult = furi_hal_subghz_get_rolling_counter_mult();
+        if(mult == 0U) mult = 1U;
+        cnt_ovr = (cnt_ovr + mult) & 0xFFFFU;
+        ford_v2_encoder_pack_counter(instance->raw_bytes, (uint16_t)(cnt_ovr & 0xFFFFU));
+    }
 
     // [PROTOPIRATE_PORT] custom_btn support
     // Ford V2 mapping: Up=0x11 (Unlock), OK=0x10 (Lock), Down=0x13 (Trunk),
     // Left=0x14 (Panic), Right=0x15 (RemoteStart).
     {
-        const uint8_t original_btn = instance->raw_bytes[6];
+        // Start from an explicit Btn override if present, else the packed byte.
+        const uint8_t original_btn =
+            got_btn ? (uint8_t)btn_ovr : instance->raw_bytes[6];
         if(subghz_custom_btn_get_original() == 0) {
             subghz_custom_btn_set_original(original_btn);
         }
@@ -491,12 +556,10 @@ static SubGhzProtocolStatus
         case SUBGHZ_CUSTOM_BTN_RIGHT: new_btn = 0x15U; break;
         default:                      new_btn = original_btn; break;
         }
-        if(new_btn != original_btn) {
-            instance->raw_bytes[6] = new_btn;
-            /* Repatch parity bit in raw_bytes[7] (mirrors rebuild logic) */
-            const uint8_t k7_msb = (uint8_t)(ford_v2_uint8_parity(new_btn) << 7);
-            instance->raw_bytes[7] = (instance->raw_bytes[7] & 0x7FU) | k7_msb;
-        }
+        instance->raw_bytes[6] = new_btn;
+        /* Repatch parity bit in raw_bytes[7] (mirrors rebuild logic) */
+        const uint8_t k7_msb = (uint8_t)(ford_v2_uint8_parity(new_btn) << 7);
+        instance->raw_bytes[7] = (instance->raw_bytes[7] & 0x7FU) | k7_msb;
     }
 
     if(!ford_v2_button_is_valid(instance->raw_bytes[6])) {
@@ -563,12 +626,45 @@ SubGhzProtocolStatus
         ford_v2_encoder_deserialize_read_header(instance, flipper_format, temp_str);
 
     if(ret == SubGhzProtocolStatusOk) {
-        ret = ford_v2_encoder_deserialize_validate_and_pack(instance);
+        ret = ford_v2_encoder_deserialize_validate_and_pack(instance, flipper_format);
     }
 
     if(ret == SubGhzProtocolStatusOk) {
         ford_v2_encoder_deserialize_apply_repeat(instance, flipper_format);
         ford_v2_encoder_build_upload(instance);
+
+        // [PROTOPIRATE_PORT] Persist the re-packed Serial/Btn/Cnt back into the
+        // flipper_format so the running counter survives repeated TX passes and
+        // the on-screen readout stays in sync with what is actually emitted.
+        uint32_t ser_w = instance->generic.serial;
+        flipper_format_rewind(flipper_format);
+        flipper_format_insert_or_update_uint32(flipper_format, "Serial", &ser_w, 1);
+        uint32_t btn_w = instance->generic.btn;
+        flipper_format_rewind(flipper_format);
+        flipper_format_insert_or_update_uint32(flipper_format, "Btn", &btn_w, 1);
+        uint32_t cnt_w = instance->generic.cnt;
+        flipper_format_rewind(flipper_format);
+        flipper_format_insert_or_update_uint32(flipper_format, "Cnt", &cnt_w, 1);
+
+        // [ROLLING_CNT] Persist the re-packed Key + TailRaw as well. The decoder
+        // rebuilds raw_bytes from the Key (bytes 0-7, holds counter high bits) and
+        // TailRaw (bytes 8-12, holds counter low bits), so both must reflect the
+        // advanced counter for the UI to show the increment on refresh.
+        uint8_t key_data[8];
+        for(int i = 0; i < 8; i++) {
+            key_data[i] = (uint8_t)((instance->generic.data >> (56 - 8 * i)) & 0xFF);
+        }
+        flipper_format_rewind(flipper_format);
+        flipper_format_update_hex(flipper_format, "Key", key_data, 8);
+
+        uint8_t tail_raw[FORD_V2_TAIL_RAW_BYTE_COUNT];
+        for(uint8_t i = 0; i < FORD_V2_TAIL_RAW_BYTE_COUNT; i++) {
+            tail_raw[i] = instance->raw_bytes[8U + i];
+        }
+        flipper_format_rewind(flipper_format);
+        flipper_format_insert_or_update_hex(
+            flipper_format, "TailRaw", tail_raw, FORD_V2_TAIL_RAW_BYTE_COUNT);
+
         instance->encoder.is_running = true;
     }
 
@@ -595,7 +691,9 @@ LevelDuration subghz_protocol_encoder_ford_v2_yield(void* context) {
 
     if(++instance->encoder.front == instance->encoder.size_upload) {
         instance->encoder.front = 0U;
-        instance->encoder.repeat--;
+        // Endless/breakless TX: while OK is held (endless_tx set by the transmit
+        // scene) do not consume repeats, so the signal loops until release.
+        if(!subghz_block_generic_global.endless_tx) instance->encoder.repeat--;
     }
 
     return ret;
@@ -783,6 +881,16 @@ void subghz_protocol_decoder_ford_v2_get_string(void* context, FuriString* outpu
     SubGhzProtocolDecoderFordV2* instance = context;
     const uint8_t* k = instance->raw_bytes;
 
+    // [BUGFIX UI] Re-derive the displayed button from the current D-pad selection
+    // so the transmitter UI reflects subghz_custom_btn_get() (like psa.c/star_line.c),
+    // reusing the encoder mapping (ford_v2_ui_button).
+    subghz_custom_btn_set_max(5);
+    uint8_t display_btn = (uint8_t)instance->generic.btn;
+    uint8_t custom_btn_id = subghz_custom_btn_get();
+    if(custom_btn_id != SUBGHZ_CUSTOM_BTN_OK) {
+        display_btn = ford_v2_ui_button(custom_btn_id, (uint8_t)instance->generic.btn);
+    }
+
     furi_string_cat_printf(
         output,
         "%s %dbit\r\n"
@@ -798,7 +906,7 @@ void subghz_protocol_decoder_ford_v2_get_string(void* context, FuriString* outpu
         k[6],
         k[7],
         (unsigned long)instance->generic.serial,
-        ford_v2_button_name(instance->generic.btn),
+        ford_v2_button_name(display_btn),
         (unsigned)instance->counter16);
 }
 

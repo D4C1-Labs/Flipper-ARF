@@ -7,6 +7,8 @@
 #include "../blocks/generic.h"
 #include "../blocks/math.h"
 
+#include "../blocks/custom_btn_i.h"
+
 /*
  * Help
  * https://phreakerclub.com/forum/showthread.php?t=635&highlight=came+twin
@@ -189,6 +191,28 @@ static void subghz_protocol_encoder_came_twee_get_upload(SubGhzProtocolEncoderCa
     instance->encoder.size_upload = index;
 }
 
+// Came Twee carries a 4-bit button field inside the XOR-decoded serial value
+// (btn = (serial >> 6) & 0x0F, since data = serial/4 and btn = (data >> 4) & 0xF).
+// OK -> original captured button, Up/Down/Left/Right -> distinct button nibbles.
+static uint8_t subghz_protocol_came_twee_get_btn_code(uint8_t original_btn_code) {
+    uint8_t custom_btn_id = subghz_custom_btn_get();
+    uint8_t btn = original_btn_code;
+
+    if((custom_btn_id == SUBGHZ_CUSTOM_BTN_OK) && (original_btn_code != 0)) {
+        btn = original_btn_code;
+    } else if(custom_btn_id == SUBGHZ_CUSTOM_BTN_UP) {
+        btn = 0x1;
+    } else if(custom_btn_id == SUBGHZ_CUSTOM_BTN_DOWN) {
+        btn = 0x2;
+    } else if(custom_btn_id == SUBGHZ_CUSTOM_BTN_LEFT) {
+        btn = 0x4;
+    } else if(custom_btn_id == SUBGHZ_CUSTOM_BTN_RIGHT) {
+        btn = 0x8;
+    }
+
+    return btn & 0x0F;
+}
+
 /** 
  * Analysis of received data
  * @param instance Pointer to a SubGhzBlockGeneric* instance
@@ -239,6 +263,12 @@ static void subghz_protocol_came_twee_remote_controller(SubGhzBlockGeneric* inst
     data >>= 16;
     data = (uint16_t)subghz_protocol_blocks_reverse_key(data, 16);
     instance->cnt = data >> 6;
+
+    // Save original button for later use
+    if(subghz_custom_btn_get_original() == 0) {
+        subghz_custom_btn_set_original(instance->btn);
+    }
+    subghz_custom_btn_set_max(4);
 }
 
 SubGhzProtocolStatus
@@ -259,6 +289,14 @@ SubGhzProtocolStatus
             flipper_format, "Repeat", (uint32_t*)&instance->encoder.repeat, 1);
 
         subghz_protocol_came_twee_remote_controller(&instance->generic);
+
+        // Select the button according to the D-pad and rebuild bits 6..9 of the
+        // XOR-decoded serial (the button field the encoder transmits).
+        uint8_t btn = subghz_protocol_came_twee_get_btn_code((uint8_t)instance->generic.btn);
+        instance->generic.serial =
+            (instance->generic.serial & ~((uint32_t)0x0F << 6)) | ((uint32_t)btn << 6);
+        instance->generic.btn = btn;
+
         subghz_protocol_encoder_came_twee_get_upload(instance);
         instance->encoder.front = 0; // reset position before start
         instance->encoder.is_running = true;

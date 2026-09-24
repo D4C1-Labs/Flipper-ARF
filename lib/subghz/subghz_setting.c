@@ -61,6 +61,7 @@ static const uint32_t subghz_frequency_list[] = {
     434075000,
     434176948,
     434190000,
+    434250000, /* Ford V2/V3 remote keyless entry */
     434390000,
     434420000,
     434620000,
@@ -90,6 +91,7 @@ static const uint32_t subghz_hopper_frequency_list[] = {
     390000000,
     430500000,
     433920000,
+    434250000,
     434420000,
     868350000,
     0,

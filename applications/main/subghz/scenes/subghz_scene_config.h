@@ -37,3 +37,4 @@ ADD_SCENE(subghz, counter_bf, CounterBf)
 ADD_SCENE(subghz, car_emulate, CarEmulate)
 ADD_SCENE(subghz, car_emulate_settings, CarEmulateSettings)
 ADD_SCENE(subghz, hitag2_bf, Hitag2Bf) // [HITAG2_BF]
+ADD_SCENE(subghz, seed_bf, SeedBf) // [HITAG2_SEED]

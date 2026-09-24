@@ -6,6 +6,8 @@
 #include "../blocks/generic.h"
 #include "../blocks/math.h"
 
+#include "../blocks/custom_btn_i.h"
+
 #define TAG "SubGhzProtocolNeroRadio"
 
 static const SubGhzBlockConst subghz_protocol_nero_radio_const = {
@@ -161,6 +163,35 @@ static bool
     return true;
 }
 
+// Full D-pad support. Nero Radio carries a real 4-bit button field at bits [27:24]
+// of the frame (Btn = (data >> 24) & 0xF, see parse_data). The remote's observed
+// button codes are 1, 2, 3 and 4. The encoder does not populate generic.btn via
+// subghz_block_generic_deserialize, so we extract the button straight from the data
+// word, enable the D-pad and map each direction to a different real button value.
+// OK re-sends the originally captured button.
+#define NERO_RADIO_BTN_SHIFT 24U
+#define NERO_RADIO_BTN_MASK  ((uint64_t)0xF << NERO_RADIO_BTN_SHIFT)
+
+static uint8_t subghz_protocol_nero_radio_get_btn_code(uint8_t original_btn) {
+    uint8_t custom_btn_id = subghz_custom_btn_get();
+    uint8_t btn = original_btn;
+
+    if((custom_btn_id == SUBGHZ_CUSTOM_BTN_OK) && (original_btn != 0)) {
+        // Restore original button code
+        btn = original_btn;
+    } else if(custom_btn_id == SUBGHZ_CUSTOM_BTN_UP) {
+        btn = (original_btn == 0x1) ? 0x2 : 0x1;
+    } else if(custom_btn_id == SUBGHZ_CUSTOM_BTN_DOWN) {
+        btn = (original_btn == 0x2) ? 0x1 : 0x2;
+    } else if(custom_btn_id == SUBGHZ_CUSTOM_BTN_LEFT) {
+        btn = (original_btn == 0x3) ? 0x4 : 0x3;
+    } else if(custom_btn_id == SUBGHZ_CUSTOM_BTN_RIGHT) {
+        btn = (original_btn == 0x4) ? 0x3 : 0x4;
+    }
+
+    return btn & 0xF;
+}
+
 SubGhzProtocolStatus
     subghz_protocol_encoder_nero_radio_deserialize(void* context, FlipperFormat* flipper_format) {
     furi_assert(context);
@@ -183,6 +214,17 @@ SubGhzProtocolStatus
         // Optional value
         flipper_format_read_uint32(
             flipper_format, "Repeat", (uint32_t*)&instance->encoder.repeat, 1);
+
+        // Full D-pad: derive the original button from the data word (bits [27:24])
+        // and re-encode it based on the current custom button selection.
+        uint8_t original_btn = (uint8_t)((instance->generic.data >> NERO_RADIO_BTN_SHIFT) & 0xF);
+        if(subghz_custom_btn_get_original() == 0) {
+            subghz_custom_btn_set_original(original_btn);
+        }
+        subghz_custom_btn_set_max(4);
+        uint8_t new_btn = subghz_protocol_nero_radio_get_btn_code(original_btn);
+        instance->generic.data = (instance->generic.data & ~NERO_RADIO_BTN_MASK) |
+                                 ((uint64_t)new_btn << NERO_RADIO_BTN_SHIFT);
 
         if(!subghz_protocol_encoder_nero_radio_get_upload(instance)) {
             ret = SubGhzProtocolStatusErrorEncoderGetUpload;

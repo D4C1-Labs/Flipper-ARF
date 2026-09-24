@@ -9,6 +9,7 @@ enum SubmenuIndex {
     SubmenuIndexCounterBf,                  /* <-- comma was missing here */
     SubmenuIndexCarEmulateSettings,
     SubmenuIndexHitag2Bf, // [HITAG2_BF]
+    SubmenuIndexSeedBf, // [HITAG2_SEED] Renault V1 classic-Hitag2 seed BF
 };
 
 void subghz_scene_saved_menu_submenu_callback(void* context, uint32_t index) {
@@ -23,7 +24,8 @@ void subghz_scene_saved_menu_on_enter(void* context) {
     bool is_psa_encrypted = false;
     bool has_signal_editor = false;
     bool has_counter = false;
-    bool is_fiat_v1_no_key = false; // [HITAG2_BF]
+    bool is_fiat_bf_candidate = false; // [HITAG2_BF] Fiat V1 or V2 without a key
+    bool is_renault_seed_candidate = false; // [HITAG2_SEED] Renault V1 (classic seed BF)
     if(fff) {
         FuriString* proto = furi_string_alloc();
         flipper_format_rewind(fff);
@@ -39,13 +41,27 @@ void subghz_scene_saved_menu_on_enter(void* context) {
                 }
                 furi_string_free(type_str);
             }
-            // [HITAG2_BF] Show Hitag2 BF button when protocol is Fiat V1 and
-            // there is no "Hitag2 Key" field (i.e. the sig wasn't cracked yet)
-            if(furi_string_equal_str(proto, "Fiat V1")) {
+            // [HITAG2_BF] Show "Hitag2 BF" (Fiat-BCM Hell BF) for Fiat V1/V2 that
+            // are not cracked yet (no "Hitag2 Key" field).
+            if(furi_string_equal_str(proto, "Fiat V1") ||
+               furi_string_equal_str(proto, "Fiat V2")) {
                 uint8_t key_buf[6];
                 flipper_format_rewind(fff);
                 if(!flipper_format_read_hex(fff, "Hitag2 Key", key_buf, 6)) {
-                    is_fiat_v1_no_key = true;
+                    is_fiat_bf_candidate = true;
+                }
+            }
+            // [HITAG2_SEED] Renault V1 uses the classic-Hitag2 SEED brute force
+            // (the correct model for Renault), exposed as a SEPARATE manual "Seed
+            // BF" action. Show it when the SEED has not been recovered yet (no
+            // "Recovered: 1" marker in the .sub). The heavy brute force runs ONLY
+            // when the user taps this button, never during capture/load.
+            else if(furi_string_equal_str(proto, "Renault V1")) {
+                uint32_t recovered = 0;
+                flipper_format_rewind(fff);
+                if(!flipper_format_read_uint32(fff, "Recovered", &recovered, 1) ||
+                   recovered != 1U) {
+                    is_renault_seed_candidate = true;
                 }
             }
         }
@@ -117,12 +133,23 @@ void subghz_scene_saved_menu_on_enter(void* context) {
             subghz);
     }
 
-    // [HITAG2_BF] Show Hitag2 BF button for uncracked Fiat V1 signals
-    if(is_fiat_v1_no_key) {
+    // [HITAG2_BF] Show Hitag2 BF button for uncracked Fiat V1/V2 signals
+    if(is_fiat_bf_candidate) {
         submenu_add_item(
             subghz->submenu,
             "Hitag2 BF",
             SubmenuIndexHitag2Bf,
+            subghz_scene_saved_menu_submenu_callback,
+            subghz);
+    }
+
+    // [HITAG2_SEED] Show "Seed BF" for uncracked Renault V1 signals. This runs the
+    // classic-Hitag2 4-byte seed brute force on demand (kept out of capture).
+    if(is_renault_seed_candidate) {
+        submenu_add_item(
+            subghz->submenu,
+            "Seed BF",
+            SubmenuIndexSeedBf,
             subghz_scene_saved_menu_submenu_callback,
             subghz);
     }
@@ -186,6 +213,12 @@ bool subghz_scene_saved_menu_on_event(void* context, SceneManagerEvent event) {
             scene_manager_set_scene_state(
                 subghz->scene_manager, SubGhzSceneSavedMenu, SubmenuIndexHitag2Bf);
             scene_manager_next_scene(subghz->scene_manager, SubGhzSceneHitag2Bf);
+            return true;
+        } else if(event.event == SubmenuIndexSeedBf) {
+            // [HITAG2_SEED] Renault V1 classic-Hitag2 seed brute force (manual).
+            scene_manager_set_scene_state(
+                subghz->scene_manager, SubGhzSceneSavedMenu, SubmenuIndexSeedBf);
+            scene_manager_next_scene(subghz->scene_manager, SubGhzSceneSeedBf);
             return true;
         }
     }

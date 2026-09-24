@@ -78,7 +78,7 @@ const SubGhzProtocolEncoder subghz_protocol_mazda_siemens_encoder = {
 const SubGhzProtocol subghz_protocol_mazda_siemens = {
     .name = SUBGHZ_PROTOCOL_MAZDA_SIEMENS_NAME,
     .type = SubGhzProtocolTypeStatic,
-    .flag = SubGhzProtocolFlag_433 | SubGhzProtocolFlag_FM |
+    .flag = SubGhzProtocolFlag_315 | SubGhzProtocolFlag_433 | SubGhzProtocolFlag_FM |
             SubGhzProtocolFlag_Decodable | SubGhzProtocolFlag_Load |
             SubGhzProtocolFlag_Save | SubGhzProtocolFlag_Send,
 
@@ -260,12 +260,19 @@ static bool
         data[i] = (instance->generic.data >> (56 - 8 * i)) & 0xFF;
     }
 
-    uint8_t cnt_lo = data[6];
-    cnt_lo++;
-    data[6] = cnt_lo;
-    if(cnt_lo == 0) {
-        data[5]++;
-    }
+    // [PROTOPIRATE_PORT] The rolling counter now comes from generic.cnt (which the
+    // car-emulate scene supplies via "Cnt", already incremented). Rebuild the
+    // serial/btn/cnt cleartext bytes from the generic fields so the recomputed
+    // checksum matches the transmitted counter. Previously get_upload did a local
+    // data[6]++ but never persisted Key back to the file, so every TX re-read the
+    // same Key and replayed the same counter.
+    data[0] = (uint8_t)(instance->generic.serial >> 24);
+    data[1] = (uint8_t)(instance->generic.serial >> 16);
+    data[2] = (uint8_t)(instance->generic.serial >> 8);
+    data[3] = (uint8_t)(instance->generic.serial);
+    data[4] = (uint8_t)(instance->generic.btn & 0xFF);
+    data[5] = (uint8_t)((instance->generic.cnt >> 8) & 0xFF);
+    data[6] = (uint8_t)(instance->generic.cnt & 0xFF);
 
     uint8_t checksum = 0;
     for(int i = 0; i < 7; i++) {
@@ -332,11 +339,41 @@ SubGhzProtocolStatus
         flipper_format_read_uint32(
             flipper_format, "Repeat", (uint32_t*)&instance->encoder.repeat, 1);
 
+        // [PROTOPIRATE_PORT] Populate serial/btn/cnt from the packed Key first.
+        mazda_parse_data(&instance->generic);
+
+        // [PROTOPIRATE_PORT] Read Serial/Btn/Cnt overrides from the flipper_format.
+        // The car-emulate scene increments the rolling counter and writes it into
+        // "Cnt"; subghz_block_generic_deserialize_check_count_bit only reads Key,
+        // so we must read "Cnt" here or we would replay the same frame.
+        uint32_t ser_u32 = 0;
+        uint32_t btn_u32 = 0;
+        uint32_t cnt_u32 = 0;
+        flipper_format_rewind(flipper_format);
+        bool got_serial = flipper_format_read_uint32(flipper_format, "Serial", &ser_u32, 1);
+        flipper_format_rewind(flipper_format);
+        bool got_btn = flipper_format_read_uint32(flipper_format, "Btn", &btn_u32, 1);
+        flipper_format_rewind(flipper_format);
+        bool got_cnt = flipper_format_read_uint32(flipper_format, "Cnt", &cnt_u32, 1);
+
+        if(got_serial) instance->generic.serial = ser_u32;
+        // [ROLLING_CNT] If the scene supplied a "Cnt" (car-emulate) use it as-is;
+        // otherwise (plain transmitter OK/D-pad press) forward-encode the NEXT
+        // counter with the rolling multiplier so the UI shows an incrementing
+        // counter, matching VAG/PSA. get_upload() re-packs generic.cnt into the Key
+        // and we persist Key+Cnt below, so the decoder shows the advanced value.
+        if(got_cnt) {
+            instance->generic.cnt = cnt_u32 & 0xFFFF;
+        } else {
+            uint32_t mult = furi_hal_subghz_get_rolling_counter_mult();
+            if(mult == 0U) mult = 1U;
+            instance->generic.cnt = (instance->generic.cnt + mult) & 0xFFFF;
+        }
+
         // [PROTOPIRATE_PORT] custom_btn support
         // Mazda Siemens button codes (see mazda_get_btn_name):
         //   0x10 = Lock, 0x20 = Unlock, 0x40 = Trunk.
         // Btn occupies bits 24..31 of generic.data.
-        mazda_parse_data(&instance->generic);
         {
             const uint8_t original_btn = (uint8_t)instance->generic.btn;
             if(subghz_custom_btn_get_original() == 0) {
@@ -354,19 +391,40 @@ SubGhzProtocolStatus
             case SUBGHZ_CUSTOM_BTN_RIGHT: new_btn = original_btn; break;
             default:                      new_btn = original_btn; break;
             }
-            if(new_btn != original_btn) {
-                // Re-encode packet with new button; get_upload recomputes checksum.
-                instance->generic.btn = new_btn;
-                instance->generic.data =
-                    (instance->generic.data & ~((uint64_t)0xFFU << 24U)) |
-                    ((uint64_t)new_btn << 24U);
-            }
+            // Explicit "Btn" override in the file wins over the custom_btn mapping.
+            if(got_btn) new_btn = (uint8_t)(btn_u32 & 0xFF);
+            instance->generic.btn = new_btn;
         }
 
         if(!subghz_protocol_encoder_mazda_siemens_get_upload(instance)) {
             res = SubGhzProtocolStatusErrorEncoderGetUpload;
             break;
         }
+
+        // [PROTOPIRATE_PORT] Persist the re-encoded cleartext Key plus Serial/Btn/Cnt
+        // so the next TX (and any save/reload) starts from the advanced counter.
+        flipper_format_rewind(flipper_format);
+        uint8_t key_data[8];
+        for(int i = 0; i < 8; i++) {
+            key_data[i] = (uint8_t)((instance->generic.data >> (56 - 8 * i)) & 0xFF);
+        }
+        if(!flipper_format_update_hex(flipper_format, "Key", key_data, 8)) {
+            res = SubGhzProtocolStatusErrorParserKey;
+            break;
+        }
+
+        uint32_t temp_serial = instance->generic.serial;
+        flipper_format_rewind(flipper_format);
+        flipper_format_insert_or_update_uint32(flipper_format, "Serial", &temp_serial, 1);
+
+        uint32_t temp_btn = instance->generic.btn;
+        flipper_format_rewind(flipper_format);
+        flipper_format_insert_or_update_uint32(flipper_format, "Btn", &temp_btn, 1);
+
+        uint32_t temp_cnt = instance->generic.cnt;
+        flipper_format_rewind(flipper_format);
+        flipper_format_insert_or_update_uint32(flipper_format, "Cnt", &temp_cnt, 1);
+
         instance->encoder.is_running = true;
     } while(false);
 
@@ -536,17 +594,46 @@ SubGhzProtocolStatus subghz_protocol_decoder_mazda_siemens_serialize(
     SubGhzRadioPreset* preset) {
     furi_assert(context);
     SubGhzProtocolDecoderMazdaSiemens* instance = context;
-    return subghz_block_generic_serialize(&instance->generic, flipper_format, preset);
+
+    mazda_parse_data(&instance->generic);
+
+    SubGhzProtocolStatus ret =
+        subghz_block_generic_serialize(&instance->generic, flipper_format, preset);
+    if(ret != SubGhzProtocolStatusOk) {
+        return ret;
+    }
+
+    // [PROTOPIRATE_PORT] Persist Serial/Btn/Cnt so the base counter survives
+    // save/reload and the car-emulate scene can read/override them.
+    uint32_t v_serial = instance->generic.serial;
+    uint32_t v_btn = instance->generic.btn;
+    uint32_t v_cnt = instance->generic.cnt;
+    if(!flipper_format_write_uint32(flipper_format, "Serial", &v_serial, 1) ||
+       !flipper_format_write_uint32(flipper_format, "Btn", &v_btn, 1) ||
+       !flipper_format_write_uint32(flipper_format, "Cnt", &v_cnt, 1)) {
+        return SubGhzProtocolStatusErrorParserOthers;
+    }
+    return SubGhzProtocolStatusOk;
 }
 
 SubGhzProtocolStatus
     subghz_protocol_decoder_mazda_siemens_deserialize(void* context, FlipperFormat* flipper_format) {
     furi_assert(context);
     SubGhzProtocolDecoderMazdaSiemens* instance = context;
-    return subghz_block_generic_deserialize_check_count_bit(
+    SubGhzProtocolStatus ret = subghz_block_generic_deserialize_check_count_bit(
         &instance->generic,
         flipper_format,
         subghz_protocol_mazda_siemens_const.min_count_bit_for_found);
+    if(ret == SubGhzProtocolStatusOk) {
+        mazda_parse_data(&instance->generic);
+
+        // [PROTOPIRATE_PORT] custom_btn support (Lock/Unlock/Trunk → 4 buttons max).
+        if(subghz_custom_btn_get_original() == 0) {
+            subghz_custom_btn_set_original((uint8_t)instance->generic.btn);
+        }
+        subghz_custom_btn_set_max(4);
+    }
+    return ret;
 }
 
 static const char* mazda_get_btn_name(uint8_t btn) {
@@ -562,6 +649,25 @@ static const char* mazda_get_btn_name(uint8_t btn) {
     }
 }
 
+// [PROTOPIRATE_PORT] custom_btn UI support
+// Re-derive the displayed button from the D-pad selection, mirroring the encoder
+// remap (see encoder deserialize): Up=Lock(0x10), Down=Unlock(0x20),
+// Left=Trunk(0x40), Right/OK=captured.
+static uint8_t mazda_ui_button(uint8_t custom, uint8_t original_btn) {
+    switch(custom) {
+    case SUBGHZ_CUSTOM_BTN_UP:
+        return 0x10U; // Lock
+    case SUBGHZ_CUSTOM_BTN_DOWN:
+        return 0x20U; // Unlock
+    case SUBGHZ_CUSTOM_BTN_LEFT:
+        return 0x40U; // Trunk
+    case SUBGHZ_CUSTOM_BTN_RIGHT:
+    case SUBGHZ_CUSTOM_BTN_OK:
+    default:
+        return original_btn;
+    }
+}
+
 void subghz_protocol_decoder_mazda_siemens_get_string(void* context, FuriString* output) {
     furi_assert(context);
     SubGhzProtocolDecoderMazdaSiemens* instance = context;
@@ -573,6 +679,14 @@ void subghz_protocol_decoder_mazda_siemens_get_string(void* context, FuriString*
 
     const uint8_t chk = instance->generic.data & 0xFF;
 
+    // [BUGFIX UI] Re-derive the displayed button from the current D-pad
+    // selection so the transmitter UI reflects subghz_custom_btn_get() (like
+    // psa.c/star_line.c). CRC shown is the captured frame's checksum (data&0xFF);
+    // the encoder recomputes the real checksum for the transmitted button.
+    subghz_custom_btn_set_max(4);
+    uint8_t display_btn =
+        mazda_ui_button(subghz_custom_btn_get(), (uint8_t)instance->generic.btn);
+
     furi_string_cat_printf(
         output,
         "%s %dbit\r\n"
@@ -583,7 +697,7 @@ void subghz_protocol_decoder_mazda_siemens_get_string(void* context, FuriString*
         instance->generic.data_count_bit,
         (uint64_t)instance->generic.data,
         (uint32_t)instance->generic.serial,
-        mazda_get_btn_name(instance->generic.btn),
+        mazda_get_btn_name(display_btn),
         chk,
         (uint32_t)instance->generic.cnt);
 }

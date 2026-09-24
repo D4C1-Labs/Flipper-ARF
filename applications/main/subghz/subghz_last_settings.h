@@ -33,6 +33,9 @@ typedef struct {
     bool leds_and_amp;
     uint8_t tx_power;
     bool custom_car_emulate;
+    // SubGHz autosave/duplicate/history features adapted from Momentum Firmware (GPLv3)
+    bool autosave;
+    bool remove_duplicates;
     char protocol_filter[SUBGHZ_LAST_SETTINGS_PROTOCOL_FILTER_SIZE];  /* comma-separated disabled protocols, empty = all enabled */
 } SubGhzLastSettings;
 
@@ -106,6 +109,15 @@ static inline bool subghz_last_settings_protocol_filter_append_token(
     }
     memcpy(&filter[filter_len], token, token_len);
     filter[filter_len + token_len] = '\0';
+    return true;
+}
+
+/** Enable ALL protocols in one shot by clearing the OFF list.
+ * @return true if the filter changed (was non-empty). */
+static inline bool subghz_last_settings_protocol_filter_clear(SubGhzLastSettings* instance) {
+    if(instance == NULL) return false;
+    if(instance->protocol_filter[0] == '\0') return false;
+    instance->protocol_filter[0] = '\0';
     return true;
 }
 

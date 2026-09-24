@@ -6,6 +6,8 @@
 #include "../blocks/generic.h"
 #include "../blocks/math.h"
 
+#include "../blocks/custom_btn_i.h"
+
 #include <furi.h>
 #include <furi_hal.h>
 #include <furi_hal_rtc.h>
@@ -171,6 +173,10 @@ SubGhzProtocolStatus
         // Optional value
         flipper_format_read_uint32(
             flipper_format, "Repeat", (uint32_t*)&instance->encoder.repeat, 1);
+
+        // Dickert MAHS has no separable button field; enable the D-pad so it is
+        // visible, but every direction re-sends the original captured code.
+        subghz_custom_btn_set_max(4);
 
         if(!subghz_protocol_encoder_dickert_mahs_get_upload(instance)) {
             ret = SubGhzProtocolStatusErrorEncoderGetUpload;

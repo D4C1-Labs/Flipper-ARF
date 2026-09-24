@@ -6,6 +6,8 @@
 #include "../blocks/generic.h"
 #include "../blocks/math.h"
 
+#include "../blocks/custom_btn_i.h"
+
 #define TAG "SubGhzProtocolLinearDelta3"
 
 #define DIP_PATTERN "%c%c%c%c%c%c%c%c"
@@ -167,6 +169,11 @@ SubGhzProtocolStatus subghz_protocol_encoder_linear_delta3_deserialize(
         // Optional value
         flipper_format_read_uint32(
             flipper_format, "Repeat", (uint32_t*)&instance->encoder.repeat, 1);
+
+        // Linear Delta 3 uses a fixed DIP-switch code (no distinct button
+        // values). Enable the D-pad so it is shown, but every direction
+        // re-sends the originally captured code unchanged.
+        subghz_custom_btn_set_max(4);
 
         if(!subghz_protocol_encoder_linear_delta3_get_upload(instance)) {
             ret = SubGhzProtocolStatusErrorEncoderGetUpload;

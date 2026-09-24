@@ -443,7 +443,8 @@ const SubGhzProtocolEncoder subghz_protocol_kia_v6_encoder = {
 const SubGhzProtocol subghz_protocol_kia_v6 = {
     .name = SUBGHZ_PROTOCOL_KIA_V6_NAME,
     .type = SubGhzProtocolTypeDynamic,
-    .flag = SubGhzProtocolFlag_433 | SubGhzProtocolFlag_FM | SubGhzProtocolFlag_Decodable |
+    .flag = SubGhzProtocolFlag_315 | SubGhzProtocolFlag_433 | SubGhzProtocolFlag_FM |
+            SubGhzProtocolFlag_Decodable |
             SubGhzProtocolFlag_Save | SubGhzProtocolFlag_Load | SubGhzProtocolFlag_Send,
     .decoder = &subghz_protocol_kia_v6_decoder,
     .encoder = &subghz_protocol_kia_v6_encoder,
@@ -663,6 +664,27 @@ SubGhzProtocolStatus subghz_protocol_decoder_kia_v6_serialize(
     SubGhzProtocolStatus ret =
         subghz_block_generic_serialize(&instance->generic, flipper_format, preset);
 
+    // [PROTOPIRATE_PORT] Persist Serial/Btn/Cnt (as ProtoPirate's pp_serialize_fields
+    // does). The car-emulate scene reads "Cnt" to seed original_counter; without it the
+    // rolling counter would restart from 0 and desync from the vehicle.
+    if(ret == SubGhzProtocolStatusOk) {
+        uint32_t serial_tmp = instance->generic.serial;
+        if(!flipper_format_write_uint32(flipper_format, "Serial", &serial_tmp, 1)) {
+            ret = SubGhzProtocolStatusErrorParserOthers;
+        }
+    }
+    if(ret == SubGhzProtocolStatusOk) {
+        uint32_t btn_tmp = instance->generic.btn;
+        if(!flipper_format_write_uint32(flipper_format, "Btn", &btn_tmp, 1)) {
+            ret = SubGhzProtocolStatusErrorParserOthers;
+        }
+    }
+    if(ret == SubGhzProtocolStatusOk) {
+        uint32_t cnt_tmp = instance->generic.cnt;
+        if(!flipper_format_write_uint32(flipper_format, "Cnt", &cnt_tmp, 1)) {
+            ret = SubGhzProtocolStatusErrorParserOthers;
+        }
+    }
     if(ret == SubGhzProtocolStatusOk) {
         uint32_t key2_low = instance->stored_part2_low;
         if(!flipper_format_write_uint32(flipper_format, "Key_2", &key2_low, 1)) {
@@ -738,8 +760,35 @@ void subghz_protocol_decoder_kia_v6_get_string(void* context, FuriString* output
     uint32_t key1_lo = instance->stored_part1_low;
     uint32_t serial_6 = instance->generic.serial & 0xFFFFFF;
 
+    // [BUGFIX UI] Re-derive the displayed button from the current D-pad
+    // selection so the transmitter UI reflects subghz_custom_btn_get() (like
+    // psa.c/star_line.c), mirroring the encoder remap (see encoder deserialize):
+    // Up=Lock(0x1), Down=Unlock(0x2), Left=Trunk(0x3), Right=Panic(0x4),
+    // OK=captured. kia_v6_decrypt() just reset generic.btn to the captured value,
+    // so apply the remap here. CRC shown is the captured frame's; the encoder
+    // re-encrypts and recomputes CRC for the transmitted button.
+    subghz_custom_btn_set_max(4);
+    uint8_t display_btn = (uint8_t)(instance->generic.btn & 0x0FU);
+    switch(subghz_custom_btn_get()) {
+    case SUBGHZ_CUSTOM_BTN_UP:
+        display_btn = 0x01U; // Lock
+        break;
+    case SUBGHZ_CUSTOM_BTN_DOWN:
+        display_btn = 0x02U; // Unlock
+        break;
+    case SUBGHZ_CUSTOM_BTN_LEFT:
+        display_btn = 0x03U; // Trunk
+        break;
+    case SUBGHZ_CUSTOM_BTN_RIGHT:
+        display_btn = 0x04U; // Panic
+        break;
+    case SUBGHZ_CUSTOM_BTN_OK:
+    default:
+        break;
+    }
+
     const char* btn_name;
-    switch(instance->generic.btn & 0x0F) {
+    switch(display_btn & 0x0F) {
     case 0x01:
         btn_name = "Lock";
         break;
@@ -939,6 +988,31 @@ SubGhzProtocolStatus
         instance->generic.data_count_bit = subghz_protocol_kia_v6_const.min_count_bit_for_found;
         instance->fx_field = dec.fx_field;
 
+        // [PROTOPIRATE_PORT] Honor the app-supplied Serial/Btn/Cnt overrides so the
+        // rolling counter actually advances on each TX. The car-emulate scene writes an
+        // incremented "Cnt" into the flipper_format before re-invoking this deserialize.
+        // Without reading it back here, cnt is re-derived from the AES-decrypted stored
+        // key and the frame is a byte-identical replay. kia_v6_encoder_build_upload()
+        // re-runs AES with the new cnt (and recomputes the embedded CRC), so the emitted
+        // frame is a valid forward-encoded rolling code.
+        {
+            uint32_t ser_u32 = 0;
+            uint32_t btn_u32 = 0;
+            uint32_t cnt_u32 = 0;
+            flipper_format_rewind(flipper_format);
+            if(flipper_format_read_uint32(flipper_format, "Serial", &ser_u32, 1)) {
+                instance->generic.serial = ser_u32;
+            }
+            flipper_format_rewind(flipper_format);
+            if(flipper_format_read_uint32(flipper_format, "Btn", &btn_u32, 1)) {
+                instance->generic.btn = (uint8_t)btn_u32;
+            }
+            flipper_format_rewind(flipper_format);
+            if(flipper_format_read_uint32(flipper_format, "Cnt", &cnt_u32, 1)) {
+                instance->generic.cnt = cnt_u32;
+            }
+        }
+
         // [PROTOPIRATE_PORT] custom_btn support
         // Kia V6 codes (see get_string switch): Lock=0x01, Unlock=0x02,
         // Trunk=0x03, Panic=0x04. build_upload re-encrypts using
@@ -961,7 +1035,46 @@ SubGhzProtocolStatus
             instance->generic.btn &= 0x0FU;
         }
 
+        // [ROLLING_CNT] Forward-encode the NEXT counter (like VAG/PSA) so the
+        // transmitter UI shows an incrementing counter on each OK/D-pad press.
+        // kia_v6_encoder_build_upload() re-runs AES with this cnt and refreshes the
+        // stored_part fields; we persist them below so the decoder re-derives the
+        // advanced counter on the UI refresh.
+        {
+            uint32_t mult = furi_hal_subghz_get_rolling_counter_mult();
+            if(mult == 0U) mult = 1U;
+            instance->generic.cnt = instance->generic.cnt + mult;
+        }
+
         kia_v6_encoder_build_upload(instance);
+
+        // [ROLLING_CNT] Persist the re-encrypted AES frame (Key + Key_2/3/4) and the
+        // advanced Cnt so the UI refresh (decoder AES-decrypts the Key) shows the
+        // incremented counter and the next TX continues from here.
+        {
+            instance->generic.data = ((uint64_t)instance->stored_part1_high << 32) |
+                                     instance->stored_part1_low;
+            uint8_t key_data[8];
+            for(int i = 0; i < 8; i++) {
+                key_data[i] = (uint8_t)((instance->generic.data >> (56 - 8 * i)) & 0xFF);
+            }
+            flipper_format_rewind(flipper_format);
+            flipper_format_update_hex(flipper_format, "Key", key_data, 8);
+
+            uint32_t tmp = instance->stored_part2_low;
+            flipper_format_rewind(flipper_format);
+            flipper_format_insert_or_update_uint32(flipper_format, "Key_2", &tmp, 1);
+            tmp = instance->stored_part2_high;
+            flipper_format_rewind(flipper_format);
+            flipper_format_insert_or_update_uint32(flipper_format, "Key_3", &tmp, 1);
+            tmp = instance->data_part3;
+            flipper_format_rewind(flipper_format);
+            flipper_format_insert_or_update_uint32(flipper_format, "Key_4", &tmp, 1);
+
+            uint32_t cnt_store = instance->generic.cnt;
+            flipper_format_rewind(flipper_format);
+            flipper_format_insert_or_update_uint32(flipper_format, "Cnt", &cnt_store, 1);
+        }
 
         instance->encoder.is_running = true;
         ret = SubGhzProtocolStatusOk;
@@ -988,7 +1101,9 @@ LevelDuration subghz_protocol_encoder_kia_v6_yield(void* context) {
     LevelDuration ret = instance->encoder.upload[instance->encoder.front];
     instance->encoder.front++;
     if(instance->encoder.front >= instance->encoder.size_upload) {
-        instance->encoder.repeat--;
+        // Endless/breakless TX: while OK is held (endless_tx set by the transmit
+        // scene) do not consume repeats, so the signal loops until release.
+        if(!subghz_block_generic_global.endless_tx) instance->encoder.repeat--;
         instance->encoder.front = 0;
     }
     return ret;

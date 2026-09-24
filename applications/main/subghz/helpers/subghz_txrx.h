@@ -299,6 +299,16 @@ bool subghz_txrx_protocol_is_transmittable(SubGhzTxRx* instance, bool check_type
 void subghz_txrx_receiver_set_filter(SubGhzTxRx* instance, SubGhzProtocolFlag filter);
 
 /**
+ * Derive the modulation gate (AM/FM) from the active preset and apply it to
+ * the receiver, so only decoders whose modulation matches the capture are fed.
+ * Mirrors ProtoPirate's per-preset registry selection and prevents e.g. the AM
+ * Fiat V2 decoder from firing on an FM KIA V6 capture.
+ *
+ * @param instance Pointer to a SubGhzTxRx
+ */
+void subghz_txrx_receiver_apply_modulation_filter(SubGhzTxRx* instance);
+
+/**
  * Set callback for receive data
  * 
  * @param instance Pointer to a SubGhzTxRx

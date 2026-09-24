@@ -67,6 +67,7 @@
 #include "fiat_v1.h"
 #include "fiat_v2.h"
 #include "renault_v0.h"
+#include "renault_v1.h"
 #include "bmw_cas4.h"
 #include "subaru.h"
 #include "kia_generic.h"
@@ -93,6 +94,11 @@
 #include "honda_static.h"
 #include "honda_v1.h"
 #include "honda_v2.h"
+#include "mercedes.h"
+#include "mazda_infinity.h"
+#include "audi.h"
+#include "hundai.h"
+#include "gm.h"
 
 // [UNLEASHED_PORT] New protocols from Unleashed firmware
 #include "allstar_firefly.h"

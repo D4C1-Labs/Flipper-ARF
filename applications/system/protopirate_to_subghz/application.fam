@@ -1,0 +1,19 @@
+App(
+    appid="protopirate_to_subghz",
+    name="ProtoPirate to SubGhz",
+    apptype=FlipperAppType.EXTERNAL,
+    entry_point="protopirate_to_subghz_app",
+    stack_size=8 * 1024,
+    requires=[
+        "gui",
+    ],
+    sources=[
+        "protopirate_to_subghz.c",
+        "converter.c",
+        "ff_copy.c",
+    ],
+    fap_icon="icon.png",
+    fap_category="Sub-GHz",
+    fap_version="1.0",
+    fap_description="Bidirectionally converts car captures between ProtoPirate .psf and standard SubGHz .sub, organized by automotive brand.",
+)

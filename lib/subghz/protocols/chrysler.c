@@ -332,7 +332,9 @@ LevelDuration subghz_protocol_encoder_chrysler_yield(void* context) {
     }
     LevelDuration ret = instance->encoder.upload[instance->encoder.front];
     if(++instance->encoder.front == instance->encoder.size_upload) {
-        instance->encoder.repeat--;
+        // Endless/breakless TX: while OK is held (endless_tx set by the transmit
+        // scene) do not consume repeats, so the signal loops until release.
+        if(!subghz_block_generic_global.endless_tx) instance->encoder.repeat--;
         instance->encoder.front = 0;
     }
     return ret;
@@ -488,8 +490,9 @@ SubGhzProtocolStatus
     }
 
     // [PROTOPIRATE_PORT] custom_btn support
-    // Chrysler mapping: Up=0x1 (Lock), OK=0x2 (Unlock)
-    // custom_btn_id=OK returns original; UP/DOWN override tx_button.
+    // Chrysler has exactly 2 buttons: Lock=0x1, Unlock=0x2 (set_max=2).
+    // Map the D-pad so both are reachable: Up=Lock, Down=Unlock. OK/other replay
+    // the captured button (the "Btn" field read above seeds original_button).
     {
         if(subghz_custom_btn_get_original() == 0) {
             subghz_custom_btn_set_original(original_button);
@@ -498,12 +501,15 @@ SubGhzProtocolStatus
         uint8_t custom_btn_id = subghz_custom_btn_get();
         switch(custom_btn_id) {
         case SUBGHZ_CUSTOM_BTN_UP:
-            tx_button = 0x1U;
+            tx_button = 0x1U; // Lock
+            break;
+        case SUBGHZ_CUSTOM_BTN_DOWN:
+            tx_button = 0x2U; // Unlock
             break;
         case SUBGHZ_CUSTOM_BTN_OK:
         default:
-            // [BUGFIX] OK is the default state after loading a .sub. Replay
-            // the original captured button rather than force a specific one.
+            // OK is the default state after loading a .sub. Replay the original
+            // captured button rather than force a specific one.
             tx_button = original_button;
             break;
         }
@@ -520,6 +526,16 @@ SubGhzProtocolStatus
         uint32_t repeat_val = 0;
         instance->encoder.repeat =
             flipper_format_read_uint32(flipper_format, "Repeat", &repeat_val, 1) ? repeat_val : 2;
+    }
+
+    // [ROLLING_CNT] Forward-encode the NEXT counter (like VAG/PSA) so the
+    // transmitter UI shows an incrementing counter on each OK/D-pad press. Chrysler
+    // uses an even "counter_a" (seed) with a paired counter_b = counter_a-1, so we
+    // advance in steps of 2*mult to keep the seed even and actually move it.
+    {
+        uint32_t mult = furi_hal_subghz_get_rolling_counter_mult();
+        if(mult == 0U) mult = 1U;
+        cnt_u32 = (cnt_u32 + (2U * mult)) & 0x3FU;
     }
 
     uint32_t counter = cnt_u32 & 0x3FU;
@@ -861,11 +877,30 @@ void subghz_protocol_decoder_chrysler_get_string(void* context, FuriString* outp
             output, "SN:0x%08lX\r\n", (unsigned long)chrysler_v0_get_sn_b(instance));
     }
 
+    // [BUGFIX UI] Re-derive the displayed button from the current D-pad
+    // selection so the transmitter UI reflects subghz_custom_btn_get() (like
+    // psa.c/star_line.c), mirroring the encoder remap (see encoder deserialize):
+    // Up=Lock(0x1), Down=Unlock(0x2), OK=captured. Chrysler has exactly 2 buttons.
+    // check_ok validates the captured frame's structure and is left as-is.
+    subghz_custom_btn_set_max(2);
+    uint8_t display_btn = instance->decoded_button;
+    switch(subghz_custom_btn_get()) {
+    case SUBGHZ_CUSTOM_BTN_UP:
+        display_btn = 0x1U; // Lock
+        break;
+    case SUBGHZ_CUSTOM_BTN_DOWN:
+        display_btn = 0x2U; // Unlock
+        break;
+    case SUBGHZ_CUSTOM_BTN_OK:
+    default:
+        break;
+    }
+
     furi_string_cat_printf(
         output,
         "Btn:[%s]\r\n"
         "CRC:%s Cnt:%02X",
-        chrysler_v0_get_button_name(instance->decoded_button),
+        chrysler_v0_get_button_name(display_btn),
         instance->check_ok ? "OK" : "ERR",
         instance->seed);
 }

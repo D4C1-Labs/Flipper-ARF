@@ -24,6 +24,9 @@
 #define SUBGHZ_LAST_SETTING_FIELD_TX_POWER                          "TXPower"
 #define SUBGHZ_LAST_SETTING_FIELD_CUSTOM_CAR_EMULATE                "CustomCarEmulate"
 #define SUBGHZ_LAST_SETTING_FIELD_PROTOCOL_FILTER                   "ProtocolFilterOff"
+// SubGHz autosave/duplicate/history features adapted from Momentum Firmware (GPLv3)
+#define SUBGHZ_LAST_SETTING_FIELD_AUTOSAVE                          "Autosave"
+#define SUBGHZ_LAST_SETTING_FIELD_REMOVE_DUPLICATES                 "RemoveDuplicates"
 
 SubGhzLastSettings* subghz_last_settings_alloc(void) {
     SubGhzLastSettings* instance = malloc(sizeof(SubGhzLastSettings));
@@ -53,6 +56,9 @@ void subghz_last_settings_load(SubGhzLastSettings* instance, size_t preset_count
     instance->preset_hopping_threshold = SUBGHZ_LAST_SETTING_DEFAULT_PRESET_HOPPING_THRESHOLD;
     instance->leds_and_amp = true;
     instance->protocol_filter[0] = '\0';
+    // SubGHz autosave/duplicate/history features adapted from Momentum Firmware (GPLv3)
+    instance->autosave = false;
+    instance->remove_duplicates = false;
 
     Storage* storage = furi_record_open(RECORD_STORAGE);
     FlipperFormat* fff_data_file = flipper_format_file_alloc(storage);
@@ -172,6 +178,23 @@ void subghz_last_settings_load(SubGhzLastSettings* instance, size_t preset_count
                     &instance->custom_car_emulate,
                     1)) {
                 instance->custom_car_emulate = false;
+                flipper_format_rewind(fff_data_file);
+            }
+            // SubGHz autosave/duplicate/history features adapted from Momentum Firmware (GPLv3)
+            if(!flipper_format_read_bool(
+                   fff_data_file,
+                   SUBGHZ_LAST_SETTING_FIELD_AUTOSAVE,
+                   &instance->autosave,
+                   1)) {
+                instance->autosave = false;
+                flipper_format_rewind(fff_data_file);
+            }
+            if(!flipper_format_read_bool(
+                   fff_data_file,
+                   SUBGHZ_LAST_SETTING_FIELD_REMOVE_DUPLICATES,
+                   &instance->remove_duplicates,
+                   1)) {
+                instance->remove_duplicates = false;
                 flipper_format_rewind(fff_data_file);
             }
             FuriString* filter_str = furi_string_alloc();
@@ -310,6 +333,18 @@ bool subghz_last_settings_save(SubGhzLastSettings* instance) {
                file,
                SUBGHZ_LAST_SETTING_FIELD_CUSTOM_CAR_EMULATE,
                &instance->custom_car_emulate,
+               1)) {
+            break;
+        }
+        // SubGHz autosave/duplicate/history features adapted from Momentum Firmware (GPLv3)
+        if(!flipper_format_write_bool(
+               file, SUBGHZ_LAST_SETTING_FIELD_AUTOSAVE, &instance->autosave, 1)) {
+            break;
+        }
+        if(!flipper_format_write_bool(
+               file,
+               SUBGHZ_LAST_SETTING_FIELD_REMOVE_DUPLICATES,
+               &instance->remove_duplicates,
                1)) {
             break;
         }

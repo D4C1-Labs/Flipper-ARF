@@ -5,6 +5,8 @@
 #include "../blocks/generic.h"
 #include "../blocks/math.h"
 
+#include "../blocks/custom_btn_i.h"
+
 #define TAG "SubGhzProtocolNiceFlo"
 
 static const SubGhzBlockConst subghz_protocol_nice_flo_const = {
@@ -150,6 +152,11 @@ SubGhzProtocolStatus
         // Optional value
         flipper_format_read_uint32(
             flipper_format, "Repeat", (uint32_t*)&instance->encoder.repeat, 1);
+
+        // Nice Flo is a fixed code with no button field (btn is always 0). Enable
+        // the D-pad so the transmit view exposes it, but every direction re-sends
+        // the originally captured code unchanged.
+        subghz_custom_btn_set_max(4);
 
         if(!subghz_protocol_encoder_nice_flo_get_upload(instance)) {
             ret = SubGhzProtocolStatusErrorEncoderGetUpload;

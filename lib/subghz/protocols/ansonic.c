@@ -5,6 +5,8 @@
 #include "../blocks/generic.h"
 #include "../blocks/math.h"
 
+#include "../blocks/custom_btn_i.h"
+
 #define TAG "SubGhzProtocolAnsonic"
 
 #define DIP_PATTERN "%c%c%c%c%c%c%c%c%c%c"
@@ -96,6 +98,27 @@ void subghz_protocol_encoder_ansonic_free(void* context) {
     free(instance);
 }
 
+// Ansonic stores the button in a 2-bit field at bit position 1 of data
+// (btn = (data >> 1) & 0x3, values 0..3).
+// OK -> original captured button, Up/Down/Left -> the other 2-bit values.
+static uint8_t subghz_protocol_ansonic_get_btn_code(void) {
+    uint8_t custom_btn_id = subghz_custom_btn_get();
+    uint8_t original_btn_code = subghz_custom_btn_get_original();
+    uint8_t btn = original_btn_code;
+
+    if((custom_btn_id == SUBGHZ_CUSTOM_BTN_OK) && (original_btn_code != 0)) {
+        btn = original_btn_code;
+    } else if(custom_btn_id == SUBGHZ_CUSTOM_BTN_UP) {
+        btn = 0x1;
+    } else if(custom_btn_id == SUBGHZ_CUSTOM_BTN_DOWN) {
+        btn = 0x2;
+    } else if(custom_btn_id == SUBGHZ_CUSTOM_BTN_LEFT) {
+        btn = 0x3;
+    }
+
+    return btn & 0x03;
+}
+
 /**
  * Generating an upload from data.
  * @param instance Pointer to a SubGhzProtocolEncoderAnsonic instance
@@ -153,6 +176,18 @@ SubGhzProtocolStatus
         // Optional value
         flipper_format_read_uint32(
             flipper_format, "Repeat", (uint32_t*)&instance->encoder.repeat, 1);
+
+        // Save original captured button and enable the D-pad (up to 4 alternates)
+        uint8_t original_btn = (instance->generic.data >> 1) & 0x03;
+        if(subghz_custom_btn_get_original() == 0) {
+            subghz_custom_btn_set_original(original_btn);
+        }
+        subghz_custom_btn_set_max(4);
+
+        // Select the button according to the D-pad and rebuild bits 1..2 of data
+        uint8_t btn = subghz_protocol_ansonic_get_btn_code();
+        instance->generic.data =
+            (instance->generic.data & ~((uint64_t)0x03 << 1)) | ((uint64_t)btn << 1);
 
         if(!subghz_protocol_encoder_ansonic_get_upload(instance)) {
             res = SubGhzProtocolStatusErrorEncoderGetUpload;
@@ -293,6 +328,12 @@ static void subghz_protocol_ansonic_check_remote_controller(SubGhzBlockGeneric* 
  */
     instance->cnt = instance->data & 0xFFF;
     instance->btn = ((instance->data >> 1) & 0x3);
+
+    // Save original button for later use
+    if(subghz_custom_btn_get_original() == 0) {
+        subghz_custom_btn_set_original(instance->btn);
+    }
+    subghz_custom_btn_set_max(4);
 }
 
 uint8_t subghz_protocol_decoder_ansonic_get_hash_data(void* context) {

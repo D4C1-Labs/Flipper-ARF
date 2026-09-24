@@ -60,6 +60,18 @@ void subghz_receiver_set_rx_callback(
 void subghz_receiver_set_filter(SubGhzReceiver* instance, SubGhzProtocolFlag filter);
 
 /**
+ * Set the modulation gate of the receiver. Only protocols whose declared
+ * AM/FM modulation flag matches the given modulation are fed; protocols that
+ * declare neither AM nor FM (e.g. RAW) are always allowed. Pass 0 to disable
+ * the gate (feed all protocols regardless of modulation).
+ * @param instance Pointer to a SubGhzReceiver instance
+ * @param modulation_filter SubGhzProtocolFlag_AM and/or SubGhzProtocolFlag_FM, or 0
+ */
+void subghz_receiver_set_modulation_filter(
+    SubGhzReceiver* instance,
+    SubGhzProtocolFlag modulation_filter);
+
+/**
  * Search for a cattery by his name.
  * @param instance Pointer to a SubGhzReceiver instance
  * @param decoder_name Receiver name

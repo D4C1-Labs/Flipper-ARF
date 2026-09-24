@@ -283,12 +283,16 @@ SubGhzProtocolStatus subghz_protocol_decoder_suzuki_serialize(void *context, Fli
     instance->generic.cnt = temp_cnt;
     instance->generic.btn = temp_btn;
     
-    return ret;
+    // [PROTOPIRATE_PORT] Persist Serial/Btn/Cnt so the base counter survives
+    // save/reload. Previously these writes were dead code after an early return.
     if(ret == SubGhzProtocolStatusOk) {
-        flipper_format_write_uint32(flipper_format, "Serial", &temp_serial, 1);
-        flipper_format_write_uint32(flipper_format, "Btn", &temp_btn, 1);
-        flipper_format_write_uint32(flipper_format, "Cnt", &temp_cnt, 1);
+        if(!flipper_format_write_uint32(flipper_format, "Serial", &temp_serial, 1) ||
+           !flipper_format_write_uint32(flipper_format, "Btn", &temp_btn, 1) ||
+           !flipper_format_write_uint32(flipper_format, "Cnt", &temp_cnt, 1)) {
+            return SubGhzProtocolStatusErrorParserOthers;
+        }
     }
+    return ret;
 }
 
 SubGhzProtocolStatus subghz_protocol_decoder_suzuki_deserialize(void *context, FlipperFormat *flipper_format)
@@ -331,6 +335,25 @@ void subghz_protocol_decoder_suzuki_get_string(void *context, FuriString *output
     SubGhzProtocolDecoderSuzuki *instance = context;
     
     uint64_t data = instance->generic.data;
+
+    // [BUGFIX UI+CRC] Re-derive the displayed button from the current D-pad
+    // selection so the transmitter UI reflects subghz_custom_btn_get() (like
+    // psa.c/star_line.c). Rebuild the key with the selected button (bits 12..15)
+    // and recompute the CRC-8 (bits 4..11) so both the button and CRC shown match
+    // the frame the encoder will transmit, mirroring its remap.
+    subghz_custom_btn_set_max(4);
+    uint8_t display_btn = (uint8_t)(instance->generic.btn & 0x0FU);
+    uint8_t custom_btn_id = subghz_custom_btn_get();
+    if(custom_btn_id != SUBGHZ_CUSTOM_BTN_OK) {
+        display_btn = suzuki_custom_to_btn(custom_btn_id);
+    }
+
+    if(display_btn != (uint8_t)(instance->generic.btn & 0x0FU)) {
+        data = (data & ~((uint64_t)0xFULL << 12)) | ((uint64_t)(display_btn & 0xF) << 12);
+        uint8_t new_crc = suzuki_calculate_crc(data);
+        data = (data & ~((uint64_t)0xFFULL << 4)) | ((uint64_t)new_crc << 4);
+    }
+
     uint32_t key_high = (data >> 32) & 0xFFFFFFFF;
     uint32_t key_low = data & 0xFFFFFFFF;
     uint8_t received_crc = (data >> 4) & 0xFF;
@@ -349,7 +372,7 @@ void subghz_protocol_decoder_suzuki_get_string(void *context, FuriString *output
         key_high,
         key_low,
         instance->generic.serial,
-        suzuki_get_button_name(instance->generic.btn),
+        suzuki_get_button_name(display_btn),
         received_crc,
         crc_valid ? "OK" : "ERR",
         instance->generic.cnt);
@@ -392,24 +415,48 @@ SubGhzProtocolStatus subghz_protocol_encoder_suzuki_deserialize(void *context, F
         instance->generic.serial = (uint32_t)((data >> 16) & 0x0FFFFFFF);
         instance->generic.btn = (uint8_t)((data >> 12) & 0xF);
 
+        // [PROTOPIRATE_PORT] Read Serial/Btn/Cnt overrides from the flipper_format.
+        // The car-emulate scene increments the rolling counter and writes it into
+        // "Cnt"; subghz_block_generic_deserialize only reads Key, so we must read
+        // "Cnt" here or we would replay the same frame.
+        uint32_t ser_u32 = 0;
+        uint32_t btn_u32 = 0;
+        uint32_t cnt_u32 = 0;
+        flipper_format_rewind(flipper_format);
+        bool got_serial = flipper_format_read_uint32(flipper_format, "Serial", &ser_u32, 1);
+        flipper_format_rewind(flipper_format);
+        bool got_btn = flipper_format_read_uint32(flipper_format, "Btn", &btn_u32, 1);
+        flipper_format_rewind(flipper_format);
+        bool got_cnt = flipper_format_read_uint32(flipper_format, "Cnt", &cnt_u32, 1);
+
+        if(got_serial) instance->generic.serial = ser_u32 & 0x0FFFFFFF;
+
         if(subghz_custom_btn_get_original() == 0) {
             uint8_t custom = suzuki_btn_to_custom(instance->generic.btn);
             subghz_custom_btn_set_original(custom);
         }
         subghz_custom_btn_set_max(4);
 
-        uint32_t override_cnt = 0;
-        if(subghz_block_generic_global_counter_override_get(&override_cnt)) {
-            instance->generic.cnt = override_cnt & 0xFFFFF;
+        // [PROTOPIRATE_PORT] Counter: prefer the scene-supplied "Cnt" (already the
+        // next value). Fall back to the global override, else advance locally.
+        if(got_cnt) {
+            instance->generic.cnt = cnt_u32 & 0xFFFFF;
         } else {
-            uint32_t mult = furi_hal_subghz_get_rolling_counter_mult();
-            instance->generic.cnt = (instance->generic.cnt + mult) & 0xFFFFF;
+            uint32_t override_cnt = 0;
+            if(subghz_block_generic_global_counter_override_get(&override_cnt)) {
+                instance->generic.cnt = override_cnt & 0xFFFFF;
+            } else {
+                uint32_t mult = furi_hal_subghz_get_rolling_counter_mult();
+                instance->generic.cnt = (instance->generic.cnt + mult) & 0xFFFFF;
+            }
         }
 
         uint8_t selected = subghz_custom_btn_get() == SUBGHZ_CUSTOM_BTN_OK ?
                           subghz_custom_btn_get_original() :
                           subghz_custom_btn_get();
         uint8_t btn = suzuki_custom_to_btn(selected);
+        // Explicit "Btn" override in the file wins over the custom_btn mapping.
+        if(got_btn) btn = (uint8_t)(btn_u32 & 0xF);
         subghz_block_generic_global_button_override_get(&btn);
         instance->generic.btn = btn;
 
@@ -437,6 +484,10 @@ SubGhzProtocolStatus subghz_protocol_encoder_suzuki_deserialize(void *context, F
             ret = SubGhzProtocolStatusErrorParserKey;
             break;
         }
+
+        uint32_t temp_serial = instance->generic.serial;
+        flipper_format_rewind(flipper_format);
+        flipper_format_insert_or_update_uint32(flipper_format, "Serial", &temp_serial, 1);
 
         uint32_t temp_btn = instance->generic.btn;
         flipper_format_rewind(flipper_format);

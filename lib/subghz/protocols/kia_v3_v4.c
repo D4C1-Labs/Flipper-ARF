@@ -455,6 +455,19 @@ SubGhzProtocolStatus
             instance->generic.btn = instance->btn;
         }
 
+        // [ROLLING_CNT] Forward-encode the NEXT counter (like VAG/PSA) so the
+        // transmitter UI shows an incrementing counter on each OK/D-pad press, then
+        // persist "Cnt" so the decoder reads the advanced value on the UI refresh.
+        {
+            uint32_t mult = furi_hal_subghz_get_rolling_counter_mult();
+            if(mult == 0U) mult = 1U;
+            instance->cnt = (uint16_t)((instance->cnt + mult) & 0xFFFFU);
+            instance->generic.cnt = instance->cnt;
+            flipper_format_rewind(flipper_format);
+            uint32_t cnt_store = instance->cnt;
+            flipper_format_insert_or_update_uint32(flipper_format, "Cnt", &cnt_store, 1);
+        }
+
         flipper_format_rewind(flipper_format);
         uint32_t version_temp;
         if(flipper_format_read_uint32(flipper_format, "KIAVersion", &version_temp, 1)) {
@@ -514,7 +527,9 @@ LevelDuration subghz_protocol_encoder_kia_v3_v4_yield(void* context) {
         instance->crc_iter = (uint8_t)((instance->crc_iter + 1U) & 0x0FU);
         subghz_protocol_encoder_kia_v3_v4_patch_crc(instance);
         instance->encoder.front = 0;
-        instance->encoder.repeat--;
+        // Endless/breakless TX: while OK is held (endless_tx set by the transmit
+        // scene) do not consume repeats, so the signal loops until release.
+        if(!subghz_block_generic_global.endless_tx) instance->encoder.repeat--;
         if(instance->bursts_sent < KIA_V3_V4_CRC_SWEEP_COUNT) {
             instance->bursts_sent++;
         }
@@ -694,67 +709,56 @@ SubGhzProtocolStatus subghz_protocol_decoder_kia_v3_v4_serialize(
     furi_assert(context);
     SubGhzProtocolDecoderKiaV3V4* instance = context;
 
-    SubGhzProtocolStatus ret = SubGhzProtocolStatusError;
+    // Serialize via the standard generic block FIRST. This writes the mandatory
+    // Flipper file header (Filetype/Version) + Frequency + Preset + Protocol
+    // (from generic.protocol_name = "KIA/HYU V3/V4") + Bit + Key, EXACTLY like the
+    // working Kia siblings (kia_v5/kia_v2). The previous hand-rolled writer omitted
+    // the header, which made saved files unloadable ("Cannot parse file") and broke
+    // full-D-pad emulate ("Protocol not found!") and transmit. Then append the extra
+    // Kia V3/V4 fields the deserialize reads.
+    SubGhzProtocolStatus ret =
+        subghz_block_generic_serialize(&instance->generic, flipper_format, preset);
 
-    do {
-        if(!flipper_format_write_uint32(flipper_format, "Frequency", &preset->frequency, 1)) {
-            break;
+    if(ret == SubGhzProtocolStatusOk) {
+        uint32_t serial_tmp = instance->generic.serial;
+        if(!flipper_format_write_uint32(flipper_format, "Serial", &serial_tmp, 1)) {
+            ret = SubGhzProtocolStatusErrorParserOthers;
         }
-
-        if(!flipper_format_write_string_cstr(
-               flipper_format, "Preset", furi_string_get_cstr(preset->name))) {
-            break;
-        }
-
-        const char* version_name = (instance->version == 0) ? "Kia V4" : "Kia V3";
-        if(!flipper_format_write_string_cstr(flipper_format, "Protocol", version_name)) {
-            break;
-        }
-
-        uint32_t bits = instance->generic.data_count_bit;
-        if(!flipper_format_write_uint32(flipper_format, "Bit", &bits, 1)) {
-            break;
-        }
-
-        char key_str[20];
-        snprintf(key_str, sizeof(key_str), "%016llX", (unsigned long long)instance->generic.data);
-        if(!flipper_format_write_string_cstr(flipper_format, "Key", key_str)) {
-            break;
-        }
-
-        if(!flipper_format_write_uint32(
-               flipper_format, "Serial", &instance->generic.serial, 1)) {
-            break;
-        }
+    }
+    if(ret == SubGhzProtocolStatusOk) {
         uint32_t btn_tmp = instance->generic.btn;
         if(!flipper_format_write_uint32(flipper_format, "Btn", &btn_tmp, 1)) {
-            break;
+            ret = SubGhzProtocolStatusErrorParserOthers;
         }
-        if(!flipper_format_write_uint32(
-               flipper_format, "Cnt", &instance->generic.cnt, 1)) {
-            break;
+    }
+    if(ret == SubGhzProtocolStatusOk) {
+        uint32_t cnt_tmp = instance->generic.cnt;
+        if(!flipper_format_write_uint32(flipper_format, "Cnt", &cnt_tmp, 1)) {
+            ret = SubGhzProtocolStatusErrorParserOthers;
         }
-
+    }
+    if(ret == SubGhzProtocolStatusOk) {
         if(!flipper_format_write_uint32(flipper_format, "Encrypted", &instance->encrypted, 1)) {
-            break;
+            ret = SubGhzProtocolStatusErrorParserOthers;
         }
-
+    }
+    if(ret == SubGhzProtocolStatusOk) {
         if(!flipper_format_write_uint32(flipper_format, "Decrypted", &instance->decrypted, 1)) {
-            break;
+            ret = SubGhzProtocolStatusErrorParserOthers;
         }
-
-        uint32_t temp = instance->version;
-        if(!flipper_format_write_uint32(flipper_format, "KIAVersion", &temp, 1)) {
-            break;
+    }
+    if(ret == SubGhzProtocolStatusOk) {
+        uint32_t version_tmp = instance->version;
+        if(!flipper_format_write_uint32(flipper_format, "KIAVersion", &version_tmp, 1)) {
+            ret = SubGhzProtocolStatusErrorParserOthers;
         }
-
-        temp = instance->crc;
-        if(!flipper_format_write_uint32(flipper_format, "CRC", &temp, 1)) {
-            break;
+    }
+    if(ret == SubGhzProtocolStatusOk) {
+        uint32_t crc_tmp = instance->crc;
+        if(!flipper_format_write_uint32(flipper_format, "CRC", &crc_tmp, 1)) {
+            ret = SubGhzProtocolStatusErrorParserOthers;
         }
-
-        ret = SubGhzProtocolStatusOk;
-    } while(false);
+    }
 
     return ret;
 }
@@ -764,8 +768,21 @@ SubGhzProtocolStatus
     furi_assert(context);
     SubGhzProtocolDecoderKiaV3V4* instance = context;
 
+    // Tolerant bit-count check: serialize writes 68, but legacy .sub files may
+    // carry 64 (stale min_count_bit_for_found). Accept both so old captures
+    // still emulate instead of failing with "Error history parse.". Deserialize
+    // without the framework's strict equality, then normalize to 68.
     SubGhzProtocolStatus ret =
-        subghz_block_generic_deserialize_check_count_bit(&instance->generic, flipper_format, 64);
+        subghz_block_generic_deserialize(&instance->generic, flipper_format);
+    if(ret == SubGhzProtocolStatusOk) {
+        const uint16_t want = subghz_protocol_kia_v3_v4_const.min_count_bit_for_found; // 68
+        if(instance->generic.data_count_bit == 64 ||
+           instance->generic.data_count_bit == want) {
+            instance->generic.data_count_bit = want; // normalize legacy 64 -> 68
+        } else {
+            ret = SubGhzProtocolStatusErrorValueBitCount;
+        }
+    }
 
     if(ret == SubGhzProtocolStatusOk) {
         uint32_t temp = 0;
@@ -785,6 +802,23 @@ SubGhzProtocolStatus
         flipper_format_rewind(flipper_format);
         if(flipper_format_read_uint32(flipper_format, "CRC", &temp, 1)) {
             instance->crc = (uint8_t)temp;
+        }
+
+        // [ROLLING_CNT] Read Serial/Btn/Cnt so get_string shows the current values,
+        // in particular the incremented counter the encoder re-wrote before the UI
+        // refresh. (The decoder's live-decode path fills these from the frame; on
+        // the transmitter refresh they only live in the fff.)
+        flipper_format_rewind(flipper_format);
+        if(flipper_format_read_uint32(flipper_format, "Serial", &temp, 1)) {
+            instance->generic.serial = temp;
+        }
+        flipper_format_rewind(flipper_format);
+        if(flipper_format_read_uint32(flipper_format, "Btn", &temp, 1)) {
+            instance->generic.btn = (uint8_t)temp;
+        }
+        flipper_format_rewind(flipper_format);
+        if(flipper_format_read_uint32(flipper_format, "Cnt", &temp, 1)) {
+            instance->generic.cnt = temp;
         }
     }
 
@@ -808,12 +842,43 @@ static const char* subghz_protocol_kia_v3_v4_get_name_button(uint8_t btn) {
     }
 }
 
+// [PROTOPIRATE_PORT] custom_btn UI support
+// Map the current D-pad selection to a Kia V3/V4 button code, mirroring the
+// encoder remap (see encoder deserialize): Up=Lock(0x1), Down=Unlock(0x2),
+// Left=Trunk(0x3), Right=Panic(0x4), OK=captured.
+static uint8_t kia_v3_v4_ui_button(uint8_t custom, uint8_t original_btn) {
+    switch(custom) {
+    case SUBGHZ_CUSTOM_BTN_UP:
+        return 0x1U; // Lock
+    case SUBGHZ_CUSTOM_BTN_DOWN:
+        return 0x2U; // Unlock
+    case SUBGHZ_CUSTOM_BTN_LEFT:
+        return 0x3U; // Trunk
+    case SUBGHZ_CUSTOM_BTN_RIGHT:
+        return 0x4U; // Panic
+    case SUBGHZ_CUSTOM_BTN_OK:
+    default:
+        return original_btn;
+    }
+}
+
 void subghz_protocol_decoder_kia_v3_v4_get_string(void* context, FuriString* output) {
     furi_assert(context);
     SubGhzProtocolDecoderKiaV3V4* instance = context;
 
     uint32_t key_hi = (uint32_t)(instance->generic.data >> 32);
     uint32_t key_lo = (uint32_t)(instance->generic.data & 0xFFFFFFFF);
+
+    // [BUGFIX UI] Re-derive the displayed button from the current D-pad
+    // selection so the transmitter UI reflects subghz_custom_btn_get() (like
+    // psa.c/star_line.c). CRC shown is the captured frame's CRC (no OK/BAD flag);
+    // the encoder recomputes the real CRC for the transmitted button.
+    subghz_custom_btn_set_max(4);
+    uint8_t display_btn = (uint8_t)instance->generic.btn;
+    uint8_t custom_btn_id = subghz_custom_btn_get();
+    if(custom_btn_id != SUBGHZ_CUSTOM_BTN_OK) {
+        display_btn = kia_v3_v4_ui_button(custom_btn_id, (uint8_t)instance->generic.btn);
+    }
 
     furi_string_cat_printf(
         output,
@@ -826,7 +891,7 @@ void subghz_protocol_decoder_kia_v3_v4_get_string(void* context, FuriString* out
         key_hi,
         key_lo,
         instance->generic.serial,
-        subghz_protocol_kia_v3_v4_get_name_button(instance->generic.btn),
+        subghz_protocol_kia_v3_v4_get_name_button(display_btn),
         instance->crc,
         instance->generic.cnt);
 }

@@ -6,6 +6,8 @@
 #include "../blocks/generic.h"
 #include "../blocks/math.h"
 
+#include "../blocks/custom_btn_i.h"
+
 /*
  * Help
  * https://wiki.cuvoodoo.info/doku.php?id=megacode
@@ -175,6 +177,31 @@ static bool subghz_protocol_encoder_megacode_get_upload(SubGhzProtocolEncoderMeg
     return true;
 }
 
+// Full D-pad support. MegaCode carries a real 3-bit button field in the low bits
+// of the frame (Btn = data & 0b111, see check_remote_controller). We extract that
+// button from the data word (the encoder does not populate generic.btn via
+// subghz_block_generic_deserialize, so we must not read it), enable the D-pad and,
+// for each direction, rewrite the 3-bit button field with a different real value
+// from the field's own value space. OK re-sends the originally captured button.
+static uint8_t subghz_protocol_megacode_get_btn_code(uint8_t original_btn) {
+    uint8_t custom_btn_id = subghz_custom_btn_get();
+    uint8_t btn = original_btn;
+
+    if((custom_btn_id == SUBGHZ_CUSTOM_BTN_OK) && (original_btn != 0)) {
+        btn = original_btn;
+    } else if(custom_btn_id == SUBGHZ_CUSTOM_BTN_UP) {
+        btn = (original_btn == 0x1) ? 0x2 : 0x1;
+    } else if(custom_btn_id == SUBGHZ_CUSTOM_BTN_DOWN) {
+        btn = (original_btn == 0x3) ? 0x4 : 0x3;
+    } else if(custom_btn_id == SUBGHZ_CUSTOM_BTN_LEFT) {
+        btn = (original_btn == 0x5) ? 0x6 : 0x5;
+    } else if(custom_btn_id == SUBGHZ_CUSTOM_BTN_RIGHT) {
+        btn = (original_btn == 0x7) ? 0x2 : 0x7;
+    }
+
+    return btn & 0b111;
+}
+
 SubGhzProtocolStatus
     subghz_protocol_encoder_megacode_deserialize(void* context, FlipperFormat* flipper_format) {
     furi_assert(context);
@@ -191,6 +218,16 @@ SubGhzProtocolStatus
         // Optional value
         flipper_format_read_uint32(
             flipper_format, "Repeat", (uint32_t*)&instance->encoder.repeat, 1);
+
+        // Full D-pad: derive the original button from the data word (btn is the low
+        // 3 bits) and re-encode it based on the current custom button selection.
+        uint8_t original_btn = (uint8_t)(instance->generic.data & 0b111);
+        if(subghz_custom_btn_get_original() == 0) {
+            subghz_custom_btn_set_original(original_btn);
+        }
+        subghz_custom_btn_set_max(4);
+        uint8_t new_btn = subghz_protocol_megacode_get_btn_code(original_btn);
+        instance->generic.data = (instance->generic.data & ~(uint64_t)0b111) | new_btn;
 
         if(!subghz_protocol_encoder_megacode_get_upload(instance)) {
             ret = SubGhzProtocolStatusErrorEncoderGetUpload;

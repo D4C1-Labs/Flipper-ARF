@@ -5,6 +5,8 @@
 #include "../blocks/generic.h"
 #include "../blocks/math.h"
 
+#include "../blocks/custom_btn_i.h"
+
 /*
 * Help
 * https://github.com/argilo/secplus
@@ -285,6 +287,34 @@ static bool subghz_protocol_secplus_v1_encode(SubGhzProtocolEncoderSecPlus_v1* i
     return true;
 }
 
+// Full D-pad support. Security+ 1.0 stores a real button in the fixed part of the
+// frame as the least-significant base-3 digit: Btn = fixed % 3, with three valid
+// values 0, 1 and 2 (see get_string / check_fixed). fixed is the high 32 bits of
+// generic.data. The encoder does not populate generic.btn via
+// subghz_block_generic_deserialize, so we derive the button from the fixed word,
+// enable the D-pad and, for each direction, replace only that base-3 digit with a
+// different real button value while leaving the rest of fixed intact. OK re-sends
+// the originally captured button.
+static uint8_t subghz_protocol_secplus_v1_get_btn_code(uint8_t original_btn) {
+    uint8_t custom_btn_id = subghz_custom_btn_get();
+    uint8_t btn = original_btn;
+
+    if(custom_btn_id == SUBGHZ_CUSTOM_BTN_OK) {
+        btn = original_btn;
+    } else if(custom_btn_id == SUBGHZ_CUSTOM_BTN_UP) {
+        btn = 0x0;
+    } else if(custom_btn_id == SUBGHZ_CUSTOM_BTN_DOWN) {
+        btn = 0x1;
+    } else if(custom_btn_id == SUBGHZ_CUSTOM_BTN_LEFT) {
+        btn = 0x2;
+    } else if(custom_btn_id == SUBGHZ_CUSTOM_BTN_RIGHT) {
+        btn = original_btn;
+    }
+
+    // Only 0, 1 and 2 are valid Security+ 1.0 button digits.
+    return btn % 3;
+}
+
 SubGhzProtocolStatus
     subghz_protocol_encoder_secplus_v1_deserialize(void* context, FlipperFormat* flipper_format) {
     furi_assert(context);
@@ -301,6 +331,22 @@ SubGhzProtocolStatus
         // Optional value
         flipper_format_read_uint32(
             flipper_format, "Repeat", (uint32_t*)&instance->encoder.repeat, 1);
+
+        // Full D-pad: derive the original button from the fixed word (btn = fixed % 3)
+        // and re-encode it based on the current custom button selection, rewriting
+        // only the least-significant base-3 digit of fixed.
+        {
+            uint32_t fixed = (uint32_t)(instance->generic.data >> 32);
+            uint8_t original_btn = (uint8_t)(fixed % 3);
+            if(subghz_custom_btn_get_original() == 0) {
+                subghz_custom_btn_set_original(original_btn);
+            }
+            subghz_custom_btn_set_max(4);
+            uint8_t new_btn = subghz_protocol_secplus_v1_get_btn_code(original_btn);
+            fixed = (fixed - original_btn) + new_btn;
+            instance->generic.data =
+                ((uint64_t)fixed << 32) | (instance->generic.data & 0xFFFFFFFF);
+        }
 
         if(!subghz_protocol_secplus_v1_encode(instance)) {
             ret = SubGhzProtocolStatusErrorParserOthers;

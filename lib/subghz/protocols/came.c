@@ -6,6 +6,8 @@
 #include "../blocks/generic.h"
 #include "../blocks/math.h"
 
+#include "../blocks/custom_btn_i.h"
+
 /*
  * Help
  * https://phreakerclub.com/447
@@ -184,6 +186,10 @@ SubGhzProtocolStatus
         // Optional value
         flipper_format_read_uint32(
             flipper_format, "Repeat", (uint32_t*)&instance->encoder.repeat, 1);
+
+        // CAME has no separable button field (fixed code); enable the D-pad so
+        // it is visible, but every direction re-sends the original captured code.
+        subghz_custom_btn_set_max(4);
 
         if(!subghz_protocol_encoder_came_get_upload(instance)) {
             ret = SubGhzProtocolStatusErrorEncoderGetUpload;

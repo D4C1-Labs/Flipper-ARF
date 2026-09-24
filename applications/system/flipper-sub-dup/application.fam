@@ -1,0 +1,18 @@
+App(
+    appid="sub_dup_finder",
+    name="Sub Duplicate Finder",
+    apptype=FlipperAppType.EXTERNAL,
+    sources=[
+        "main.c",
+        "logic.c",
+        "storage_helper.c",
+        "ui.c",
+    ],
+    entry_point="sub_dup_finder_app",
+    stack_size=4 * 1024,
+    fap_version="1.2.2",  # x-release-please-version
+    fap_icon="icons/icon.icon",
+    fap_category="Sub-GHz",
+    fap_author="Endika",
+    fap_description="Identify and clean up duplicate .sub files in storage",
+)

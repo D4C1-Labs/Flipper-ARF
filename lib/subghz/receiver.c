@@ -14,6 +14,10 @@ ARRAY_DEF(SubGhzReceiverSlotArray, SubGhzReceiverSlot, M_POD_OPLIST); //-V658
 struct SubGhzReceiver {
     SubGhzReceiverSlotArray_t slots;
     SubGhzProtocolFlag filter;
+    // Modulation gate: only protocols whose AM/FM flag matches the active
+    // preset's modulation are fed. 0 means "gate disabled" (feed everything),
+    // preserving legacy behaviour for callers that never set it.
+    SubGhzProtocolFlag modulation_filter;
 
     SubGhzReceiverCallback callback;
     void* context;
@@ -37,6 +41,7 @@ SubGhzReceiver* subghz_receiver_alloc_init(SubGhzEnvironment* environment) {
 
     instance->callback = NULL;
     instance->context = NULL;
+    instance->modulation_filter = 0;
     return instance;
 }
 
@@ -63,9 +68,26 @@ void subghz_receiver_decode(SubGhzReceiver* instance, bool level, uint32_t durat
 
     for
         M_EACH(slot, instance->slots, SubGhzReceiverSlotArray_t) {
-            if((slot->base->protocol->flag & instance->filter) != 0) {
-                slot->base->protocol->decoder->feed(slot->base, level, duration);
+            const SubGhzProtocolFlag protocol_flag = slot->base->protocol->flag;
+            if((protocol_flag & instance->filter) == 0) {
+                continue;
             }
+            // Modulation gate (mirrors ProtoPirate's per-preset registry
+            // selection): when active, skip protocols whose declared AM/FM
+            // modulation does not match the current preset's modulation.
+            // Without this, an AM (OOK) protocol such as Fiat V2 would be fed
+            // an FM (2-FSK) capture (e.g. a KIA V6 signal) and can produce
+            // spurious matches. A protocol declaring neither AM nor FM is
+            // always allowed through (e.g. RAW).
+            if(instance->modulation_filter != 0) {
+                const SubGhzProtocolFlag protocol_modulation =
+                    protocol_flag & (SubGhzProtocolFlag_AM | SubGhzProtocolFlag_FM);
+                if(protocol_modulation != 0 &&
+                   (protocol_modulation & instance->modulation_filter) == 0) {
+                    continue;
+                }
+            }
+            slot->base->protocol->decoder->feed(slot->base, level, duration);
         }
 }
 
@@ -105,6 +127,14 @@ void subghz_receiver_set_rx_callback(
 void subghz_receiver_set_filter(SubGhzReceiver* instance, SubGhzProtocolFlag filter) {
     furi_check(instance);
     instance->filter = filter;
+}
+
+void subghz_receiver_set_modulation_filter(
+    SubGhzReceiver* instance,
+    SubGhzProtocolFlag modulation_filter) {
+    furi_check(instance);
+    instance->modulation_filter =
+        modulation_filter & (SubGhzProtocolFlag_AM | SubGhzProtocolFlag_FM);
 }
 
 SubGhzProtocolDecoderBase* subghz_receiver_search_decoder_base_by_name(

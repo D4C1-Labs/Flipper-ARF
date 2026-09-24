@@ -7,12 +7,16 @@
 #define SUBGHZ_HISTORY_FREE_HEAP 20480
 #define TAG                      "SubGhzHistory"
 
+// SubGHz autosave/duplicate/history features adapted from Momentum Firmware (GPLv3)
 typedef struct {
     FuriString* item_str;
     FlipperFormat* flipper_string;
     uint8_t type;
     SubGhzRadioPreset* preset;
     DateTime datetime;
+    uint32_t hash_data;
+    const SubGhzProtocol* protocol;
+    uint16_t repeats;
 } SubGhzHistoryItem;
 
 ARRAY_DEF(SubGhzHistoryItemArray, SubGhzHistoryItem, M_POD_OPLIST) //-V658
@@ -26,7 +30,7 @@ typedef struct {
 struct SubGhzHistory {
     uint32_t last_update_timestamp;
     uint16_t last_index_write;
-    uint8_t code_last_hash_data;
+    uint32_t code_last_hash_data;
     FuriString* tmp_string;
     SubGhzHistoryStruct* history;
 };
@@ -102,6 +106,25 @@ void subghz_history_delete_item(SubGhzHistory* instance, uint16_t idx) {
         SubGhzHistoryItemArray_remove_v(instance->history->data, idx, idx + 1);
         instance->last_index_write--;
     }
+}
+
+// SubGHz autosave/duplicate/history features adapted from Momentum Firmware (GPLv3)
+uint32_t subghz_history_get_hash_data(SubGhzHistory* instance, uint16_t idx) {
+    furi_assert(instance);
+    SubGhzHistoryItem* item = SubGhzHistoryItemArray_get(instance->history->data, idx);
+    return item->hash_data;
+}
+
+const SubGhzProtocol* subghz_history_get_protocol(SubGhzHistory* instance, uint16_t idx) {
+    furi_assert(instance);
+    SubGhzHistoryItem* item = SubGhzHistoryItemArray_get(instance->history->data, idx);
+    return item->protocol;
+}
+
+uint16_t subghz_history_get_repeats(SubGhzHistory* instance, uint16_t idx) {
+    furi_assert(instance);
+    SubGhzHistoryItem* item = SubGhzHistoryItemArray_get(instance->history->data, idx);
+    return item->repeats;
 }
 
 uint16_t subghz_history_get_item(SubGhzHistory* instance) {
@@ -186,18 +209,34 @@ bool subghz_history_add_to_history(
     furi_assert(instance);
     furi_assert(context);
 
-    if(memmgr_get_free_heap() < SUBGHZ_HISTORY_FREE_HEAP) return false;
-    if(instance->last_index_write >= SUBGHZ_HISTORY_MAX) return false;
+    if(subghz_history_full(instance)) return false;
 
+    // SubGHz autosave/duplicate/history features adapted from Momentum Firmware (GPLv3)
     SubGhzProtocolDecoderBase* decoder_base = context;
-    if((instance->code_last_hash_data ==
-        subghz_protocol_decoder_base_get_hash_data(decoder_base)) &&
+    // ARF's base decoder only exposes an 8-bit hash (no _get_hash_data_long like
+    // Momentum), so we store that value in a uint32_t and rely on the
+    // hash + protocol pair for equality, mirroring Momentum's logic.
+    uint32_t hash_data = subghz_protocol_decoder_base_get_hash_data(decoder_base);
+    if((instance->code_last_hash_data == hash_data) &&
        ((furi_get_tick() - instance->last_update_timestamp) < 500)) {
         instance->last_update_timestamp = furi_get_tick();
         return false;
     }
 
-    instance->code_last_hash_data = subghz_protocol_decoder_base_get_hash_data(decoder_base);
+    // Look back through history for the same signal to carry over the repeat count
+    uint16_t repeats = 0;
+    SubGhzHistoryItemArray_it_t it;
+    SubGhzHistoryItemArray_it_last(it, instance->history->data);
+    while(!SubGhzHistoryItemArray_end_p(it)) {
+        SubGhzHistoryItem* search = SubGhzHistoryItemArray_ref(it);
+        if(search->hash_data == hash_data && search->protocol == decoder_base->protocol) {
+            repeats = search->repeats + 1;
+            break;
+        }
+        SubGhzHistoryItemArray_previous(it);
+    }
+
+    instance->code_last_hash_data = hash_data;
     instance->last_update_timestamp = furi_get_tick();
 
     FuriString* text = furi_string_alloc();
@@ -210,6 +249,9 @@ bool subghz_history_add_to_history(
     item->preset->data = preset->data;
     item->preset->data_size = preset->data_size;
     furi_hal_rtc_get_datetime(&item->datetime);
+    item->hash_data = hash_data;
+    item->protocol = decoder_base->protocol;
+    item->repeats = repeats;
 
     item->item_str = furi_string_alloc();
     item->flipper_string = flipper_format_string_alloc();
@@ -275,4 +317,35 @@ bool subghz_history_add_to_history(
     furi_string_free(text);
     instance->last_index_write++;
     return true;
+}
+
+// SubGHz autosave/duplicate/history features adapted from Momentum Firmware (GPLv3)
+void subghz_history_remove_duplicates(SubGhzHistory* instance) {
+    furi_assert(instance);
+
+    SubGhzHistoryItemArray_it_t it;
+    SubGhzHistoryItemArray_it_last(it, instance->history->data);
+    while(!SubGhzHistoryItemArray_end_p(it)) {
+        SubGhzHistoryItem* i = SubGhzHistoryItemArray_ref(it);
+
+        SubGhzHistoryItemArray_it_t jt;
+        SubGhzHistoryItemArray_it_set(jt, it);
+        SubGhzHistoryItemArray_previous(jt);
+        while(!SubGhzHistoryItemArray_end_p(jt)) {
+            SubGhzHistoryItem* j = SubGhzHistoryItemArray_ref(jt);
+
+            if(j->hash_data == i->hash_data && j->protocol == i->protocol) {
+                subghz_history_delete_item(instance, jt->index);
+            }
+            SubGhzHistoryItemArray_previous(jt);
+        }
+        SubGhzHistoryItemArray_previous(it);
+    }
+}
+
+bool subghz_history_full(SubGhzHistory* instance) {
+    furi_assert(instance);
+    if(memmgr_get_free_heap() < SUBGHZ_HISTORY_FREE_HEAP) return true;
+    if(instance->last_index_write >= SUBGHZ_HISTORY_MAX) return true;
+    return false;
 }

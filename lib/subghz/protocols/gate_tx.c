@@ -6,6 +6,8 @@
 #include "../blocks/generic.h"
 #include "../blocks/math.h"
 
+#include "../blocks/custom_btn_i.h"
+
 #define TAG "SubGhzProtocolGateTx"
 
 static const SubGhzBlockConst subghz_protocol_gate_tx_const = {
@@ -89,6 +91,28 @@ void subghz_protocol_encoder_gate_tx_free(void* context) {
     free(instance);
 }
 
+// Gate TX stores the button as a 4-bit nibble in the reversed key
+// (btn = (reverse_key(data) >> 16) & 0x0F).
+// OK -> original captured button, Up/Down/Left/Right -> distinct button nibbles.
+static uint8_t subghz_protocol_gate_tx_get_btn_code(uint8_t original_btn_code) {
+    uint8_t custom_btn_id = subghz_custom_btn_get();
+    uint8_t btn = original_btn_code;
+
+    if((custom_btn_id == SUBGHZ_CUSTOM_BTN_OK) && (original_btn_code != 0)) {
+        btn = original_btn_code;
+    } else if(custom_btn_id == SUBGHZ_CUSTOM_BTN_UP) {
+        btn = 0x1;
+    } else if(custom_btn_id == SUBGHZ_CUSTOM_BTN_DOWN) {
+        btn = 0x2;
+    } else if(custom_btn_id == SUBGHZ_CUSTOM_BTN_LEFT) {
+        btn = 0x4;
+    } else if(custom_btn_id == SUBGHZ_CUSTOM_BTN_RIGHT) {
+        btn = 0x8;
+    }
+
+    return btn & 0x0F;
+}
+
 /**
  * Generating an upload from data.
  * @param instance Pointer to a SubGhzProtocolEncoderGateTx instance
@@ -145,6 +169,24 @@ SubGhzProtocolStatus
         // Optional value
         flipper_format_read_uint32(
             flipper_format, "Repeat", (uint32_t*)&instance->encoder.repeat, 1);
+
+        // Extract the original button from the reversed key
+        uint32_t reverse_key = subghz_protocol_blocks_reverse_key(
+            instance->generic.data, instance->generic.data_count_bit);
+        uint8_t original_btn = (reverse_key >> 16) & 0x0F;
+
+        // Save original captured button and enable the D-pad (4 alternate buttons)
+        if(subghz_custom_btn_get_original() == 0) {
+            subghz_custom_btn_set_original(original_btn);
+        }
+        subghz_custom_btn_set_max(4);
+
+        // Select the button according to the D-pad, rebuild the nibble in the
+        // reversed key and reverse it back into the transmitted data.
+        uint8_t btn = subghz_protocol_gate_tx_get_btn_code(original_btn);
+        reverse_key = (reverse_key & ~((uint32_t)0x0F << 16)) | ((uint32_t)btn << 16);
+        instance->generic.data =
+            subghz_protocol_blocks_reverse_key(reverse_key, instance->generic.data_count_bit);
 
         if(!subghz_protocol_encoder_gate_tx_get_upload(instance)) {
             ret = SubGhzProtocolStatusErrorEncoderGetUpload;
@@ -281,6 +323,12 @@ static void subghz_protocol_gate_tx_check_remote_controller(SubGhzBlockGeneric* 
                        ((code_found_reverse >> 8) & 0xFF) << 4 |
                        ((code_found_reverse >> 20) & 0x0F);
     instance->btn = ((code_found_reverse >> 16) & 0x0F);
+
+    // Save original button for later use
+    if(subghz_custom_btn_get_original() == 0) {
+        subghz_custom_btn_set_original(instance->btn);
+    }
+    subghz_custom_btn_set_max(4);
 }
 
 uint8_t subghz_protocol_decoder_gate_tx_get_hash_data(void* context) {

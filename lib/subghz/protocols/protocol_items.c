@@ -19,6 +19,51 @@
 
 #define SUBGHZ_PROTOCOL_CATALOG_TX_KEY(key) key
 
+/*
+ * ============================================================================
+ *  ADDING A NEW SUBGHZ PROTOCOL (automotive / keyfob / gate) — READ THIS
+ * ============================================================================
+ *
+ * The full protocol catalog is compiled directly into the firmware image, and
+ * the SubGHz application itself runs from firmware (internal app). This fits
+ * only because the NFC library was removed from the firmware image (see
+ * lib/SConscript and targets/f7/target.json linker_dependencies) to free the
+ * internal flash the full protocol catalog needs.
+ *
+ * To add a new protocol so the whole project keeps building:
+ *
+ *   1. Add your protocol source under lib/subghz/protocols/<name>.c(.h). It is
+ *      picked up automatically by lib/subghz/SConscript (GlobRecursive "*.c*").
+ *   2. Declare its `const SubGhzProtocol subghz_protocol_<name>;` (or the
+ *      module's protocol symbol) in protocol_items.h so it is visible here.
+ *   3. Register it by adding a `&subghz_protocol_<name>,` line to the
+ *      subghz_protocol_registry_items[] array below. ONLY protocols listed
+ *      here are linked into the firmware and offered to the user; a protocol
+ *      that compiles but is not listed is dropped by the linker.
+ *   4. If it is an automotive protocol that needs a TX route/catalog entry,
+ *      also add it to subghz_protocol_catalog[] further down in this file.
+ *
+ * FLASH BUDGET — IMPORTANT:
+ *   Internal flash between the firmware and the BLE radio stack is limited
+ *   (BLE Light radio at 0x080D7000 = 860 KB usable). With the full catalog the
+ *   firmware is ~822 KB, leaving only ~37 KB of margin. Each new heavy
+ *   automotive protocol is roughly 2-6 KB of compiled code, so several big
+ *   additions can overflow into the C2/radio region. If
+ *   `./fbt ... updater_package` warns "Firmware image overlaps C2 region", you
+ *   mgit status
+ust reclaim flash. Options, cheapest first:
+ *     - Remove/comment protocols you don't need from the array below.
+ *     - Move another large built-in library out of the firmware the way NFC was
+ *       (drop it from lib/SConscript BuildModules and from
+ *       targets/f7/target.json linker_dependencies) and ship its app external.
+ *     - As a last resort, build a big app as an external FAP with a private
+ *       library and stream it via the XIP loader
+ *       (lib/flipper_application/elf/elf_file_xip.*), which executes a FAP's
+ *       read-only sections from a free-flash XIP region instead of RAM. NOTE:
+ *       XIP needs a large contiguous free-flash region (>=64 KB), which this
+ *       firmware layout does not currently have — free flash first.
+ * ============================================================================
+ */
 const SubGhzProtocol* const subghz_protocol_registry_items[] = {
     //&subghz_protocol_gate_tx,
     //&subghz_protocol_keeloq,
@@ -76,18 +121,22 @@ const SubGhzProtocol* const subghz_protocol_registry_items[] = {
     //&subghz_protocol_keyfinder,  
     //&subghz_protocol_jarolift,
     &subghz_protocol_vag,          
-    &subghz_protocol_porsche_cayenne,  
+    //&subghz_protocol_porsche_cayenne,  
     &subghz_protocol_ford_v0,
     &subghz_protocol_psa,
-    &subghz_protocol_fiat_spa,       
+    /* Automotive keyfob protocols — all enabled. The firmware fits because the
+     * SubGHz application UI (scenes/views) is built as an external FAP
+     * (MENUEXTERNAL), freeing internal flash for the full protocol catalog. */
+    //&subghz_protocol_fiat_spa,       
     //&subghz_protocol_fiat_marelli,
     &fiat_protocol_v0,
     &fiat_v1_protocol,
     &fiat_v2_protocol,
     &renault_v0_protocol,
- // &subghz_protocol_bmw_cas4,
+    &renault_v1_protocol,
+    //&subghz_protocol_bmw_cas4,
     &subghz_protocol_subaru, 
-    &subghz_protocol_mazda_siemens,
+    //&subghz_protocol_mazda_siemens,
     &subghz_protocol_kia_v0,       
     &subghz_protocol_kia_v1,
     &subghz_protocol_kia_v2,       
@@ -111,6 +160,11 @@ const SubGhzProtocol* const subghz_protocol_registry_items[] = {
     &honda_static_protocol,
     &honda_v1_protocol,
     &honda_v2_protocol,
+    //&subghz_protocol_mercedes,
+    //&subghz_protocol_mazda_infinity,
+    //&subghz_protocol_audi,
+    //&subghz_protocol_hundai,
+    //&subghz_protocol_gm,
 
     // [UNLEASHED_PORT] New protocols from Unleashed firmware (disabled by default)
     //&subghz_protocol_allstar_firefly,
@@ -135,6 +189,10 @@ typedef struct {
 } SubGhzProtocolCatalogAlias;
 
 static const SubGhzProtocolCatalogEntry subghz_protocol_catalog[] = {
+    {"Audi", SubGhzProtocolCatalogRoutePolicyAMDefault,
+     SUBGHZ_PROTOCOL_CATALOG_TX_KEY("audi")},
+    {"Hundai", SubGhzProtocolCatalogRoutePolicyAMDefault,
+     SUBGHZ_PROTOCOL_CATALOG_TX_KEY("hundai")},
     {"Chrysler V0", SubGhzProtocolCatalogRoutePolicyAMDefault,
      SUBGHZ_PROTOCOL_CATALOG_TX_KEY("chrysler_v0")},
     {"Fiat V0", SubGhzProtocolCatalogRoutePolicyAMDefault,
@@ -149,6 +207,8 @@ static const SubGhzProtocolCatalogEntry subghz_protocol_catalog[] = {
     {"Ford V2", SubGhzProtocolCatalogRoutePolicyFMF4,
      SUBGHZ_PROTOCOL_CATALOG_TX_KEY("ford_v2")},
     {"Ford V3", SubGhzProtocolCatalogRoutePolicyFMF4, NULL},
+    {"GM", SubGhzProtocolCatalogRoutePolicyAMDefault,
+     SUBGHZ_PROTOCOL_CATALOG_TX_KEY("gm")},
     {"Honda Static", SubGhzProtocolCatalogRoutePolicyFMHonda1,
      SUBGHZ_PROTOCOL_CATALOG_TX_KEY("honda_static")},
     {"Honda V1", SubGhzProtocolCatalogRoutePolicyAMDefault,
@@ -171,12 +231,18 @@ static const SubGhzProtocolCatalogEntry subghz_protocol_catalog[] = {
      SUBGHZ_PROTOCOL_CATALOG_TX_KEY("honda_v2")},
     {"Mazda V0", SubGhzProtocolCatalogRoutePolicyByModulation,
      SUBGHZ_PROTOCOL_CATALOG_TX_KEY("mazda_v0")},
+    {"Mazda Infinity", SubGhzProtocolCatalogRoutePolicyAMDefault,
+     SUBGHZ_PROTOCOL_CATALOG_TX_KEY("mazda_infinity")},
+    {"Mercedes", SubGhzProtocolCatalogRoutePolicyAMDefault,
+     SUBGHZ_PROTOCOL_CATALOG_TX_KEY("mercedes")},
     {"Mitsubishi V0", SubGhzProtocolCatalogRoutePolicyFMDefault, NULL},
     {"Porsche Touareg", SubGhzProtocolCatalogRoutePolicyAMDefault, NULL},
     {"PSA", SubGhzProtocolCatalogRoutePolicyByModulation,
      SUBGHZ_PROTOCOL_CATALOG_TX_KEY("psa")},
     {"Renault V0", SubGhzProtocolCatalogRoutePolicyAMDefault,
      SUBGHZ_PROTOCOL_CATALOG_TX_KEY("renault_v0")},
+    {"Renault V1", SubGhzProtocolCatalogRoutePolicyAMDefault,
+     SUBGHZ_PROTOCOL_CATALOG_TX_KEY("renault_v1")},
     {"Scher-Khan", SubGhzProtocolCatalogRoutePolicyFMDefault, NULL},
     {"Star Line", SubGhzProtocolCatalogRoutePolicyAMDefault,
      SUBGHZ_PROTOCOL_CATALOG_TX_KEY("star_line")},

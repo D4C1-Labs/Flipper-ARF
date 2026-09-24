@@ -129,6 +129,36 @@ static const SubGhzBlockConst toyota_const_b = {
 #define TOYOTA_A_KIA_SYNC_MAX  1600u
 
 /* ----------------------------------------------------------------
+ * Physical constants — Variant C (Prius 2006 / Corolla Verso, 433.92 MHz)
+ *
+ * KeeLoq-style, DECODE ONLY. Framing:
+ *   >=6 short preamble pairs (HIGH ~200-550us, LOW ~200-650us), then ONE
+ *   extra-long LOW sync gap (1050-1500us), then PWM data.
+ * DATA bit is decided by the HIGH pulse:
+ *   HIGH > C_HIGH_MIDPOINT (600us) => bit 1, else bit 0
+ *   (HIGH must be within 200-1050us to be valid). The following LOW is
+ *   complementary and ignored unless it's a sync gap (1050-1500 => fire+restart
+ *   data) or oversized (>1000 ends frame -> hunt preamble).
+ * Accumulate up to C_FRAME_BITS bits; DECODE when bit_count >= C_BITS.
+ * Fields MSB-first from the START of the data (anchored to sync gap):
+ *   hop = bits[0..32), serial = bits[32..60), button = bits[60..64).
+ * ---------------------------------------------------------------- */
+
+#define TOYOTA_C_BITS           66u    /* MIN data bits required to decode */
+#define TOYOTA_C_FRAME_BITS     68u    /* nominal data frame length */
+#define TOYOTA_C_PREAMBLE_MIN   6u     /* require >= this many preamble pairs */
+#define TOYOTA_C_SYNC_MIN       1050u  /* XL LOW between preamble and data */
+#define TOYOTA_C_SYNC_MAX       1500u
+#define TOYOTA_C_HIGH_MIDPOINT  600u   /* HIGH >mid => bit 1, else bit 0 */
+#define TOYOTA_C_PRE_HIGH_MIN   200u   /* preamble HIGH window */
+#define TOYOTA_C_PRE_HIGH_MAX   550u
+#define TOYOTA_C_PRE_LOW_MIN    200u   /* preamble LOW window (below sync) */
+#define TOYOTA_C_PRE_LOW_MAX    650u
+#define TOYOTA_C_DATA_HIGH_MIN  200u   /* valid data HIGH window */
+#define TOYOTA_C_DATA_HIGH_MAX  1050u
+#define TOYOTA_C_END_LOW        1000u  /* LOW longer than this ends the frame */
+
+/* ----------------------------------------------------------------
  * Button codes
  * ---------------------------------------------------------------- */
 
@@ -137,6 +167,11 @@ static const SubGhzBlockConst toyota_const_b = {
 
 #define TOYOTA_B_BTN_LOCK    0x0A
 #define TOYOTA_B_BTN_UNLOCK  0x05
+
+#define TOYOTA_C_BTN_LOCK    0x0B
+#define TOYOTA_C_BTN_UNLOCK  0x0E
+#define TOYOTA_C_BTN_TRUNK   0x0D
+#define TOYOTA_C_BTN_PANIC   0x07
 
 /* ----------------------------------------------------------------
  * Parser states
@@ -148,6 +183,8 @@ typedef enum {
     ToyotaStepDataA,
     ToyotaStepPreambleB,
     ToyotaStepDataB,
+    ToyotaStepPreambleC,
+    ToyotaStepDataC,
 } ToyotaDecoderStep;
 
 /* ----------------------------------------------------------------
@@ -167,7 +204,7 @@ typedef struct {
     bool     have_high;
     uint16_t preamble_count;
 
-    uint8_t  variant;   /* 0 = Corolla/433MHz,  1 = Tundra/315MHz */
+    uint8_t  variant;   /* 0 = Corolla/433MHz,  1 = Tundra/315MHz,  2 = Prius/433MHz */
 
     uint32_t hop;
     uint32_t serial;
@@ -248,6 +285,15 @@ static uint32_t toyota_extract(
  * ---------------------------------------------------------------- */
 
 static const char* toyota_button_name(uint8_t btn, uint8_t variant) {
+    if(variant == 2) {
+        switch(btn & 0x0F) {
+        case TOYOTA_C_BTN_LOCK:   return "Lock";
+        case TOYOTA_C_BTN_UNLOCK: return "Unlock";
+        case TOYOTA_C_BTN_TRUNK:  return "Trunk";
+        case TOYOTA_C_BTN_PANIC:  return "Panic";
+        default:                  return "Unknown";
+        }
+    }
     if(variant == 1) {
         switch(btn & 0x0F) {
         case TOYOTA_B_BTN_LOCK:   return "Lock";
@@ -268,6 +314,7 @@ static const char* toyota_button_name(uint8_t btn, uint8_t variant) {
 }
 
 static const char* toyota_model_name(uint8_t variant) {
+    if(variant == 2) return "Prius";
     return (variant == 1) ? "Tundra" : "Corolla";
 }
 
@@ -283,7 +330,11 @@ static bool toyota_frame_plausible(uint32_t serial, uint8_t button, uint32_t hop
 
     // Button must belong to the closed set of Toyota-observed codes.
     const uint8_t b = button & 0x0FU;
-    if(variant == 1U) {
+    if(variant == 2U) {
+        // Prius variant C: Lock=0x0B, Unlock=0x0E, Trunk=0x0D, Panic=0x07
+        if(b != TOYOTA_C_BTN_LOCK && b != TOYOTA_C_BTN_UNLOCK &&
+           b != TOYOTA_C_BTN_TRUNK && b != TOYOTA_C_BTN_PANIC) return false;
+    } else if(variant == 1U) {
         // Tundra variant B: Lock=0x0A, Unlock=0x05, L+U=0x0F, Trunk=0x04
         if(b != TOYOTA_B_BTN_LOCK && b != TOYOTA_B_BTN_UNLOCK &&
            b != 0x0FU && b != 0x04U) return false;
@@ -602,6 +653,162 @@ static void toyota_feed_variant_b(
 }
 
 /* ----------------------------------------------------------------
+ * FEED — Variant C (Prius 2006 / Corolla Verso, 433 MHz)
+ *
+ * Framing: >=6 short preamble pairs, then ONE extra-long LOW sync gap
+ * (1050-1500us), then PWM data where the HIGH pulse decides the bit
+ * (HIGH > 600us => 1, else 0). Bits are pushed MSB-first from the START of
+ * the data (anchored to the sync gap), so a jittery burst delivering 66..69
+ * HIGH pulses still decodes. Field layout over the leading bits (MSB-first):
+ *   [32 hop][28 serial][8 tail]; button = high nibble of tail (bits[60..64)).
+ *
+ * NOTE on extraction: the JS _extractMSB(start,length) uses
+ *   pos = (total-1) - (start+i)
+ * which is IDENTICAL to the existing C toyota_extract(inst, offset, length)
+ * with offset=start. So we reuse toyota_extract directly:
+ *   hop    = toyota_extract(inst,  0, 32)
+ *   serial = toyota_extract(inst, 32, 28)
+ *   button = toyota_extract(inst, 60,  4) & 0x0F
+ * ---------------------------------------------------------------- */
+
+static void toyota_start_data_c(SubGhzProtocolDecoderToyota* inst) {
+    inst->bits_lo   = 0;
+    inst->bits_hi   = 0;
+    inst->bit_count = 0;
+    inst->have_high = false;
+    inst->decoder.parser_step = ToyotaStepDataC;
+}
+
+static void toyota_decode_and_fire_c(SubGhzProtocolDecoderToyota* inst) {
+    if(inst->bit_count < TOYOTA_C_BITS) return;
+
+    inst->hop    = toyota_extract(inst,  0, 32);
+    inst->serial = toyota_extract(inst, 32, 28);
+    inst->button = (uint8_t)(toyota_extract(inst, 60, 4) & 0x0F);
+
+    if(!toyota_frame_plausible(inst->serial, inst->button, inst->hop, 2)) {
+        FURI_LOG_D(TAG, "REJECT(C): implausible serial=%08lX btn=%X hop=%08lX",
+            (unsigned long)inst->serial, (unsigned int)inst->button,
+            (unsigned long)inst->hop);
+        return;
+    }
+
+    inst->variant = 2;
+
+    inst->generic.data =
+        ((uint64_t)inst->hop    << 32) |
+        ((uint64_t)inst->serial <<  4) |
+        ((uint64_t)inst->button & 0x0F);
+
+    inst->generic.data_count_bit = inst->bit_count;
+    inst->generic.serial         = inst->serial;
+    inst->generic.btn            = inst->button;
+    inst->generic.cnt            = inst->variant;
+
+    inst->decoder.decode_data      = inst->generic.data;
+    inst->decoder.decode_count_bit = inst->generic.data_count_bit;
+
+    FURI_LOG_D(TAG, "FIRE(C) bits=%d hop=%08lX serial=%07lX btn=%X",
+        (int)inst->bit_count,
+        (unsigned long)inst->hop,
+        (unsigned long)inst->serial,
+        (unsigned int)inst->button);
+
+    if(inst->base.callback)
+        inst->base.callback(&inst->base, inst->base.context);
+}
+
+static void toyota_feed_variant_c(
+    SubGhzProtocolDecoderToyota* inst,
+    bool level, uint32_t duration)
+{
+    /* ── PREAMBLE ── */
+    if(inst->decoder.parser_step == ToyotaStepPreambleC) {
+
+        if(level) {
+            /* Remember the HIGH; validate it as a preamble HIGH on the LOW. */
+            inst->te_last   = duration;
+            inst->have_high = true;
+            return;
+        }
+
+        if(!inst->have_high) {
+            subghz_protocol_decoder_toyota_reset(inst);
+            return;
+        }
+        inst->have_high = false;
+
+        /* XL LOW = sync gap: with enough preamble, begin data. */
+        if(duration >= TOYOTA_C_SYNC_MIN && duration <= TOYOTA_C_SYNC_MAX) {
+            if(inst->preamble_count >= TOYOTA_C_PREAMBLE_MIN) {
+                toyota_start_data_c(inst);
+            } else {
+                subghz_protocol_decoder_toyota_reset(inst);
+            }
+            return;
+        }
+
+        /* Count a preamble pair if HIGH & LOW both fit the (wide) preamble
+         * windows. Otherwise the sequence is noise -> restart. */
+        if(inst->te_last >= TOYOTA_C_PRE_HIGH_MIN && inst->te_last <= TOYOTA_C_PRE_HIGH_MAX &&
+           duration >= TOYOTA_C_PRE_LOW_MIN && duration <= TOYOTA_C_PRE_LOW_MAX) {
+            inst->preamble_count++;
+            return;
+        }
+
+        subghz_protocol_decoder_toyota_reset(inst);
+        return;
+    }
+
+    /* ── DATA (PWM, HIGH decides bit) ── */
+    if(inst->decoder.parser_step == ToyotaStepDataC) {
+
+        if(level) {
+            /* HIGH pulse decides the bit (midpoint classifier). Reject HIGHs
+             * that are implausibly short/long -> end frame (maybe noise). */
+            if(duration >= TOYOTA_C_DATA_HIGH_MIN && duration <= TOYOTA_C_DATA_HIGH_MAX) {
+                if(inst->bit_count < TOYOTA_C_FRAME_BITS) {
+                    toyota_push_bit(inst, (duration > TOYOTA_C_HIGH_MIDPOINT) ? 1 : 0);
+                }
+                inst->have_high = true;
+                inst->te_last   = duration;
+            } else {
+                /* Out-of-range HIGH: terminate current frame. */
+                if(inst->bit_count >= TOYOTA_C_BITS) toyota_decode_and_fire_c(inst);
+                /* A large HIGH could be a preamble HIGH of the next burst;
+                 * restart preamble tracking with this HIGH. */
+                subghz_protocol_decoder_toyota_reset(inst);
+                inst->variant             = 2;
+                inst->decoder.parser_step = ToyotaStepPreambleC;
+                inst->te_last             = duration;
+                inst->have_high           = true;
+            }
+            return;
+        }
+
+        /* LOW pulse (complementary / gap). */
+        inst->have_high = false;
+
+        if(duration >= TOYOTA_C_SYNC_MIN && duration <= TOYOTA_C_SYNC_MAX) {
+            /* A fresh sync gap: fire the frame we have, then start a new one. */
+            if(inst->bit_count >= TOYOTA_C_BITS) toyota_decode_and_fire_c(inst);
+            toyota_start_data_c(inst);
+            return;
+        }
+
+        if(duration > TOYOTA_C_END_LOW) {
+            /* Oversized gap ends the frame; go back to hunting a preamble. */
+            if(inst->bit_count >= TOYOTA_C_BITS) toyota_decode_and_fire_c(inst);
+            subghz_protocol_decoder_toyota_reset(inst);
+            inst->variant             = 2;
+            inst->decoder.parser_step = ToyotaStepPreambleC;
+            inst->preamble_count      = 0;
+        }
+        /* else: normal short/medium complementary LOW -> ignore. */
+    }
+}
+
+/* ----------------------------------------------------------------
  * Public feed — dispatcher
  * ---------------------------------------------------------------- */
 
@@ -631,12 +838,21 @@ void subghz_protocol_decoder_toyota_feed(void* context, bool level, uint32_t dur
             FURI_LOG_D(TAG, "Detected Variant B (Tundra), first HIGH=%lu",
                 (unsigned long)duration);
         } else if(fits_a) {
-            inst->variant             = 0;
+            /*
+             * Variant A and C share 400/800 timing. Real-world 433 fobs
+             * (Prius / Corolla Verso) use the Variant C framing (short-short
+             * preamble + XL sync gap + PWM data where the HIGH decides the
+             * bit), so route the shared-timing path to the Variant C state
+             * machine. The Variant A state machine remains reachable via the
+             * dispatcher's variant==0 fallback (kept referenced to avoid
+             * -Werror=unused-function).
+             */
+            inst->variant             = 2;
             inst->te_last             = duration;
             inst->have_high           = true;
             inst->preamble_count      = 0;
-            inst->decoder.parser_step = ToyotaStepPreambleA;
-            FURI_LOG_D(TAG, "Detected Variant A (Corolla), first HIGH=%lu",
+            inst->decoder.parser_step = ToyotaStepPreambleC;
+            FURI_LOG_D(TAG, "Detected Variant C (Prius/Corolla Verso), first HIGH=%lu",
                 (unsigned long)duration);
         }
         return;
@@ -644,6 +860,8 @@ void subghz_protocol_decoder_toyota_feed(void* context, bool level, uint32_t dur
 
     if(inst->variant == 1) {
         toyota_feed_variant_b(inst, level, duration);
+    } else if(inst->variant == 2) {
+        toyota_feed_variant_c(inst, level, duration);
     } else {
         toyota_feed_variant_a(inst, level, duration);
     }
@@ -687,11 +905,20 @@ SubGhzProtocolStatus subghz_protocol_decoder_toyota_deserialize(
     furi_assert(context);
     SubGhzProtocolDecoderToyota* inst = context;
 
+    /*
+     * Accept any saved frame whose bit count is at least TOYOTA_C_BITS (66).
+     * Variant B is exactly 67, Variant A exactly 68, and Variant C real
+     * captures deliver 66-69 bits, so an exact-match check cannot cover all
+     * three. Use the plain deserializer plus a lower-bound guard.
+     */
     SubGhzProtocolStatus ret =
-        subghz_block_generic_deserialize_check_count_bit(
-            &inst->generic,
-            flipper_format,
-            toyota_const_b.min_count_bit_for_found);
+        subghz_block_generic_deserialize(&inst->generic, flipper_format);
+
+    if(ret == SubGhzProtocolStatusOk &&
+       inst->generic.data_count_bit < TOYOTA_C_BITS) {
+        FURI_LOG_D(TAG, "Wrong number of bits in key");
+        ret = SubGhzProtocolStatusErrorValueBitCount;
+    }
 
     if(ret == SubGhzProtocolStatusOk) {
         inst->hop    = (uint32_t)(inst->generic.data >> 32);
@@ -700,7 +927,9 @@ SubGhzProtocolStatus subghz_protocol_decoder_toyota_deserialize(
 
         inst->generic.serial = inst->serial;
         inst->generic.btn    = inst->button;
-        inst->variant        = (inst->generic.cnt != 0) ? 1 : 0;
+        /* Persisted cnt: 0=Corolla(A), 1=Tundra(B), 2=Prius(C). Preserve 2. */
+        inst->variant        = (inst->generic.cnt == 2) ? 2 :
+                               ((inst->generic.cnt != 0) ? 1 : 0);
         inst->generic.cnt    = inst->variant;
     }
 
@@ -717,7 +946,8 @@ void subghz_protocol_decoder_toyota_get_string(void* context, FuriString* output
 
     uint32_t serial = (uint32_t)((inst->generic.data >> 4) & 0x0FFFFFFF);
     uint8_t  button = (uint8_t)(inst->generic.data & 0x0F);
-    uint8_t  var    = (inst->generic.cnt != 0) ? 1 : 0;
+    uint8_t  var    = (inst->generic.cnt == 2) ? 2 :
+                      ((inst->generic.cnt != 0) ? 1 : 0);
 
     furi_string_cat_printf(
         output,

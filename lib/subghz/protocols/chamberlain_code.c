@@ -6,6 +6,8 @@
 #include "../blocks/generic.h"
 #include "../blocks/math.h"
 
+#include "../blocks/custom_btn_i.h"
+
 #define TAG "SubGhzProtocolChambCode"
 
 #define CHAMBERLAIN_CODE_BIT_STOP 0b0001
@@ -226,6 +228,10 @@ SubGhzProtocolStatus
         // Optional value
         flipper_format_read_uint32(
             flipper_format, "Repeat", (uint32_t*)&instance->encoder.repeat, 1);
+
+        // Chamberlain Code carries DIP switches, not a separable button; enable
+        // the D-pad so it is visible, but every direction re-sends the original.
+        subghz_custom_btn_set_max(4);
 
         if(!subghz_protocol_encoder_chamb_code_get_upload(instance)) {
             ret = SubGhzProtocolStatusErrorEncoderGetUpload;

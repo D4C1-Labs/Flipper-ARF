@@ -1,6 +1,8 @@
 #include "mitsubishi_v0.h"
 #include <inttypes.h>
 
+#include "../blocks/custom_btn_i.h"
+
 #define TAG                          "MitsubishiProtocolV0"
 #define MITSUBISHI_V0_PREAMBLE_COUNT 100
 #define MITSUBISHI_V0_BIT_TE         250
@@ -25,6 +27,13 @@ struct SubGhzProtocolDecoderMitsubishiV0 {
     uint8_t decoder_state; // [PROTOPIRATE_PORT]
     uint16_t bit_count;
     uint8_t decode_data[12];
+    // [PROTOPIRATE_PORT] Raw on-air (inverted+scrambled) 12-byte frame captured for
+    // exact replay. Mitsubishi V0 uses an asymmetric scramble whose counter byte is
+    // itself XOR-scrambled, so a re-encoded rolling counter cannot be recovered by
+    // the decoder — this protocol is replay-only, and we transmit the captured frame
+    // verbatim.
+    uint8_t raw_frame[12];
+    bool raw_valid;
 };
 
 // [PROTOPIRATE_PORT] FSM states for atomic pulse-pair validation.
@@ -40,6 +49,9 @@ struct SubGhzProtocolEncoderMitsubishiV0 {
     SubGhzBlockGeneric generic;
 
     size_t upload_capacity;
+    // [PROTOPIRATE_PORT] Raw on-air frame for verbatim replay (replay-only protocol).
+    uint8_t raw_frame[12];
+    bool raw_valid;
 };
 
 // ============================================================================
@@ -119,6 +131,10 @@ static void mitsubishi_v0_publish_frame(SubGhzProtocolDecoderMitsubishiV0* insta
     uint8_t payload[12];
     memcpy(payload, instance->decode_data, sizeof(payload));
 
+    // [PROTOPIRATE_PORT] Preserve the exact on-air bytes for verbatim replay.
+    memcpy(instance->raw_frame, instance->decode_data, sizeof(instance->raw_frame));
+    instance->raw_valid = true;
+
     // Undo inversion
     for(uint8_t i = 0; i < 8; i++) {
         payload[i] = (uint8_t)~payload[i];
@@ -173,7 +189,8 @@ const SubGhzProtocolEncoder subghz_protocol_mitsubishi_v0_encoder = {
 const SubGhzProtocol subghz_protocol_mitsubishi_v0 = {
     .name = MITSUBISHI_PROTOCOL_V0_NAME,
     .type = SubGhzProtocolTypeDynamic,
-    .flag = SubGhzProtocolFlag_868 | SubGhzProtocolFlag_FM | SubGhzProtocolFlag_Decodable |
+    .flag = SubGhzProtocolFlag_315 | SubGhzProtocolFlag_433 | SubGhzProtocolFlag_868 |
+            SubGhzProtocolFlag_FM | SubGhzProtocolFlag_Decodable |
             SubGhzProtocolFlag_Load | SubGhzProtocolFlag_Save | SubGhzProtocolFlag_Send,
     .decoder = &subghz_protocol_mitsubishi_v0_decoder,
     .encoder = &subghz_protocol_mitsubishi_v0_encoder,
@@ -211,19 +228,28 @@ static void subghz_protocol_encoder_mitsubishi_v0_get_upload(SubGhzProtocolEncod
     size_t index = 0;
     uint8_t payload[12] = {0};
 
-    // Pack data
-    payload[0] = (instance->generic.serial >> 24) & 0xFF;
-    payload[1] = (instance->generic.serial >> 16) & 0xFF;
-    payload[2] = (instance->generic.serial >> 8) & 0xFF;
-    payload[3] = instance->generic.serial & 0xFF;
-    payload[4] = (instance->generic.cnt >> 8) & 0xFF;
-    payload[5] = instance->generic.cnt & 0xFF;
-    payload[6] = instance->generic.btn;
-    payload[9] = 0x5A; // ID byte (firmware: byte_RAM_59 = 0x5A in sub_ROM_151E8 @ 0x15258)
-    payload[10] = 0xFF;
-    payload[11] = 0xFF;
+    // [PROTOPIRATE_PORT] Replay-only: if we captured the exact on-air frame, replay it
+    // verbatim. Mitsubishi V0 uses an asymmetric scramble whose counter byte is itself
+    // XOR-scrambled, so a re-encoded rolling counter cannot round-trip through the
+    // decoder and cannot be advanced reliably — we must NOT fake an increment.
+    if(instance->raw_valid) {
+        memcpy(payload, instance->raw_frame, sizeof(payload));
+    } else {
+        // Fallback for manually-entered frames: build the on-air bytes from the
+        // captured serial/btn/cnt using the firmware scramble (no counter advance).
+        payload[0] = (instance->generic.serial >> 24) & 0xFF;
+        payload[1] = (instance->generic.serial >> 16) & 0xFF;
+        payload[2] = (instance->generic.serial >> 8) & 0xFF;
+        payload[3] = instance->generic.serial & 0xFF;
+        payload[4] = (instance->generic.cnt >> 8) & 0xFF;
+        payload[5] = instance->generic.cnt & 0xFF;
+        payload[6] = instance->generic.btn;
+        payload[9] = 0x5A; // ID byte (firmware: byte_RAM_59 = 0x5A in sub_ROM_151E8 @ 0x15258)
+        payload[10] = 0xFF;
+        payload[11] = 0xFF;
 
-    mitsubishi_v0_scramble(payload, (uint16_t)instance->generic.cnt);
+        mitsubishi_v0_scramble(payload, (uint16_t)instance->generic.cnt);
+    }
 
     // Preamble
     for(int i = 0; i < MITSUBISHI_V0_PREAMBLE_COUNT; i++) {
@@ -268,6 +294,24 @@ SubGhzProtocolStatus
         uint32_t btn_temp = 0;
         flipper_format_read_uint32(flipper_format, "Btn", &btn_temp, 1);
         instance->generic.btn = (uint8_t)btn_temp;
+
+        // [PROTOPIRATE_PORT] Replay-only: load the exact captured on-air frame if
+        // present. The car-emulate scene increments "Cnt" every TX, but Mitsubishi V0
+        // cannot forward-encode a rolling counter (asymmetric scramble), so we ignore
+        // the scene's counter advance and replay the captured frame verbatim.
+        instance->raw_valid = false;
+        flipper_format_rewind(flipper_format);
+        if(flipper_format_read_hex(flipper_format, "Raw_Frame", instance->raw_frame, 12)) {
+            instance->raw_valid = true;
+        }
+
+        // Mitsubishi V0 has no documented set of alternate button codes, so we only
+        // enable the D-pad and re-send the originally captured button for every
+        // direction (button replay).
+        if(subghz_custom_btn_get_original() == 0) {
+            subghz_custom_btn_set_original(instance->generic.btn);
+        }
+        subghz_custom_btn_set_max(4);
 
         subghz_protocol_encoder_mitsubishi_v0_get_upload(instance);
         instance->encoder.is_running = true;
@@ -315,6 +359,7 @@ void subghz_protocol_decoder_mitsubishi_v0_reset(void* context) {
     instance->decoder_state = MitsubishiV0DecoderStepReset;
     instance->decoder.te_last = 0;
     instance->generic.data_count_bit = 0;
+    instance->raw_valid = false;
     mitsubishi_v0_reset_payload(instance);
 }
 
@@ -386,6 +431,11 @@ SubGhzProtocolStatus subghz_protocol_decoder_mitsubishi_v0_serialize(
         flipper_format_write_uint32(ff, "Cnt", &instance->generic.cnt, 1);
         uint32_t btn = instance->generic.btn;
         flipper_format_write_uint32(ff, "Btn", &btn, 1);
+        // [PROTOPIRATE_PORT] Persist the raw on-air frame so replay is byte-exact
+        // across save/reload. Mitsubishi V0 is replay-only (asymmetric scramble).
+        if(instance->raw_valid) {
+            flipper_format_write_hex(ff, "Raw_Frame", instance->raw_frame, 12);
+        }
     }
     return ret;
 }

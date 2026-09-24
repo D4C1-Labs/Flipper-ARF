@@ -129,3 +129,70 @@ Custom_preset_name: Honda2
 Custom_preset_module: CC1101
 #                                                          G2    G3    G4    D                 L0    L1    L2
 Custom_preset_data: 02 0D 0B 06 08 32 07 04 14 00 13 02 12 07 11 36 10 E9 15 32 18 18 19 16 1D 92 1C 40 1B 03 20 FB 22 10 21 56 00 00 C0 00 00 00 00 00 00 00
+
+# ---------------------------------------------------------------------------
+# [ARF] "Pro" RX-sensitivity presets. Identical to the built-in AM650 / FM476
+# but with the CC1101 FIFOTHR ADC_RETENTION bit set (0x03 = 0x47 instead of the
+# power-on 0x07). Per TI's CC1101 datasheet (FIFOTHR, DN010) ADC_RETENTION=1
+# improves RX sensitivity for RX filter bandwidths <= 325 kHz at low data rates
+# (a real, ~1-3 dB gain), with only a small increase in RX current. TX power is
+# UNCHANGED (PA table still 0xC0 = chip max; firmware cannot exceed it).
+#
+# The originals (AM650/FM476) are left untouched — use these Pro variants when
+# you want the extra receive sensitivity for weak/distant signals.
+# ---------------------------------------------------------------------------
+
+# AM650 + ADC_RETENTION (OOK, 650 kHz BW). NOTE: 650 kHz is > 325 kHz so the
+# ADC_RETENTION gain is smaller here than on the narrower presets; kept for
+# parity with the built-in AM650.
+Custom_preset_name: AM650_Pro
+Custom_preset_module: CC1101
+Custom_preset_data: 02 0D 03 47 08 32 0B 06 10 17 11 32 12 30 13 00 14 00 18 18 19 18 1B 07 1C 00 1D 91 20 FB 21 B6 22 11 00 00 00 C0 00 00 00 00 00 00
+
+# FM476 + ADC_RETENTION (2-FSK, 270 kHz BW). 270 kHz <= 325 kHz, so this one
+# gets the full ADC_RETENTION sensitivity benefit.
+Custom_preset_name: FM476_Pro
+Custom_preset_module: CC1101
+Custom_preset_data: 02 0D 03 47 0B 06 08 32 07 04 14 00 13 02 12 04 11 83 10 67 15 47 18 18 19 16 1D 91 1C 00 1B 07 20 FB 22 10 21 56 00 00 C0 00 00 00 00 00 00 00
+
+# Honda-specific capture presets with ADC_RETENTION for more reliable reads of
+# Honda Static / V1 / V2 fobs (narrowband FSK, <= 325 kHz BW -> full benefit).
+Custom_preset_name: Honda1_Pro
+Custom_preset_module: CC1101
+Custom_preset_data: 02 0D 03 47 0B 06 08 32 07 04 14 00 13 02 12 04 11 36 10 69 15 32 18 18 19 16 1D 91 1C 00 1B 07 20 FB 22 10 21 56 00 00 C0 00 00 00 00 00 00 00
+
+Custom_preset_name: Honda2_Pro
+Custom_preset_module: CC1101
+Custom_preset_data: 02 0D 03 47 0B 06 08 32 07 04 14 00 13 02 12 07 11 36 10 E9 15 32 18 18 19 16 1D 92 1C 40 1B 03 20 FB 22 10 21 56 00 00 C0 00 00 00 00 00 00 00
+
+# ---------------------------------------------------------------------------
+# [ARF] Per-family capture presets. Each matches its family's modulation +
+# data rate, uses a narrower RX bandwidth than the generic AM270/AM650/FM476
+# (lower noise floor -> better sensitivity) and sets ADC_RETENTION. The generic
+# defaults are kept; use these when targeting a specific car family.
+# ---------------------------------------------------------------------------
+
+# VAG (VW/Audi/Skoda/SEAT): OOK, ~2 kBaud, 434.4 MHz band. BW ~135 kHz.
+Custom_preset_name: VAG_Pro
+Custom_preset_module: CC1101
+Custom_preset_data: 02 0D 03 47 08 32 0B 06 10 A7 11 32 12 30 13 00 14 00 18 18 19 18 1B 03 1C 00 1D 91 20 FB 21 B6 22 11 00 00 00 C0 00 00 00 00 00 00
+
+# PSA (Peugeot/Citroen): OOK, ~4 kBaud, 433.92 MHz. BW ~162 kHz.
+Custom_preset_name: PSA_Pro
+Custom_preset_module: CC1101
+Custom_preset_data: 02 0D 03 47 08 32 0B 06 10 98 11 83 12 30 13 00 14 00 18 18 19 18 1B 07 1C 00 1D 91 20 FB 21 B6 22 11 00 00 00 C0 00 00 00 00 00 00
+
+# Renault: OOK, fast ~8 kBaud, 433.92 MHz. Wider BW ~232 kHz for the high rate.
+Custom_preset_name: Renault_Pro
+Custom_preset_module: CC1101
+Custom_preset_data: 02 0D 03 47 08 32 0B 06 10 78 11 93 12 30 13 00 14 00 18 18 19 18 1B 07 1C 00 1D 91 20 FB 21 B6 22 11 00 00 00 C0 00 00 00 00 00 00
+
+# FCA (Fiat/Alfa/Jeep/Chrysler/Dodge/RAM): OOK, ~4 kBaud, 433.92 MHz. BW ~162 kHz.
+Custom_preset_name: FCA_Pro
+Custom_preset_module: CC1101
+Custom_preset_data: 02 0D 03 47 08 32 0B 06 10 98 11 83 12 30 13 00 14 00 18 18 19 18 1B 07 1C 00 1D 91 20 FB 21 B6 22 11 00 00 00 C0 00 00 00 00 00 00
+
+# KIA/Hyundai: 2-FSK, ~5 kBaud, 433.92 MHz, ~47 kHz deviation. BW ~162 kHz.
+Custom_preset_name: KIA_Pro
+Custom_preset_module: CC1101
+Custom_preset_data: 02 0D 03 47 0B 06 08 32 07 04 10 98 11 83 12 04 13 02 14 00 15 47 18 18 19 16 1B 07 1C 00 1D 91 20 FB 21 56 22 10 00 00 C0 00 00 00 00 00 00 00
