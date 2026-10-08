@@ -1,3 +1,6 @@
+#include "../defines.h"
+
+#ifdef ENABLE_MODELS_DATABASE
 #include "helpers/variable_item_list.h"
 #include <gui/elements.h>
 #include <gui/canvas.h>
@@ -5,58 +8,11 @@
 #include <m-array.h>
 #include <stdint.h>
 
-/**************************************************************************************************/
-/*                                        ICON ASSETS                                             */
-/**************************************************************************************************/
-struct Icon {
-    const uint16_t width;
-    const uint16_t height;
-    const uint8_t frame_count;
-    const uint8_t frame_rate;
-    const uint8_t* const* frames;
-};
-
-const uint8_t _I_WarningDolphin_45x42e_0[] = {
-    0x01, 0x00, 0xc6, 0x00, 0x00, 0x1c, 0x22, 0x04, 0x05, 0x7f, 0xfc, 0x1e, 0x20, 0x05, 0x1e, 0x04,
-    0x02, 0x30, 0x05, 0x29, 0x84, 0x02, 0xc1, 0x20, 0x02, 0x8c, 0x22, 0x01, 0x80, 0x02, 0x94, 0x10,
-    0x32, 0x30, 0x10, 0x10, 0x87, 0xca, 0x84, 0x03, 0x10, 0x42, 0x81, 0x48, 0x28, 0x38, 0x08, 0x04,
-    0x3e, 0x01, 0x84, 0x83, 0xe0, 0x30, 0x11, 0x08, 0x05, 0xa2, 0x11, 0x40, 0xa0, 0x4b, 0xc6, 0xc5,
-    0x40, 0xd0, 0x56, 0xe0, 0x10, 0x60, 0x29, 0x54, 0xf0, 0x10, 0x18, 0xf0, 0x14, 0x6b, 0xf6, 0x0c,
-    0x04, 0x3e, 0x40, 0x05, 0x12, 0x80, 0xc1, 0xe4, 0x01, 0xd2, 0xf8, 0x40, 0xe4, 0x18, 0x09, 0xf4,
-    0x03, 0xf1, 0x01, 0x90, 0x40, 0x28, 0x30, 0x0f, 0xe4, 0x00, 0x16, 0x24, 0x11, 0xbf, 0x01, 0x44,
-    0xee, 0x53, 0xf0, 0x29, 0xf0, 0x3e, 0x02, 0x91, 0x3b, 0x8c, 0xc3, 0x81, 0x13, 0x90, 0x48, 0x20,
-    0x3f, 0xf9, 0xfc, 0x42, 0x60, 0x05, 0x10, 0x98, 0x81, 0x56, 0x11, 0x38, 0x02, 0x9c, 0x1a, 0x31,
-    0x1e, 0x02, 0x8f, 0x02, 0x03, 0x1c, 0x90, 0xc0, 0x7c, 0x02, 0xf1, 0xce, 0x02, 0x07, 0x01, 0x1f,
-    0x80, 0x63, 0xa8, 0x08, 0x71, 0x3c, 0x8e, 0x39, 0x24, 0x40, 0x51, 0xc7, 0x81, 0x53, 0x0f, 0x3c,
-    0x02, 0x9d, 0x1e, 0x38, 0x29, 0x10, 0x29, 0x17, 0xc8, 0x0a, 0x32, 0x3a, 0x00, 0x14, 0x4b, 0xa2,
-    0x05, 0x58, 0x98, 0x15, 0x22, 0x20, 0x54, 0x84, 0x81, 0x50,
-};
-const uint8_t* const _I_WarningDolphin_45x42e[] = {_I_WarningDolphin_45x42e_0};
-
-const Icon I_WarningDolphin_45x42e = {
-    .width = 45,
-    .height = 42,
-    .frame_count = 1,
-    .frame_rate = 0,
-    .frames = _I_WarningDolphin_45x42e};
-
-const uint8_t _I_Lock_7x8e_0[] = {
-    0x00,
-    0x1c,
-    0x22,
-    0x22,
-    0x7f,
-    0x7f,
-    0x77,
-    0x7f,
-    0x3e,
-};
-const uint8_t* const _I_Lock_7x8e[] = {_I_Lock_7x8e_0};
-
-const Icon I_Lock_7x8e =
-    {.width = 7, .height = 8, .frame_count = 1, .frame_rate = 0, .frames = _I_Lock_7x8e};
-
-/**************************************************************************************************/
+#ifdef PROTOPIRATE_CONFIG_PLUGIN_BUILD
+#include "pp_config_icons.h"
+#else
+#include "proto_pirate_icons.h"
+#endif
 
 struct VariableItem {
     FuriString* label;
@@ -170,7 +126,7 @@ static void variable_item_list_draw_callback(Canvas* canvas, void* _model) {
                 (position != model->position));
 
             if(item->locked) {
-                canvas_draw_icon(canvas, value_pos_x, item_text_y - 8, &I_Lock_7x8e);
+                canvas_draw_icon(canvas, value_pos_x, item_text_y - 8, &I_Lock_7x8);
             } else {
                 if(item->current_value_index > 0) {
                     canvas_draw_str(canvas, value_pos_x, item_text_y, "<");
@@ -203,7 +159,7 @@ static void variable_item_list_draw_callback(Canvas* canvas, void* _model) {
         canvas_set_color(canvas, ColorWhite);
         canvas_draw_box(canvas, 8, 10, 110, 48);
         canvas_set_color(canvas, ColorBlack);
-        canvas_draw_icon(canvas, 10, 14, &I_WarningDolphin_45x42e);
+        canvas_draw_icon(canvas, 10, 14, &I_WarningDolphin_45x42);
         canvas_draw_rframe(canvas, 8, 8, 112, 50, 3);
         canvas_draw_rframe(canvas, 9, 9, 110, 48, 2);
         elements_multiline_text_aligned(
@@ -218,7 +174,6 @@ static void variable_item_list_draw_callback(Canvas* canvas, void* _model) {
 }
 
 void variable_item_list_set_selected_item(VariableItemList* variable_item_list, uint8_t index) {
-    furi_check(variable_item_list);
     with_view_model(
         variable_item_list->view,
         VariableItemListModel * model,
@@ -533,8 +488,6 @@ VariableItemList* variable_item_list_alloc(void) {
 }
 
 void variable_item_list_free(VariableItemList* variable_item_list) {
-    furi_check(variable_item_list);
-
     with_view_model(
         variable_item_list->view,
         VariableItemListModel * model,
@@ -560,8 +513,6 @@ void variable_item_list_free(VariableItemList* variable_item_list) {
 }
 
 void variable_item_list_reset(VariableItemList* variable_item_list) {
-    furi_check(variable_item_list);
-
     with_view_model(
         variable_item_list->view,
         VariableItemListModel * model,
@@ -580,7 +531,6 @@ void variable_item_list_reset(VariableItemList* variable_item_list) {
 }
 
 View* variable_item_list_get_view(VariableItemList* variable_item_list) {
-    furi_check(variable_item_list);
     return variable_item_list->view;
 }
 
@@ -591,8 +541,6 @@ VariableItem* variable_item_list_add(
     VariableItemChangeCallback change_callback,
     void* context) {
     VariableItem* item = NULL;
-    furi_check(label);
-    furi_check(variable_item_list);
 
     with_view_model(
         variable_item_list->view,
@@ -614,7 +562,6 @@ VariableItem* variable_item_list_add(
 }
 
 VariableItem* variable_item_list_get(VariableItemList* variable_item_list, uint8_t position) {
-    furi_check(variable_item_list);
     VariableItem* item = NULL;
 
     with_view_model(
@@ -634,7 +581,6 @@ void variable_item_list_set_enter_callback(
     VariableItemList* variable_item_list,
     VariableItemListEnterCallback callback,
     void* context) {
-    furi_check(callback);
     with_view_model(
         variable_item_list->view,
         VariableItemListModel * model,
@@ -647,7 +593,6 @@ void variable_item_list_set_enter_callback(
 }
 
 void variable_item_set_current_value_index(VariableItem* item, uint8_t current_value_index) {
-    furi_check(item);
     item->current_value_index = current_value_index;
 }
 
@@ -657,18 +602,14 @@ void variable_item_set_current_value_index(VariableItem* item, uint8_t current_v
 }*/
 
 void variable_item_set_item_label(VariableItem* item, const char* label) {
-    furi_check(item);
-    furi_check(label);
     furi_string_set(item->label, label);
 }
 
 void variable_item_set_current_value_text(VariableItem* item, const char* current_value_text) {
-    furi_check(item);
     furi_string_set(item->current_value_text, current_value_text);
 }
 
 void variable_item_set_locked(VariableItem* item, bool locked, const char* locked_message) {
-    furi_check(item);
     item->locked = locked;
     if(locked_message) {
         furi_string_set(item->locked_message, locked_message);
@@ -678,11 +619,10 @@ void variable_item_set_locked(VariableItem* item, bool locked, const char* locke
 }
 
 uint8_t variable_item_get_current_value_index(VariableItem* item) {
-    furi_check(item);
     return item->current_value_index;
 }
 
 void* variable_item_get_context(VariableItem* item) {
-    furi_check(item);
     return item->context;
 }
+#endif

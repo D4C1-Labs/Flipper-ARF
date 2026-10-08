@@ -1,9 +1,7 @@
-#include "psa_bf_core.h"
+#include "bruteforce_core.h"
 #include "protocols_common.h"
 
-bool psa_bf_state_from_flipper_format(PsaBfState* state, FlipperFormat* ff) {
-    furi_check(state);
-    furi_check(ff);
+bool bruteforce_state_from_flipper_format(BruteForceState* state, FlipperFormat* ff) {
     bool ok = false;
     do {
         uint64_t key1 = 0;
@@ -18,7 +16,7 @@ bool psa_bf_state_from_flipper_format(PsaBfState* state, FlipperFormat* ff) {
         state->cancel = 0;
         state->progress_current = 0;
         state->progress_total = 0;
-        state->status = PSA_BF_STATUS_IDLE;
+        state->status = BRUTEFORCE_STATUS_IDLE;
         state->on_done = NULL;
         state->on_done_ctx = NULL;
         ok = true;

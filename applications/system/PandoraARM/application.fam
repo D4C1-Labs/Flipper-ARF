@@ -1,0 +1,21 @@
+App(
+    appid="pandora_arm",
+    name="Pandora ARM",
+    apptype=FlipperAppType.EXTERNAL,
+    entry_point="pandora_arm_app",
+    sources=["*.c*", "!lib", "!tests", "!hosttest"],
+    requires=["gui", "dialogs", "storage"],
+    stack_size=8 * 1024,
+    fap_private_libs=[
+        Lib(
+            # Interprete Thumb-2 (Cortex-M3) como lib privada con -O2: el bucle
+            # de decode/execute por-instruccion es el hot path.
+            name="thumbcore",
+            cflags=["-O2"],
+        ),
+    ],
+    fap_category="Sub-GHz",
+    fap_author="user",
+    fap_version="0.1",
+    fap_description="Emula el firmware real de keyfob Pandora D-605 (EFM32 Cortex-M3). Carga el .hex/.bin desde SD, muestra el OLED del llavero, desbloqueo por knock-code, y usa el CC1101 del Flipper para RX/TX RF reales.",
+)

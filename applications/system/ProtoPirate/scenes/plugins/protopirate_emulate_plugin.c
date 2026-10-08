@@ -1,8 +1,7 @@
 // scenes/plugins/protopirate_emulate_plugin.c
 
-#include "protopirate_emulate_plugin.h"
-
 #include "../../protopirate_app_i.h"
+#include "../../helpers/protopirate_storage.h"
 
 #ifdef ENABLE_EMULATE_FEATURE
 
@@ -31,7 +30,7 @@
 #include <furi.h>
 #include <string.h>
 
-#define TAG "ProtoPirateEmulatePlugin"
+#define TAG "PPEmulatePlugin"
 
 #define MIN_TX_TIME              666U
 #define MIN_TX_TIME_KIA_V3_V4    1600U
@@ -55,7 +54,7 @@ typedef struct {
     uint32_t current_counter;
     uint32_t serial;
     uint8_t original_button;
-    FuriString* protocol_name;
+    char* protocol_name;
     const char* preset;
     FuriString* preset_from_file;
     uint32_t freq;
@@ -75,7 +74,7 @@ typedef struct {
 } EmulateResolvedPreset;
 
 static EmulateContext* emulate_context = NULL;
-static const ProtoPirateEmulateHostApi* g_host_api = NULL;
+static const ProtoPirateSharedPluginHostApi* g_host_api = NULL;
 
 static bool emulate_hitag2_key_nonzero(const uint8_t key[6]) {
     for(size_t i = 0; i < 6U; i++) {
@@ -178,24 +177,15 @@ static bool emulate_hitag2_recovered_yes(FlipperFormat* flipper_format) {
     return false;
 }
 
-static void emulate_request_nav_pop(ProtoPirateApp* app) {
-    app->emulate_nav_pending = EMULATE_NAV_POP;
-}
-
-static void emulate_request_nav_after_exit(ProtoPirateApp* app) {
-    if(scene_manager_has_previous_scene(app->scene_manager, ProtoPirateSceneStart)) {
-        app->emulate_nav_pending = EMULATE_NAV_POP;
-    } else {
-        app->emulate_nav_pending = EMULATE_NAV_STOP_APP;
-    }
-}
-
 static bool emulate_prompt_hitag2_key(ProtoPirateApp* app, EmulateContext* ctx);
 
 static void emulate_hitag2_key_input_callback(void* context) {
     ProtoPirateApp* app = context;
     EmulateContext* ctx = emulate_context;
     uint8_t key[6] = {0};
+
+    app->dialog_showing = false;
+    view_dispatcher_switch_to_view(app->view_dispatcher, ProtoPirateViewAbout);
 
     if(!app || !ctx || !ctx->flipper_format ||
        !emulate_parse_hitag2_key_text(ctx->hitag2_key_text, key)) {
@@ -210,21 +200,18 @@ static void emulate_hitag2_key_input_callback(void* context) {
 
     if(!emulate_write_hitag2_key(ctx->flipper_format, key)) {
         notification_message(app->notifications, &sequence_error);
-        emulate_request_nav_pop(app);
+        view_dispatcher_send_custom_event(
+            app->view_dispatcher, ProtoPirateCustomEventPluginNavigateBack);
         return;
     }
 
-    view_dispatcher_switch_to_view(app->view_dispatcher, ProtoPirateViewAbout);
     if(app->view_about) {
         view_commit_model(app->view_about, true);
     }
 }
 
 static bool emulate_prompt_hitag2_key(ProtoPirateApp* app, EmulateContext* ctx) {
-    furi_check(app);
-    furi_check(ctx);
-
-    if(!g_host_api || !g_host_api->ensure_text_input || !g_host_api->ensure_text_input(app)) {
+    if(!g_host_api || !g_host_api->ensure_text_input(app)) {
         return false;
     }
 
@@ -239,6 +226,7 @@ static bool emulate_prompt_hitag2_key(ProtoPirateApp* app, EmulateContext* ctx) 
         sizeof(ctx->hitag2_key_text),
         true);
     view_dispatcher_switch_to_view(app->view_dispatcher, ProtoPirateViewTextInput);
+    app->dialog_showing = true;
     return true;
 }
 
@@ -246,10 +234,10 @@ static bool emulate_needs_hitag2_prompt(EmulateContext* ctx) {
     if(!ctx || !ctx->flipper_format) {
         return false;
     }
-    if(furi_string_equal(ctx->protocol_name, FIAT_V1_PROTOCOL_NAME)) {
+    if(!strcmp(ctx->protocol_name, FIAT_V1_PROTOCOL_NAME)) {
         return !emulate_has_hitag2_key(ctx->flipper_format);
     }
-    if(furi_string_equal(ctx->protocol_name, RENAULT_PROTOCOL_V1_NAME)) {
+    if(!strcmp(ctx->protocol_name, RENAULT_PROTOCOL_V1_NAME)) {
         if(emulate_hitag2_recovered_yes(ctx->flipper_format)) {
             return false;
         }
@@ -324,14 +312,13 @@ static const uint8_t tx_power_value[TX_PRESET_VALUES_COUNT] = {
 };
 
 static bool emulate_radio_ready(ProtoPirateApp* app) {
-    furi_check(app);
     return app->radio_initialized && app->txrx && app->txrx->radio_device &&
            app->txrx->environment;
 }
 
 static uint32_t emulate_min_tx_time(const EmulateContext* ctx) {
     if(!ctx || !ctx->protocol_name) return MIN_TX_TIME;
-    const char* proto = furi_string_get_cstr(ctx->protocol_name);
+    const char* proto = ctx->protocol_name;
     proto = protopirate_protocol_catalog_canonical_name(proto);
     if(proto && strcmp(proto, KIA_PROTOCOL_V3_V4_NAME) == 0) {
         return MIN_TX_TIME_KIA_V3_V4;
@@ -359,9 +346,6 @@ static bool emulate_resolved_preset_assign_named(
     ProtoPirateApp* app,
     const char* preset_name,
     EmulateResolvedPreset* preset) {
-    furi_check(app);
-    furi_check(preset);
-
     int preset_index = subghz_setting_get_inx_preset_by_name(app->setting, preset_name);
     if(preset_index < 0) return false;
 
@@ -377,8 +361,6 @@ static bool emulate_resolved_preset_assign_named(
 
 static bool
     emulate_resolved_preset_try_load_custom(EmulateContext* ctx, EmulateResolvedPreset* preset) {
-    furi_check(ctx);
-    furi_check(preset);
     if(!ctx->flipper_format) return false;
 
     uint32_t value_count = 0;
@@ -408,10 +390,6 @@ static bool emulate_context_resolve_tx_preset(
     ProtoPirateApp* app,
     EmulateContext* ctx,
     EmulateResolvedPreset* preset) {
-    furi_check(app);
-    furi_check(ctx);
-    furi_check(preset);
-
     memset(preset, 0, sizeof(*preset));
 
     const char* requested_preset = ctx->preset ? ctx->preset : "AM650";
@@ -497,7 +475,7 @@ static void emulate_context_free(void) {
         emulate_context->flipper_format = NULL;
     }
     if(emulate_context->protocol_name) {
-        furi_string_free(emulate_context->protocol_name);
+        free(emulate_context->protocol_name);
         emulate_context->protocol_name = NULL;
     }
     if(emulate_context->preset_from_file) {
@@ -508,7 +486,6 @@ static void emulate_context_free(void) {
         furi_record_close(RECORD_STORAGE);
         emulate_context->storage = NULL;
     }
-
     free(emulate_context);
     emulate_context = NULL;
 }
@@ -517,7 +494,7 @@ static bool emulate_context_try_init_transmitter(ProtoPirateApp* app, EmulateCon
     if(ctx->transmitter) return true;
     if(!ctx->flipper_format || !ctx->protocol_name) return false;
 
-    const char* proto_name = furi_string_get_cstr(ctx->protocol_name);
+    const char* proto_name = ctx->protocol_name;
     const char* registry_name = protopirate_protocol_catalog_canonical_name(proto_name);
     if(!registry_name || !protopirate_protocol_catalog_can_tx(proto_name)) {
         FURI_LOG_E(TAG, "Protocol %s has no TX catalog entry", proto_name ? proto_name : "?");
@@ -806,7 +783,7 @@ static uint8_t emu_button_for_protocol(
         case InputKeyDown:
             return 0x8; // Boot
         case InputKeyRight:
-            return 0x10;
+            return 0x16;
         default:
             return original;
         }
@@ -912,7 +889,7 @@ static void emulate_draw_callback(Canvas* canvas, void* model) {
     canvas_draw_box(canvas, 0, 0, 128, 11);
     canvas_invert_color(canvas);
     canvas_set_font(canvas, FontSecondary);
-    const char* proto_name = furi_string_get_cstr(ctx->protocol_name);
+    const char* proto_name = ctx->protocol_name;
     canvas_draw_str_aligned(canvas, 64, 2, AlignCenter, AlignTop, proto_name);
     canvas_invert_color(canvas);
 
@@ -1002,7 +979,7 @@ static void emulate_draw_callback(Canvas* canvas, void* model) {
         canvas_draw_str(canvas, 28 + wave * 2, 25, ")))");
 
         canvas_set_font(canvas, FontPrimary);
-        canvas_draw_str_aligned(canvas, 64, 24, AlignCenter, AlignCenter, "TX");
+        canvas_draw_str_aligned(canvas, 64, 24, AlignCenter, AlignCenter, "Tx");
 
         canvas_invert_color(canvas);
     }
@@ -1023,12 +1000,9 @@ static bool emulate_input_callback(InputEvent* event, void* context) {
 
         if(!ctx->replay_only) {
             uint8_t button = emu_button_for_protocol(
-                furi_string_get_cstr(ctx->protocol_name),
-                event->key,
-                ctx->original_button,
-                ctx->flipper_format);
+                ctx->protocol_name, event->key, ctx->original_button, ctx->flipper_format);
 
-            if(furi_string_equal(ctx->protocol_name, RENAULT_PROTOCOL_V0_NAME)) {
+            if(!strcmp(ctx->protocol_name, RENAULT_PROTOCOL_V0_NAME)) {
                 ctx->current_counter = (ctx->current_counter + 1U) & 0xFFU;
             } else {
                 ctx->current_counter++;
@@ -1073,13 +1047,11 @@ static bool
     return true;
 }
 
-static void plugin_on_enter(void* context) {
-    ProtoPirateApp* app = context;
-    furi_check(g_host_api);
-
+static void plugin_on_enter(ProtoPirateApp* app) {
     if(!g_host_api->ensure_view_about || !g_host_api->ensure_view_about(app)) {
         notification_message(app->notifications, &sequence_error);
-        emulate_request_nav_pop(app);
+        view_dispatcher_send_custom_event(
+            app->view_dispatcher, ProtoPirateCustomEventPluginNavigateBack);
         return;
     }
 
@@ -1089,7 +1061,7 @@ static void plugin_on_enter(void* context) {
     }
 
     if(app->txrx && app->txrx->history && g_host_api->history_release_scratch) {
-        g_host_api->history_release_scratch(app);
+        g_host_api->history_release_scratch(app->txrx->history);
     }
 
     if(g_host_api->rx_stack_suspend_for_tx) {
@@ -1100,7 +1072,8 @@ static void plugin_on_enter(void* context) {
         if(!g_host_api->radio_init || !g_host_api->radio_init(app)) {
             FURI_LOG_E(TAG, "Failed to initialize radio for emulate scene");
             notification_message(app->notifications, &sequence_error);
-            emulate_request_nav_pop(app);
+            view_dispatcher_send_custom_event(
+                app->view_dispatcher, ProtoPirateCustomEventPluginNavigateBack);
             return;
         }
     }
@@ -1108,24 +1081,27 @@ static void plugin_on_enter(void* context) {
     if(!emulate_radio_ready(app)) {
         FURI_LOG_E(TAG, "Radio still incomplete after emulate init");
         notification_message(app->notifications, &sequence_error);
-        emulate_request_nav_pop(app);
+        view_dispatcher_send_custom_event(
+            app->view_dispatcher, ProtoPirateCustomEventPluginNavigateBack);
         return;
     }
 
     emulate_context = malloc(sizeof(EmulateContext));
     if(!emulate_context) {
         FURI_LOG_E(TAG, "Failed to allocate emulate context");
-        emulate_request_nav_pop(app);
+        view_dispatcher_send_custom_event(
+            app->view_dispatcher, ProtoPirateCustomEventPluginNavigateBack);
         return;
     }
     memset(emulate_context, 0, sizeof(EmulateContext));
     EmulateContext* ctx = emulate_context;
 
-    ctx->protocol_name = furi_string_alloc();
+    ctx->protocol_name = malloc(PROTOPIRATE_PROTOCOL_NAME_MAX);
     if(!ctx->protocol_name) {
         FURI_LOG_E(TAG, "Failed to allocate protocol name string");
         emulate_context_free();
-        emulate_request_nav_pop(app);
+        view_dispatcher_send_custom_event(
+            app->view_dispatcher, ProtoPirateCustomEventPluginNavigateBack);
         return;
     }
 
@@ -1133,7 +1109,8 @@ static void plugin_on_enter(void* context) {
         FURI_LOG_E(TAG, "No file path set");
         emulate_context_free();
         notification_message(app->notifications, &sequence_error);
-        emulate_request_nav_pop(app);
+        view_dispatcher_send_custom_event(
+            app->view_dispatcher, ProtoPirateCustomEventPluginNavigateBack);
         return;
     }
 
@@ -1142,7 +1119,8 @@ static void plugin_on_enter(void* context) {
         FURI_LOG_E(TAG, "Failed to open storage");
         emulate_context_free();
         notification_message(app->notifications, &sequence_error);
-        emulate_request_nav_pop(app);
+        view_dispatcher_send_custom_event(
+            app->view_dispatcher, ProtoPirateCustomEventPluginNavigateBack);
         return;
     }
 
@@ -1151,16 +1129,17 @@ static void plugin_on_enter(void* context) {
         FURI_LOG_E(TAG, "Failed to allocate FlipperFormat");
         emulate_context_free();
         notification_message(app->notifications, &sequence_error);
-        emulate_request_nav_pop(app);
+        view_dispatcher_send_custom_event(
+            app->view_dispatcher, ProtoPirateCustomEventPluginNavigateBack);
         return;
     }
 
-    if(!flipper_format_file_open_existing(
-           ctx->flipper_format, furi_string_get_cstr(app->loaded_file_path))) {
-        FURI_LOG_E(TAG, "Failed to open file: %s", furi_string_get_cstr(app->loaded_file_path));
+    if(!flipper_format_file_open_existing(ctx->flipper_format, app->loaded_file_path)) {
+        FURI_LOG_E(TAG, "Failed to open file: %s", app->loaded_file_path);
         emulate_context_free();
         notification_message(app->notifications, &sequence_error);
-        emulate_request_nav_pop(app);
+        view_dispatcher_send_custom_event(
+            app->view_dispatcher, ProtoPirateCustomEventPluginNavigateBack);
         return;
     }
 
@@ -1191,30 +1170,29 @@ static void plugin_on_enter(void* context) {
     furi_string_free(preset_str);
 
     flipper_format_rewind(ctx->flipper_format);
-    if(!flipper_format_read_string(
-           ctx->flipper_format, EMU_PRESET_KEY_PROTOCOL, ctx->protocol_name)) {
+    FuriString* protocol_buffer = furi_string_alloc();
+    if(!flipper_format_read_string(ctx->flipper_format, EMU_PRESET_KEY_PROTOCOL, protocol_buffer)) {
         FURI_LOG_E(TAG, "Failed to read protocol name");
-        furi_string_set(ctx->protocol_name, "Unknown");
+        strcpy(ctx->protocol_name, "Unknown");
     }
+    strcpy(ctx->protocol_name, furi_string_get_cstr(protocol_buffer));
+    furi_string_free(protocol_buffer);
 
     ctx->replay_only = false;
 
     // Standalone Suzuki/Honda/Mitsubishi V0 captures: merged into Kia V0
-    if(furi_string_equal(ctx->protocol_name, "Suzuki") ||
-       furi_string_equal(ctx->protocol_name, "Suzuki V0") ||
-       furi_string_equal(ctx->protocol_name, "Honda V0") ||
-       furi_string_equal(ctx->protocol_name, "Mitsu V0") ||
-       furi_string_equal(ctx->protocol_name, "Mitsu v0") ||
-       furi_string_equal(ctx->protocol_name, "Mitsubishi V0") ||
-       furi_string_equal(ctx->protocol_name, "Mitsubishi v0")) {
-        uint32_t kia_v0_type = furi_string_equal(ctx->protocol_name, "Honda V0") ? 3U :
-                               (furi_string_equal(ctx->protocol_name, "Mitsu V0") ||
-                                furi_string_equal(ctx->protocol_name, "Mitsu v0") ||
-                                furi_string_equal(ctx->protocol_name, "Mitsubishi V0") ||
-                                furi_string_equal(ctx->protocol_name, "Mitsubishi v0")) ?
-                                                                                   4U :
-                                                                                   2U;
-        furi_string_set(ctx->protocol_name, KIA_PROTOCOL_V0_NAME);
+    if(!strcmp(ctx->protocol_name, "Suzuki") || !strcmp(ctx->protocol_name, "Suzuki V0") ||
+       !strcmp(ctx->protocol_name, "Honda V0") || !strcmp(ctx->protocol_name, "Mitsu V0") ||
+       !strcmp(ctx->protocol_name, "Mitsu v0") || !strcmp(ctx->protocol_name, "Mitsubishi V0") ||
+       !strcmp(ctx->protocol_name, "Mitsubishi v0")) {
+        uint32_t kia_v0_type = !strcmp(ctx->protocol_name, "Honda V0") ? 3U :
+                               (!strcmp(ctx->protocol_name, "Mitsu V0") ||
+                                !strcmp(ctx->protocol_name, "Mitsu v0") ||
+                                !strcmp(ctx->protocol_name, "Mitsubishi V0") ||
+                                !strcmp(ctx->protocol_name, "Mitsubishi v0")) ?
+                                                                         4U :
+                                                                         2U;
+        strcpy(ctx->protocol_name, KIA_PROTOCOL_V0_NAME);
         flipper_format_rewind(ctx->flipper_format);
         flipper_format_insert_or_update_string_cstr(
             ctx->flipper_format, EMU_PRESET_KEY_PROTOCOL, KIA_PROTOCOL_V0_NAME);
@@ -1222,18 +1200,17 @@ static void plugin_on_enter(void* context) {
             ctx->flipper_format, EMU_PRESET_KEY_TYPE, &kia_v0_type, 1);
     }
 
-    if(furi_string_equal(ctx->protocol_name, "Land Rover V0")) {
-        furi_string_set(ctx->protocol_name, "Honda V2");
+    if(!strcmp(ctx->protocol_name, "Land Rover V0")) {
+        strcpy(ctx->protocol_name, "Honda V2");
         flipper_format_rewind(ctx->flipper_format);
         flipper_format_insert_or_update_string_cstr(
             ctx->flipper_format, EMU_PRESET_KEY_PROTOCOL, "Honda V2");
     }
 
     const char* canonical_protocol =
-        protopirate_protocol_catalog_canonical_name(furi_string_get_cstr(ctx->protocol_name));
-    if(canonical_protocol &&
-       strcmp(furi_string_get_cstr(ctx->protocol_name), canonical_protocol) != 0) {
-        furi_string_set(ctx->protocol_name, canonical_protocol);
+        protopirate_protocol_catalog_canonical_name(ctx->protocol_name);
+    if(canonical_protocol && strcmp(ctx->protocol_name, canonical_protocol) != 0) {
+        strcpy(ctx->protocol_name, canonical_protocol);
         flipper_format_rewind(ctx->flipper_format);
         flipper_format_insert_or_update_string_cstr(
             ctx->flipper_format, EMU_PRESET_KEY_PROTOCOL, canonical_protocol);
@@ -1257,7 +1234,7 @@ static void plugin_on_enter(void* context) {
         ctx->current_counter = ctx->original_counter;
     }
 
-    if(furi_string_equal(ctx->protocol_name, FIAT_V1_PROTOCOL_NAME)) {
+    if(!strcmp(ctx->protocol_name, FIAT_V1_PROTOCOL_NAME)) {
         uint8_t raw[13] = {0};
         bool have_raw = false;
         flipper_format_rewind(ctx->flipper_format);
@@ -1303,27 +1280,27 @@ static void plugin_on_enter(void* context) {
         }
     }
 
-    view_set_draw_callback(app->view_about, emulate_draw_callback);
-    view_set_input_callback(app->view_about, emulate_input_callback);
-    view_set_context(app->view_about, app);
-    view_set_previous_callback(app->view_about, NULL);
-
     if(emulate_needs_hitag2_prompt(ctx)) {
         if(!emulate_prompt_hitag2_key(app, ctx)) {
             FURI_LOG_E(TAG, "Failed to show HITAG2 key input");
             notification_message(app->notifications, &sequence_error);
             emulate_context_free();
-            emulate_request_nav_pop(app);
+            view_dispatcher_send_custom_event(
+                app->view_dispatcher, ProtoPirateCustomEventPluginNavigateBack);
         }
         return;
     }
 
+    view_set_draw_callback(app->view_about, emulate_draw_callback);
+    view_set_input_callback(app->view_about, emulate_input_callback);
+    view_set_context(app->view_about, app);
+    view_set_previous_callback(app->view_about, NULL);
+
     view_dispatcher_switch_to_view(app->view_dispatcher, ProtoPirateViewAbout);
 }
 
-static bool plugin_on_event(void* context, SceneManagerEvent event) {
+static bool plugin_on_event(ProtoPirateApp* app, SceneManagerEvent event) {
 #define INVALID_PRESET "Cannot set TX power on this preset."
-    ProtoPirateApp* app = context;
     bool consumed = false;
 
     EmulateContext* ctx = emulate_context;
@@ -1474,9 +1451,17 @@ static bool plugin_on_event(void* context, SceneManagerEvent event) {
                 }
             }
 
-            emulate_request_nav_after_exit(app);
-            consumed = true;
-            break;
+            if(!scene_manager_has_previous_scene(app->scene_manager, ProtoPirateSceneStart)) {
+                view_dispatcher_send_custom_event(
+                    app->view_dispatcher, ProtoPirateCustomEventPluginNavigateStopApp);
+                consumed = true;
+            } else {
+                if(app->dialog_showing) {
+                    consumed = false;
+                    app->dialog_showing = false;
+                }
+                break;
+            }
         }
     } else if(event.type == SceneManagerEventTypeTick) {
         view_commit_model(app->view_about, true);
@@ -1496,18 +1481,26 @@ static bool plugin_on_event(void* context, SceneManagerEvent event) {
         }
 
         consumed = true;
+    } else if(event.type == SceneManagerEventTypeBack) {
+        if(app->dialog_showing) {
+            app->dialog_showing = false;
+            view_dispatcher_switch_to_view(app->view_dispatcher, ProtoPirateViewAbout);
+            view_dispatcher_send_custom_event(
+                app->view_dispatcher, ProtoPirateCustomEventPluginNavigateBack);
+            consumed = true;
+        }
     }
-
     return consumed;
 }
 
-static void plugin_on_exit(void* context) {
-    ProtoPirateApp* app = context;
-
+static void plugin_on_exit(ProtoPirateApp* app) {
     if(!app) {
         emulate_context_free();
         return;
     }
+
+    //We allocated this when we came in, have to kill it too.
+    g_host_api->free_text_input(app);
 
     // Stop any active transmission before tearing down callbacks.
     if(app->txrx && app->txrx->txrx_state == ProtoPirateTxRxStateTx) {
@@ -1561,22 +1554,22 @@ static void plugin_on_exit(void* context) {
     }
 }
 
-static void plugin_context_release(void* context) {
-    UNUSED(context);
+static void plugin_context_release(ProtoPirateApp* app) {
+    UNUSED(app);
     emulate_context_free();
 }
 
-static void plugin_set_host_api(const ProtoPirateEmulateHostApi* host_api) {
+static void plugin_set_host_api(const ProtoPirateSharedPluginHostApi* host_api) {
     g_host_api = host_api;
 }
 
-static const ProtoPirateEmulatePlugin protopirate_emulate_plugin = {
-    .plugin_name = "ProtoPirate Emulate",
+static const ProtoPirateSharedPlugin protopirate_emulate_plugin = {
+    .plugin_name = "",
     .set_host_api = plugin_set_host_api,
     .on_enter = plugin_on_enter,
     .on_event = plugin_on_event,
     .on_exit = plugin_on_exit,
-    .context_release = plugin_context_release,
+    .release = plugin_context_release,
 };
 
 static const FlipperAppPluginDescriptor protopirate_emulate_plugin_descriptor = {

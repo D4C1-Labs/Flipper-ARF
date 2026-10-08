@@ -1,0 +1,22 @@
+App(
+    appid="pandora_pic",
+    name="Pandora PIC",
+    apptype=FlipperAppType.EXTERNAL,
+    entry_point="pandora_pic_app",
+    sources=["*.c*", "!lib", "!tests", "!hosttest"],
+    requires=["gui", "dialogs", "storage"],
+    stack_size=8 * 1024,
+    fap_private_libs=[
+        Lib(
+            # El interprete PIC18 se compila como lib privada con -O2: el
+            # bucle por-instruccion es el hot path; ufbt compila el FAP con
+            # -Os y eso cuesta velocidad de emulacion.
+            name="pic18core",
+            cflags=["-O2"],
+        ),
+    ],
+    fap_category="Sub-GHz",
+    fap_author="user",
+    fap_version="0.1",
+    fap_description="Emula el firmware real de keyfob Pandora DXL-5000 (PIC18). Carga el .hex/.bin desde SD, muestra el OLED del llavero en la pantalla, y usa el CC1101 del Flipper para RX/TX RF reales.",
+)
