@@ -8,15 +8,16 @@ App(
     stack_size=8 * 1024,
     fap_private_libs=[
         Lib(
-            # El interprete PIC18 se compila como lib privada con -O2: el
-            # bucle por-instruccion es el hot path; ufbt compila el FAP con
-            # -Os y eso cuesta velocidad de emulacion.
+            # The PIC18 interpreter is built as a private lib with -O2: the
+            # per-instruction loop is the hot path; ufbt builds the FAP with
+            # -Os and that costs emulation speed.
             name="pic18core",
             cflags=["-O2"],
         ),
     ],
     fap_category="Sub-GHz",
+    fap_icon="icon.png",
     fap_author="user",
     fap_version="0.1",
-    fap_description="Emula el firmware real de keyfob Pandora DXL-5000 (PIC18). Carga el .hex/.bin desde SD, muestra el OLED del llavero en la pantalla, y usa el CC1101 del Flipper para RX/TX RF reales.",
+    fap_description="Emulates the real Pandora DXL-5000 keyfob firmware (PIC18). Loads the .hex/.bin from SD, shows the keyfob OLED on the screen, and uses the Flipper's CC1101 for real RF RX/TX.",
 )

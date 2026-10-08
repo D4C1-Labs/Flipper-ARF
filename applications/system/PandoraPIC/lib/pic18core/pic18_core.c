@@ -1,7 +1,7 @@
 /*
- * pic18_core.c - Implementacion del interprete PIC18.
+ * pic18_core.c - PIC18 interpreter implementation.
  *
- * Port fiel, instruccion por instruccion, de emu/pic18cpu.py.
+ * Faithful, instruction-by-instruction port of emu/pic18cpu.py.
  */
 #include "pic18_core.h"
 #include "ihex.h"
@@ -10,9 +10,9 @@
 #include <stdlib.h>
 
 /* ------------------------------------------------------------------ SFR map
- * Direccion absoluta (0xF80-0xFFF) -> nombre. Replica exacta del SFR_ADDR del
- * python. Los nombres se usan para la API por nombre; la logica de ejecucion
- * usa las direcciones directamente (igual que el python via SFR_NAME).
+ * Absolute address (0xF80-0xFFF) -> name. Exact replica of SFR_ADDR from the
+ * python. The names are used for the by-name API; the execution logic uses the
+ * addresses directly (same as the python via SFR_NAME).
  */
 typedef struct {
     uint16_t addr;
@@ -51,7 +51,7 @@ static const SfrEntry SFR_TABLE[] = {
 };
 #define SFR_TABLE_N (sizeof(SFR_TABLE) / sizeof(SFR_TABLE[0]))
 
-/* Direcciones de SFR usadas en la ejecucion (equivalentes a SFR_NAME['...']) */
+/* SFR addresses used during execution (equivalent to SFR_NAME['...']) */
 #define A_TOSU    0xFFF
 #define A_TOSH    0xFFE
 #define A_TOSL    0xFFD
@@ -77,9 +77,9 @@ static const SfrEntry SFR_TABLE[] = {
 #define A_STATUS  0xFD8
 
 /*
- * Clasificacion rapida de SFR por direccion. 0 = RAM normal (no SFR especial);
- * el resto son "clases" que replican las ramas del _read_sfr/_write_sfr del
- * python. Precalculamos una tabla de 0x80 entradas (0xF80..0xFFF).
+ * Fast SFR classification by address. 0 = normal RAM (not a special SFR);
+ * the rest are "classes" that replicate the branches of _read_sfr/_write_sfr in
+ * the python. We precompute a table of 0x80 entries (0xF80..0xFFF).
  */
 enum {
     SFRK_NONE = 0,
@@ -90,7 +90,7 @@ enum {
     SFRK_PORT, SFRK_LAT
 };
 
-static uint8_t sfr_kind[0x80]; /* indexado por (addr - 0xF80) */
+static uint8_t sfr_kind[0x80]; /* indexed by (addr - 0xF80) */
 static int sfr_kind_ready = 0;
 
 static void sfr_kind_init(void) {
@@ -137,7 +137,7 @@ static uint8_t kind_of(uint16_t addr) {
     return SFRK_NONE;
 }
 
-/* ---- opcode tables (f,d,a) y (f,a) y bit, replica de _FD_OPS/_FA_OPS/_BIT_OPS */
+/* ---- opcode tables (f,d,a) and (f,a) and bit, replica of _FD_OPS/_FA_OPS/_BIT_OPS */
 enum {
     FD_NONE = 0,
     FD_ADDWF, FD_ADDWFC, FD_ANDWF, FD_DECF, FD_IORWF, FD_MOVF, FD_RLCF,
@@ -145,7 +145,7 @@ enum {
     FD_SUBFWB, FD_XORWF, FD_INCFSZ, FD_DECFSZ, FD_RLNCF, FD_SWAPF, FD_RRNCF
 };
 
-/* devuelve codigo FD_* para base (op & 0xFC00), o FD_NONE */
+/* returns FD_* code for base (op & 0xFC00), or FD_NONE */
 static int fd_op(uint16_t base) {
     switch(base) {
     case 0x2400: return FD_ADDWF;
@@ -194,7 +194,7 @@ static int fa_op(uint16_t base) {
     }
 }
 
-/* bit-oriented: hi4 (op>>12). Mapeo NO permutado (bug conocido ya corregido):
+/* bit-oriented: hi4 (op>>12). NON-permuted mapping (known bug already fixed):
  *   BTG=0x7, BSF=0x8, BCF=0x9, BTFSS=0xA, BTFSC=0xB  */
 enum { BIT_NONE = 0, BIT_BTG, BIT_BSF, BIT_BCF, BIT_BTFSS, BIT_BTFSC };
 static int bit_op(uint8_t hi4) {
@@ -208,12 +208,12 @@ static int bit_op(uint8_t hi4) {
     }
 }
 
-/* ------------------------------------------------------------ prototipos int */
+/* ------------------------------------------------------------ internal prototypes */
 static uint8_t read_data(Pic18Cpu* c, uint16_t addr);
 static void    write_data(Pic18Cpu* c, uint16_t addr, uint8_t val);
 static int     fsr_access(Pic18Cpu* c, int n, uint8_t kind, int write, uint8_t wval);
 
-/* --------------------------------------------------------------- utilidades */
+/* --------------------------------------------------------------- utilities */
 static uint16_t pword(Pic18Cpu* c, uint32_t a) {
     uint8_t b0 = (a < c->prog_size) ? c->prog[a] : 0xFF;
     uint8_t b1 = (a + 1 < c->prog_size) ? c->prog[a + 1] : 0xFF;
@@ -237,7 +237,7 @@ static uint8_t bsr4(Pic18Cpu* c) {
     return (uint8_t)(c->ram[A_BSR] & 0xF);
 }
 
-/* flags Z y N para logicas/move */
+/* Z and N flags for logic/move ops */
 static uint8_t set_flags_logic(Pic18Cpu* c, uint32_t result) {
     uint8_t r = (uint8_t)(result & 0xFF);
     st_set(c, PIC18_ST_Z, r == 0);
@@ -259,7 +259,7 @@ static uint8_t set_flags_add(Pic18Cpu* c, uint8_t a, uint8_t b, int carry_in) {
     return res8;
 }
 
-/* PIC18 resta = a + (~b) + borrow_in. borrow_in=1 => resta normal. */
+/* PIC18 subtract = a + (~b) + borrow_in. borrow_in=1 => normal subtract. */
 static uint8_t set_flags_sub(Pic18Cpu* c, uint8_t a, uint8_t b, int borrow_in) {
     uint8_t nb = (uint8_t)((~b) & 0xFF);
     uint32_t res = (uint32_t)a + (uint32_t)nb + (uint32_t)borrow_in;
@@ -275,7 +275,7 @@ static uint8_t set_flags_sub(Pic18Cpu* c, uint8_t a, uint8_t b, int borrow_in) {
     return res8;
 }
 
-/* resolucion de direccion f */
+/* f address resolution */
 static uint16_t resolve_f(Pic18Cpu* c, uint8_t f, int is_access) {
     if(is_access) {
         if(f >= 0x80) return (uint16_t)(0xF00 + f);
@@ -284,7 +284,7 @@ static uint16_t resolve_f(Pic18Cpu* c, uint8_t f, int is_access) {
     return (uint16_t)((bsr4(c) << 8) | f);
 }
 
-/* ------------------------------------------------------- pila de retorno */
+/* ------------------------------------------------------- return stack */
 static uint32_t cpu_tos(Pic18Cpu* c) {
     if(c->stkptr == 0) return 0;
     return c->stack[c->stkptr - 1];
@@ -307,7 +307,7 @@ uint32_t pic18_pop(Pic18Cpu* c) {
     return 0;
 }
 
-/* --------------------------------------------------- FSR indirecto */
+/* --------------------------------------------------- indirect FSR */
 static uint16_t fsr_get(Pic18Cpu* c, int n) {
     uint16_t h, l;
     if(n == 0) { h = c->ram[A_FSR0H]; l = c->ram[A_FSR0L]; }
@@ -323,9 +323,9 @@ static void fsr_set(Pic18Cpu* c, int n, uint16_t v) {
     else { c->ram[A_FSR2H] = (v >> 8) & 0xF; c->ram[A_FSR2L] = v & 0xFF; }
 }
 
-/* kind debe ser uno de INDF/POSTINC/POSTDEC/PREINC/PLUSW de un banco n.
- * write=0 lee (wval ignorado); write=1 escribe wval. Devuelve valor leido o
- * wval escrito. */
+/* kind must be one of INDF/POSTINC/POSTDEC/PREINC/PLUSW of a bank n.
+ * write=0 reads (wval ignored); write=1 writes wval. Returns value read or
+ * wval written. */
 static int fsr_access(Pic18Cpu* c, int n, uint8_t kind, int write, uint8_t wval) {
     uint16_t ptr = fsr_get(c, n);
     uint16_t eff;
@@ -360,7 +360,7 @@ static int fsr_access(Pic18Cpu* c, int n, uint8_t kind, int write, uint8_t wval)
     return res;
 }
 
-/* ------------------------------------------------ lectura/escritura data */
+/* ------------------------------------------------ data read/write */
 static uint8_t read_data(Pic18Cpu* c, uint16_t addr) {
     addr &= 0xFFF;
     uint8_t k = kind_of(addr);
@@ -395,7 +395,7 @@ static uint8_t read_data(Pic18Cpu* c, uint16_t addr) {
         }
         return (uint8_t)(c->default_port & 0xFF);
     case SFRK_LAT:
-        /* LAT lee de ram normal (no tiene rama especial de lectura) */
+        /* LAT reads from normal ram (it has no special read branch) */
         return c->ram[addr];
     default:
         return c->ram[addr];
@@ -444,7 +444,7 @@ static void write_data(Pic18Cpu* c, uint16_t addr, uint8_t val) {
         if(c->on_port_write) c->on_port_write(c, addr, val, c->port_write_ctx);
         return;
     case SFRK_TOSL: case SFRK_TOSH: case SFRK_TOSU:
-        /* No tienen rama de escritura especial en el python: RAM normal. */
+        /* They have no special write branch in the python: normal RAM. */
         c->ram[addr] = val;
         return;
     default:
@@ -538,7 +538,7 @@ static void cpu_skip(Pic18Cpu* c) {
     c->cycles++;
 }
 
-/* ----------------------------------------------------- escritura resultado fd */
+/* ----------------------------------------------------- fd result write */
 static void write_fd_result(Pic18Cpu* c, uint16_t addr, uint8_t res, int d_is_f) {
     if(d_is_f)
         write_data(c, addr, res);
@@ -618,12 +618,12 @@ static void exec_fd(Pic18Cpu* c, int code, uint8_t f, int d_is_f, int acc) {
         if(res != 0) cpu_skip(c);
         return;
     default:
-        return; /* no alcanzable */
+        return; /* unreachable */
     }
     write_fd_result(c, addr, res, d_is_f);
 }
 
-/* --------------------------------------------- f,a ops (sin d) */
+/* --------------------------------------------- f,a ops (no d) */
 static void exec_fa(Pic18Cpu* c, int code, uint8_t f, int acc) {
     uint16_t addr = resolve_f(c, f, acc);
     switch(code) {
@@ -691,14 +691,14 @@ static void exec_bit(Pic18Cpu* c, int code, uint8_t f, int bit, int acc) {
     }
 }
 
-/* ============================================================ decodificador */
+/* ============================================================ decoder */
 static void exec_op(Pic18Cpu* c, uint32_t pc, uint16_t op) {
     uint8_t hi = (uint8_t)(op >> 8);
     uint8_t lo = (uint8_t)(op & 0xFF);
     int acc = (op & 0x100) ? 0 : 1;      /* acc=1 => ACCESS bank */
     int d_is_f = (op & 0x200) != 0;      /* d: 1=>F, 0=>W */
 
-    /* -------- literales (grupo 0x0_) -------- */
+    /* -------- literals (group 0x0_) -------- */
     if(op >= 0x0E00 && op <= 0x0EFF) { c->w = lo; return; }               /* MOVLW */
     if(op >= 0x0C00 && op <= 0x0CFF) { c->w = lo; c->pc = pic18_pop(c); return; } /* RETLW */
     if(op >= 0x0F00 && op <= 0x0FFF) { c->w = set_flags_add(c, c->w, lo, 0); return; } /* ADDLW */
@@ -757,7 +757,7 @@ static void exec_op(Pic18Cpu* c, uint32_t pc, uint16_t op) {
         return;
     }
 
-    /* -------- ramas relativas -------- */
+    /* -------- relative branches -------- */
     if((op & 0xF800) == 0xD000) {                                          /* BRA */
         int n = op & 0x7FF;
         if(n & 0x400) n -= 0x800;
@@ -774,7 +774,7 @@ static void exec_op(Pic18Cpu* c, uint32_t pc, uint16_t op) {
         return;
     }
 
-    /* ramas condicionales: hi 0xE0..0xE7 */
+    /* conditional branches: hi 0xE0..0xE7 */
     if(hi >= 0xE0 && hi <= 0xE7) {
         int n = lo;
         if(n & 0x80) n -= 0x100;
@@ -797,9 +797,9 @@ static void exec_op(Pic18Cpu* c, uint32_t pc, uint16_t op) {
         return;
     }
 
-    /* -------- inherentes / control -------- */
+    /* -------- inherent / control -------- */
     if(op == 0x0000) return;                                               /* NOP */
-    if((op & 0xF000) == 0xF000) return;              /* NOP (2a palabra instr larga) */
+    if((op & 0xF000) == 0xF000) return;              /* NOP (2nd word of long instr) */
     if(op == 0x0003) { c->sleeping = 1; return; }                          /* SLEEP */
     if(op == 0x0004) return;                                               /* CLRWDT */
     if(op == 0x0005) { pic18_push(c, (pc + 2) & 0x1FFFFF); return; }       /* PUSH */
@@ -862,14 +862,14 @@ static void exec_op(Pic18Cpu* c, uint32_t pc, uint16_t op) {
         }
     }
 
-    /* instruccion ilegal: en este modelo marcamos halted (no hay excepciones).
-     * El python lanza IllegalInstruction; para fidelidad de traza, el harness
-     * verifica que esto NO ocurra. Dejamos halted=1 para detener de forma
-     * segura en hardware. */
+    /* illegal instruction: in this model we mark halted (there are no
+     * exceptions). The python raises IllegalInstruction; for trace fidelity,
+     * the harness verifies this does NOT happen. We set halted=1 to stop safely
+     * on hardware. */
     c->halted = 1;
 }
 
-/* ============================================================ API publica */
+/* ============================================================ public API */
 void pic18_init(Pic18Cpu* c) {
     memset(c, 0, sizeof(*c));
     sfr_kind_init();
@@ -896,7 +896,7 @@ void pic18_reset(Pic18Cpu* c) {
     memset(c->ram, 0, sizeof(c->ram));
     c->ram[A_BSR] = 0;
     c->ram[A_STKPTR] = 0;
-    /* TRIS a 1 (entradas) al reset: TRISA..TRISE */
+    /* TRIS to 1 (inputs) at reset: TRISA..TRISE */
     c->ram[0xF94] = 0xFF; /* TRISA */
     c->ram[0xF95] = 0xFF; /* TRISB */
     c->ram[0xF96] = 0xFF; /* TRISC */
@@ -904,13 +904,13 @@ void pic18_reset(Pic18Cpu* c) {
     c->ram[0xF98] = 0xFF; /* TRISE */
 }
 
-/* callback para ihex -> llena prog/config */
+/* callback for ihex -> fills prog/config */
 static void ihex_store(uint32_t addr, uint8_t value, void* ctx) {
     Pic18Cpu* c = (Pic18Cpu*)ctx;
     if(addr < c->prog_size) {
         c->prog[addr] = value;
     } else if(addr >= 0x300000) {
-        /* buscar si ya existe */
+        /* check if it already exists */
         for(uint16_t i = 0; i < c->config_count; i++) {
             if(c->config_addr[i] == addr) {
                 c->config_val[i] = value;

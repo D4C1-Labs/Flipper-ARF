@@ -1,9 +1,9 @@
 /*
- * ihex.c - Parser de Intel HEX (port fiel de emu/ihex.py).
+ * ihex.c - Intel HEX parser (faithful port of emu/ihex.py).
  */
 #include "ihex.h"
 
-/* Convierte un digito hex ascii a 0..15, o -1 si invalido. */
+/* Converts an ascii hex digit to 0..15, or -1 if invalid. */
 static int ihex_nibble(int c) {
     if(c >= '0' && c <= '9') return c - '0';
     if(c >= 'a' && c <= 'f') return c - 'a' + 10;
@@ -12,9 +12,9 @@ static int ihex_nibble(int c) {
 }
 
 /*
- * Procesa una unica linea Intel HEX (sin el ':' inicial ni el salto de linea).
- * len = numero de caracteres hex. Devuelve IHEX_OK o error, y actualiza
- * *ext_lin / *ext_seg y *eof.
+ * Processes a single Intel HEX line (without the leading ':' or the newline).
+ * len = number of hex characters. Returns IHEX_OK or an error, and updates
+ * *ext_lin / *ext_seg and *eof.
  */
 static int ihex_line(
     const char* line,
@@ -24,10 +24,10 @@ static int ihex_line(
     int* eof,
     IHexByteCb cb,
     void* ctx) {
-    /* Necesitamos al menos count+addr(2)+type+chk = 5 bytes = 10 nibbles. */
+    /* We need at least count+addr(2)+type+chk = 5 bytes = 10 nibbles. */
     if(len < 10 || (len & 1)) return IHEX_ERR_FORMAT;
 
-    uint8_t raw[260]; /* count max 255 + 5 cabecera/chk */
+    uint8_t raw[260]; /* count max 255 + 5 header/chk */
     size_t nbytes = len / 2;
     if(nbytes > sizeof(raw)) return IHEX_ERR_FORMAT;
 
@@ -42,10 +42,10 @@ static int ihex_line(
     uint16_t addr = (uint16_t)((raw[1] << 8) | raw[2]);
     uint8_t rtype = raw[3];
 
-    /* linea completa: 4 cabecera + count datos + 1 chk */
+    /* full line: 4 header + count data + 1 chk */
     if(nbytes != (size_t)(5 + count)) return IHEX_ERR_FORMAT;
 
-    /* checksum: suma de todos los bytes (incluyendo chk) & 0xFF == 0 */
+    /* checksum: sum of all bytes (including chk) & 0xFF == 0 */
     uint32_t sum = 0;
     for(size_t i = 0; i < nbytes; i++) sum += raw[i];
     if((sum & 0xFF) != 0) return IHEX_ERR_CHECKSUM;
@@ -71,8 +71,8 @@ static int ihex_line(
         if(count < 2) return IHEX_ERR_FORMAT;
         *ext_lin = (uint32_t)(((dat[0] << 8) | dat[1])) << 16;
         break;
-    case 0x03: /* Start Segment Address  - ignorar */
-    case 0x05: /* Start Linear Address   - ignorar */
+    case 0x03: /* Start Segment Address  - ignore */
+    case 0x05: /* Start Linear Address   - ignore */
         break;
     default:
         return IHEX_ERR_RTYPE;
@@ -87,23 +87,23 @@ int ihex_parse_mem(const uint8_t* data, size_t size, IHexByteCb cb, void* ctx) {
     size_t i = 0;
 
     while(i < size) {
-        /* localizar inicio de linea: buscar ':' */
-        /* saltar espacios/retornos previos */
+        /* locate the start of a line: look for ':' */
+        /* skip preceding spaces/carriage returns */
         while(i < size && (data[i] == '\r' || data[i] == '\n' ||
                            data[i] == ' ' || data[i] == '\t')) {
             i++;
         }
         if(i >= size) break;
         if(data[i] != ':') {
-            /* lineas que no empiezan por ':' se ignoran (como el python) */
+            /* lines that don't start with ':' are ignored (like the python) */
             while(i < size && data[i] != '\n') i++;
             continue;
         }
-        i++; /* saltar ':' */
+        i++; /* skip ':' */
         size_t start = i;
         while(i < size && data[i] != '\n' && data[i] != '\r') i++;
         size_t len = i - start;
-        /* recortar espacios finales */
+        /* trim trailing spaces */
         while(len > 0 && (data[start + len - 1] == ' ' ||
                           data[start + len - 1] == '\t')) {
             len--;

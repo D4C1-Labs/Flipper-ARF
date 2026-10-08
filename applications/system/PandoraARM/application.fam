@@ -8,14 +8,15 @@ App(
     stack_size=8 * 1024,
     fap_private_libs=[
         Lib(
-            # Interprete Thumb-2 (Cortex-M3) como lib privada con -O2: el bucle
-            # de decode/execute por-instruccion es el hot path.
+            # Thumb-2 (Cortex-M3) interpreter as a private lib with -O2: the
+            # per-instruction decode/execute loop is the hot path.
             name="thumbcore",
             cflags=["-O2"],
         ),
     ],
     fap_category="Sub-GHz",
+    fap_icon="icon.png",
     fap_author="user",
     fap_version="0.1",
-    fap_description="Emula el firmware real de keyfob Pandora D-605 (EFM32 Cortex-M3). Carga el .hex/.bin desde SD, muestra el OLED del llavero, desbloqueo por knock-code, y usa el CC1101 del Flipper para RX/TX RF reales.",
+    fap_description="Emulates the real Pandora D-605 keyfob firmware (EFM32 Cortex-M3). Loads the .hex/.bin from SD, shows the keyfob OLED, knock-code unlock, and uses the Flipper CC1101 for real RF RX/TX.",
 )

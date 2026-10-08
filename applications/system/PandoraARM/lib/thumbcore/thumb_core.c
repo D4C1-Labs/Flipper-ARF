@@ -1,36 +1,36 @@
 /*
- * thumb_core.c - Interprete Thumb-2 (ARMv7-M / Cortex-M3) en C puro.
+ * thumb_core.c - Thumb-2 (ARMv7-M / Cortex-M3) interpreter in pure C.
  *
- * Verificado paso a paso contra Unicorn Engine (CS_ARCH_ARM/CS_MODE_THUMB,
- * CPU Cortex-M3) ejecutando el firmware real de los keyfobs Pandora.
+ * Verified step by step against Unicorn Engine (CS_ARCH_ARM/CS_MODE_THUMB,
+ * Cortex-M3 CPU) running the real Pandora keyfob firmware.
  *
- * Referencias de encoding: ARMv7-M Architecture Reference Manual (DDI 0403),
- * capitulos A5 (Thumb instruction set encoding) y A7 (instruction details).
+ * Encoding references: ARMv7-M Architecture Reference Manual (DDI 0403),
+ * chapters A5 (Thumb instruction set encoding) and A7 (instruction details).
  */
 #include "thumb_core.h"
 #include <string.h>
 
 /* ========================================================================= */
-/* Helpers de registro                                                       */
+/* Register helpers                                                          */
 /* ========================================================================= */
 
 #define PC (c->r[15])
 #define SP (c->r[13])
 #define LR (c->r[14])
 
-/* Lectura de registro con semantica de PC (devuelve PC alineado + 0 porque el
- * core ya mantiene PC = direccion de la instruccion actual + 4 durante el
- * calculo). Para la mayoria de instrucciones que leen Rn, usar c->r[n]. */
+/* Register read with PC semantics (returns aligned PC + 0 because the core
+ * already keeps PC = address of the current instruction + 4 during the
+ * computation). For most instructions that read Rn, use c->r[n]. */
 static inline uint32_t reg_read(ThumbCore* c, int n) {
     return c->r[n];
 }
 
 /* ========================================================================= */
-/* Acceso a memoria                                                          */
+/* Memory access                                                             */
 /* ========================================================================= */
 
 static inline uint32_t mem_read(ThumbCore* c, uint32_t addr, int size) {
-    /* FLASH directa */
+    /* Direct FLASH */
     if(c->flash_ptr && addr >= c->flash_base && (addr + (uint32_t)size) <= c->flash_base + c->flash_size) {
         uint8_t* p = c->flash_ptr + (addr - c->flash_base);
         switch(size) {
@@ -39,7 +39,7 @@ static inline uint32_t mem_read(ThumbCore* c, uint32_t addr, int size) {
         default: return (uint32_t)p[0] | ((uint32_t)p[1] << 8) | ((uint32_t)p[2] << 16) | ((uint32_t)p[3] << 24);
         }
     }
-    /* RAM directa */
+    /* Direct RAM */
     if(c->ram_ptr && addr >= c->ram_base && (addr + (uint32_t)size) <= c->ram_base + c->ram_size) {
         uint8_t* p = c->ram_ptr + (addr - c->ram_base);
         switch(size) {
@@ -53,7 +53,7 @@ static inline uint32_t mem_read(ThumbCore* c, uint32_t addr, int size) {
 }
 
 static inline void mem_write(ThumbCore* c, uint32_t addr, uint32_t val, int size) {
-    /* RAM directa (reflejar escrituras). FLASH tipicamente no se escribe. */
+    /* Direct RAM (reflect writes). FLASH is typically not written. */
     if(c->ram_ptr && addr >= c->ram_base && (addr + (uint32_t)size) <= c->ram_base + c->ram_size) {
         uint8_t* p = c->ram_ptr + (addr - c->ram_base);
         switch(size) {
@@ -88,7 +88,7 @@ static inline void set_v(ThumbCore* c, int ov) {
 }
 static inline int get_c(ThumbCore* c) { return (c->xpsr & THUMB_PSR_C) ? 1 : 0; }
 
-/* AddWithCarry de ARMv7-M: devuelve resultado, setea carry_out/overflow_out. */
+/* ARMv7-M AddWithCarry: returns result, sets carry_out/overflow_out. */
 static inline uint32_t add_with_carry(uint32_t x, uint32_t y, uint32_t cin,
                                       int* carry_out, int* overflow_out) {
     uint64_t usum = (uint64_t)x + (uint64_t)y + (uint64_t)cin;
@@ -100,13 +100,13 @@ static inline uint32_t add_with_carry(uint32_t x, uint32_t y, uint32_t cin,
 }
 
 /* ========================================================================= */
-/* Shifts / rotaciones (con carry out)                                       */
+/* Shifts / rotations (with carry out)                                       */
 /* ========================================================================= */
 
 enum { SRTYPE_LSL = 0, SRTYPE_LSR = 1, SRTYPE_ASR = 2, SRTYPE_ROR = 3, SRTYPE_RRX = 4 };
 
-/* Shift_C de ARMv7-M. amount en 0..255 (ya calculado). carry_in solo para RRX
- * y para el caso LSL #0 (que no cambia carry; lo maneja el caller). */
+/* ARMv7-M Shift_C. amount in 0..255 (already computed). carry_in only for RRX
+ * and for the LSL #0 case (which does not change carry; handled by the caller). */
 static uint32_t shift_c(uint32_t val, int type, int amount, int carry_in, int* carry_out) {
     if(amount == 0) {
         *carry_out = carry_in;
@@ -142,10 +142,10 @@ static uint32_t shift_c(uint32_t val, int type, int amount, int carry_in, int* c
 }
 
 /* ========================================================================= */
-/* Expand de inmediatos Thumb (ThumbExpandImm_C)                             */
+/* Thumb immediate expansion (ThumbExpandImm_C)                              */
 /* ========================================================================= */
 
-/* imm12 -> valor expandido + carry. */
+/* imm12 -> expanded value + carry. */
 static uint32_t thumb_expand_imm_c(uint32_t imm12, int carry_in, int* carry_out) {
     if((imm12 & 0xC00) == 0) {
         uint32_t imm8 = imm12 & 0xFF;
@@ -166,7 +166,7 @@ static uint32_t thumb_expand_imm_c(uint32_t imm12, int carry_in, int* carry_out)
 }
 
 /* ========================================================================= */
-/* Condiciones                                                               */
+/* Conditions                                                                */
 /* ========================================================================= */
 
 static int cond_passed(ThumbCore* c, int cond) {
@@ -193,19 +193,19 @@ static int cond_passed(ThumbCore* c, int cond) {
 /* IT block                                                                  */
 /* ========================================================================= */
 
-/* Representacion del estado IT siguiendo ARMv7-M ITSTATE (8 bits), almacenada en
- * c->it_cond. ITSTATE<7:4> = firstcond, ITSTATE<3:0> = mask (como la IT la fija).
- * c->it_mask se usa solo como flag "bloque activo" (!=0). La condicion efectiva
- * de la instruccion actual es ITSTATE<7:4>. ITAdvance: si ITSTATE<2:0>==000 el
- * bloque termina; si no, ITSTATE<4:0> <<= 1. */
+/* IT state representation following ARMv7-M ITSTATE (8 bits), stored in
+ * c->it_cond. ITSTATE<7:4> = firstcond, ITSTATE<3:0> = mask (as the IT sets it).
+ * c->it_mask is used only as an "active block" flag (!=0). The effective
+ * condition of the current instruction is ITSTATE<7:4>. ITAdvance: if
+ * ITSTATE<2:0>==000 the block ends; otherwise ITSTATE<4:0> <<= 1. */
 static inline int in_it_block(ThumbCore* c) { return c->it_mask != 0; }
 
-/* Condicion efectiva (4 bits) = ITSTATE<7:4>. */
+/* Effective condition (4 bits) = ITSTATE<7:4>. */
 static inline int it_current_cond(ThumbCore* c) {
     return (c->it_cond >> 4) & 0xF;
 }
 
-/* Avanza el estado IT tras ejecutar una instruccion del bloque. */
+/* Advances the IT state after executing an instruction of the block. */
 static void it_advance(ThumbCore* c) {
     uint8_t it = c->it_cond; /* ITSTATE 8 bits */
     if((it & 0x7) == 0) {
@@ -214,28 +214,28 @@ static void it_advance(ThumbCore* c) {
     } else {
         uint8_t low5 = (uint8_t)((it << 1) & 0x1F);
         c->it_cond = (uint8_t)((it & 0xE0) | low5);
-        c->it_mask = 1; /* sigue activo */
+        c->it_mask = 1; /* still active */
     }
 }
 
 /* ========================================================================= */
-/* Push/pop de PC                                                            */
+/* PC push/pop                                                               */
 /* ========================================================================= */
 
-/* Escribe PC (bit0 = seleccion Thumb; en ARMv7-M siempre Thumb). Marca salto. */
+/* Writes PC (bit0 = Thumb selection; in ARMv7-M always Thumb). Marks branch. */
 static inline void branch_to(ThumbCore* c, uint32_t addr) {
     PC = addr & ~1u;
     c->branched = 1;
 }
 
 /* ========================================================================= */
-/* Decodificacion de 16-bit                                                  */
+/* 16-bit decoding                                                           */
 /* ========================================================================= */
 
 static int exec_thumb16(ThumbCore* c, uint16_t op);
 static int exec_thumb32(ThumbCore* c, uint16_t hw1, uint16_t hw2);
 
-/* Determina si un halfword es el primer hw de una instruccion de 32 bits. */
+/* Determines whether a halfword is the first hw of a 32-bit instruction. */
 static inline int is_32bit(uint16_t hw) {
     uint16_t hi = hw >> 11;
     return (hi == 0x1D || hi == 0x1E || hi == 0x1F); /* 0b11101/11110/11111 */
@@ -253,7 +253,7 @@ int thumb_step(ThumbCore* c) {
 
     uint16_t hw1 = (uint16_t)mem_read(c, pc_instr, 2);
 
-    /* Durante la ejecucion, PC debe leerse como (instr + 4). */
+    /* During execution, PC must be read as (instr + 4). */
     int ret;
     int cond_ok = 1;
     int it_active = in_it_block(c);
@@ -261,10 +261,10 @@ int thumb_step(ThumbCore* c) {
         cond_ok = cond_passed(c, it_current_cond(c));
     }
 
-    /* En ARMv7-M, PC leido durante la ejecucion vale (instr + 4) tanto para
-     * instrucciones de 16 como de 32 bits (lecturas PC-relativas). Fijamos PC a
-     * instr+4 y detectamos si la instruccion ejecutada lo modifico (salto). Si
-     * no lo modifico, el PC siguiente es instr + tamano_instr. */
+    /* In ARMv7-M, PC read during execution equals (instr + 4) for both 16-bit
+     * and 32-bit instructions (PC-relative reads). We set PC to instr+4 and
+     * detect whether the executed instruction modified it (branch). If it did
+     * not modify it, the next PC is instr + instr_size. */
     uint32_t pc_during = pc_instr + 4;
     uint32_t instr_size;
     c->branched = 0;
@@ -275,7 +275,7 @@ int thumb_step(ThumbCore* c) {
         if(cond_ok) {
             ret = exec_thumb32(c, hw1, hw2);
         } else {
-            ret = THUMB_OK; /* condicion IT falla: NOP, pero PC avanza */
+            ret = THUMB_OK; /* IT condition fails: NOP, but PC advances */
         }
     } else {
         instr_size = 2;
@@ -283,11 +283,11 @@ int thumb_step(ThumbCore* c) {
         if(cond_ok) {
             ret = exec_thumb16(c, hw1);
         } else {
-            ret = THUMB_OK; /* condicion IT falla: NOP, pero PC avanza */
+            ret = THUMB_OK; /* IT condition fails: NOP, but PC advances */
         }
     }
-    /* Si la instruccion no salto, el PC siguiente es instr + tamano. Si salto,
-     * PC ya quedo en el destino (branch_to puso branched=1). */
+    /* If the instruction did not branch, the next PC is instr + size. If it
+     * branched, PC already landed at the target (branch_to set branched=1). */
     if(!c->branched) {
         PC = pc_instr + instr_size;
     }
@@ -308,12 +308,12 @@ uint64_t thumb_run(ThumbCore* c, uint64_t max) {
 }
 
 /* ========================================================================= */
-/* Implementacion de instrucciones de 16 bits                                */
+/* Implementation of 16-bit instructions                                     */
 /* ========================================================================= */
 
-/* Para el manejo correcto de IT con la propia instruccion IT, usamos un flag:
- * cuando exec_thumb16 ejecuta una IT, deja it_just_set=1 para que el step no
- * llame it_advance. Lo implementamos con una variable estatica en el core. */
+/* For correct handling of IT with the IT instruction itself, we use a flag:
+ * when exec_thumb16 executes an IT, it leaves it_just_set=1 so that the step
+ * does not call it_advance. We implement it with a static variable in the core. */
 
 static int exec_thumb16(ThumbCore* c, uint16_t op) {
     uint32_t top6 = op >> 10;
@@ -443,8 +443,8 @@ static int exec_thumb16(ThumbCore* c, uint16_t op) {
             int link = (op >> 7) & 1;
             uint32_t target = c->r[rm];
             if(link) {
-                /* BLX reg (16-bit): PC = pc_instr+4 durante exec; direccion de
-                 * retorno = pc_instr+2 = PC-2. */
+                /* BLX reg (16-bit): PC = pc_instr+4 during exec; return
+                 * address = pc_instr+2 = PC-2. */
                 LR = (PC - 2) | 1;
                 branch_to(c, target);
             } else {
@@ -652,7 +652,7 @@ static int exec_thumb16(ThumbCore* c, uint16_t op) {
             }
             /* IT block. ITSTATE<7:4>=firstcond, ITSTATE<3:0>=mask. */
             c->it_cond = (uint8_t)(((firstcond & 0xF) << 4) | (mask & 0xF));
-            c->it_mask = 1; /* bloque activo */
+            c->it_mask = 1; /* active block */
             return THUMB_OK;
         }
         /* BKPT : 1011 1110 */
@@ -671,7 +671,7 @@ static int exec_thumb16(ThumbCore* c, uint16_t op) {
         uint32_t a = c->r[rn];
         if(load) {
             for(int i = 0; i < 8; i++) if(list & (1 << i)) { c->r[i] = mem_read(c, a, 4); a += 4; }
-            if(!(list & (1 << rn))) c->r[rn] = a; /* writeback si Rn no en lista */
+            if(!(list & (1 << rn))) c->r[rn] = a; /* writeback if Rn not in list */
         } else {
             for(int i = 0; i < 8; i++) if(list & (1 << i)) { mem_write(c, a, c->r[i], 4); a += 4; }
             c->r[rn] = a;
@@ -683,7 +683,7 @@ static int exec_thumb16(ThumbCore* c, uint16_t op) {
     if((op >> 12) == 0xD) {
         int cond = (op >> 8) & 0xF;
         if(cond == 0xE) { return THUMB_FAULT_UNDEF; } /* permanently undefined */
-        if(cond == 0xF) { return THUMB_OK; } /* SVC: stub (no usado por el fw) */
+        if(cond == 0xF) { return THUMB_OK; } /* SVC: stub (not used by the fw) */
         int32_t imm8 = (int32_t)(int8_t)(op & 0xFF);
         if(cond_passed(c, cond)) {
             branch_to(c, (uint32_t)((int32_t)PC + (imm8 << 1)));
@@ -703,25 +703,25 @@ static int exec_thumb16(ThumbCore* c, uint16_t op) {
 }
 
 /* ========================================================================= */
-/* Implementacion de instrucciones de 32 bits (Thumb-2)                      */
+/* Implementation of 32-bit instructions (Thumb-2)                           */
 /* ========================================================================= */
 
 static int exec_thumb32(ThumbCore* c, uint16_t hw1, uint16_t hw2) {
     uint32_t op1 = (hw1 >> 11) & 0x3; /* bits 12:11 of hw1 after the 11101.. */
-    /* Clasificacion por A5.3 usando campos op1 (bits 12:11) y op2 */
+    /* Classification per A5.3 using op1 (bits 12:11) and op2 fields */
     uint32_t op = ((uint32_t)hw1 << 16) | hw2;
     (void)op1;
 
     uint32_t cls = (hw1 >> 11) & 0x3; /* 01,10,11 */
     uint32_t op2 = (hw1 >> 4) & 0x7F;
 
-    /* ===== Clase 11110 (0x1E): data-processing imm + branches/misc control.
-     * Si hw2 bit15=1 -> branch (B/BL/BLX) o (cuando op high) MSR/MRS/misc.
-     * Si hw2 bit15=0 -> data-processing (modified/plain immediate) salvo las
-     * ramas de control que se detectan abajo. Las clases 11101(0x1D) y
-     * 11111(0x1F) NUNCA son branches: se tratan mas abajo. ===== */
+    /* ===== Class 11110 (0x1E): data-processing imm + branches/misc control.
+     * If hw2 bit15=1 -> branch (B/BL/BLX) or (when op high) MSR/MRS/misc.
+     * If hw2 bit15=0 -> data-processing (modified/plain immediate) except the
+     * control branches detected below. Classes 11101(0x1D) and
+     * 11111(0x1F) are NEVER branches: they are handled further down. ===== */
     if(((hw1 >> 11) & 0x1F) == 0x1E && (hw2 & 0x8000)) {
-        int b14 = (hw2 >> 14) & 1;  /* op2 bit del hw2 */
+        int b14 = (hw2 >> 14) & 1;  /* op2 bit of hw2 */
         int b12 = (hw2 >> 12) & 1;
         uint32_t cond_field = (hw1 >> 6) & 0xF;
         if(b14 == 0 && b12 == 0 && cond_field < 0xE) {
@@ -763,7 +763,7 @@ static int exec_thumb32(ThumbCore* c, uint16_t hw1, uint16_t hw2) {
                 return THUMB_OK;
             }
             if((op1x & 0x3F) == 0x3A) {
-                /* hints 32-bit (NOP.W/WFI.W/...) -> NOP (no efecto en registros) */
+                /* 32-bit hints (NOP.W/WFI.W/...) -> NOP (no effect on registers) */
                 return THUMB_OK;
             }
             if((op1x & 0x3E) == 0x3E) {
@@ -787,8 +787,8 @@ static int exec_thumb32(ThumbCore* c, uint16_t hw1, uint16_t hw2) {
             }
             return THUMB_OK;
         }
-        /* b12==1 (o b14==1): B.W incondicional (b14=0) o BL (b14=1).
-         * BLX (b12=0 con b14) no ocurre en Thumb-only EFM32. */
+        /* b12==1 (or b14==1): unconditional B.W (b14=0) or BL (b14=1).
+         * BLX (b12=0 with b14) does not occur on Thumb-only EFM32. */
         {
             uint32_t s = (hw1 >> 10) & 1;
             uint32_t imm10 = hw1 & 0x3FF;
@@ -800,11 +800,11 @@ static int exec_thumb32(ThumbCore* c, uint16_t hw1, uint16_t hw2) {
             uint32_t imm32 = (s << 24) | (i1 << 23) | (i2 << 22) | (imm10 << 12) | (imm11 << 1);
             if(imm32 & 0x01000000) imm32 |= 0xFE000000;
             if(b14) {
-                /* BL : direccion de retorno = instr+4 = PC actual */
+                /* BL : return address = instr+4 = current PC */
                 LR = (PC) | 1;
                 branch_to(c, PC + imm32);
             } else {
-                /* B.W incondicional */
+                /* unconditional B.W */
                 branch_to(c, PC + imm32);
             }
             return THUMB_OK;
@@ -818,8 +818,8 @@ static int exec_thumb32(ThumbCore* c, uint16_t hw1, uint16_t hw2) {
      * Let's dispatch by the main class.
      */
 
-    /* Data-processing (modified/plain immediate): clase 11110 con hw2 bit15=0
-     * (los branches/control tienen hw2 bit15=1 y se resolvieron arriba). */
+    /* Data-processing (modified/plain immediate): class 11110 with hw2 bit15=0
+     * (branches/control have hw2 bit15=1 and were resolved above). */
     if(((hw1 >> 11) & 0x1F) == 0x1E && !(hw2 & 0x8000)) {
         int i = (hw1 >> 10) & 1;
         int bit_plain = (hw1 >> 9) & 1; /* distinguishes plain vs modified imm */
@@ -1091,9 +1091,9 @@ static int exec_thumb32(ThumbCore* c, uint16_t hw1, uint16_t hw2) {
         if(((hw1 >> 11) & 0x1F) == 0x1F) {
             uint32_t op1f = (hw1 >> 4) & 0x7F;
 
-            /* Data-processing (register): shifts por registro y extensiones
-             * = 1111 1010 0xxx (hw1 bit7=0, rango 0xFA00..0xFA7F). El rango
-             * 0xFA80..0xFAFF (hw1 bit7=1) son CLZ/REV/RBIT y se tratan despues. */
+            /* Data-processing (register): register-controlled shifts and extensions
+             * = 1111 1010 0xxx (hw1 bit7=0, range 0xFA00..0xFA7F). The range
+             * 0xFA80..0xFAFF (hw1 bit7=1) are CLZ/REV/RBIT and handled later. */
             if((hw1 & 0xFF80) == 0xFA00) {
                 /* Register-controlled shift : 1111 1010 0TT S Rn 1111 Rd 0000 Rm */
                 if((hw1 & 0xFFE0) == 0xFA00 || (hw1 & 0xFFE0) == 0xFA20 ||
@@ -1402,7 +1402,7 @@ int thumb_enter_exception(ThumbCore* c, uint32_t handler, uint32_t exc_return, u
 }
 
 int thumb_exc_return(ThumbCore* c, uint32_t exc_return) {
-    /* seleccion de stack segun exc_return (bit2: 0=MSP,1=PSP) */
+    /* stack selection per exc_return (bit2: 0=MSP,1=PSP) */
     uint32_t sp = SP;
     uint32_t r0 = mem_read(c, sp + 0x00, 4);
     uint32_t r1 = mem_read(c, sp + 0x04, 4);

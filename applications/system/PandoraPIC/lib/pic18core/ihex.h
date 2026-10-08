@@ -1,15 +1,15 @@
 /*
- * ihex.h - Parser de Intel HEX (port de emu/ihex.py).
+ * ihex.h - Intel HEX parser (port of emu/ihex.py).
  *
- * Soporta direcciones extendidas (rtype 0x02 Extended Segment, 0x04 Extended
- * Linear), data (0x00), EOF (0x01) y los start-address 0x03/0x05 (ignorados).
- * Verifica checksum de cada linea. Preserva la DIRECCION LINEAL REAL de 32 bits
- * de cada byte (importante para PIC18: separar codigo <PROG_SIZE de los config
- * words 0x300000+).
+ * Supports extended addresses (rtype 0x02 Extended Segment, 0x04 Extended
+ * Linear), data (0x00), EOF (0x01) and the start-address records 0x03/0x05
+ * (ignored). Verifies the checksum of each line. Preserves the REAL 32-bit
+ * LINEAR ADDRESS of each byte (important for PIC18: separating code <PROG_SIZE
+ * from the config words 0x300000+).
  *
- * Sin dependencias fuera de <stdint.h>/<stddef.h>. El parser de FICHERO
- * (ihex_parse_file) solo existe bajo #ifdef PIC18_HOST (usa <stdio.h>). En
- * Flipper se usa ihex_parse_mem sobre el .hex ya leido a RAM.
+ * No dependencies beyond <stdint.h>/<stddef.h>. The FILE parser
+ * (ihex_parse_file) only exists under #ifdef PIC18_HOST (uses <stdio.h>). On
+ * the Flipper, ihex_parse_mem is used over the .hex already read into RAM.
  */
 #ifndef IHEX_H
 #define IHEX_H
@@ -21,28 +21,28 @@
 extern "C" {
 #endif
 
-/* Codigos de error */
+/* Error codes */
 #define IHEX_OK            0
-#define IHEX_ERR_FORMAT   -1   /* linea corta / hex invalido        */
-#define IHEX_ERR_CHECKSUM -2   /* checksum malo                     */
-#define IHEX_ERR_RTYPE    -3   /* record type desconocido           */
-#define IHEX_ERR_IO       -4   /* fallo de E/S (solo host)          */
+#define IHEX_ERR_FORMAT   -1   /* short line / invalid hex          */
+#define IHEX_ERR_CHECKSUM -2   /* bad checksum                      */
+#define IHEX_ERR_RTYPE    -3   /* unknown record type               */
+#define IHEX_ERR_IO       -4   /* I/O failure (host only)           */
 
 /*
- * Callback que recibe cada byte decodificado con su direccion lineal real.
- * ctx es el contexto opaco del caller. Equivale a mem[addr] = byte del python.
+ * Callback that receives each decoded byte with its real linear address.
+ * ctx is the caller's opaque context. Equivalent to mem[addr] = byte in python.
  */
 typedef void (*IHexByteCb)(uint32_t addr, uint8_t value, void* ctx);
 
 /*
- * Parsea Intel HEX desde un buffer en memoria. Invoca cb por cada byte de los
- * records de datos. Devuelve IHEX_OK o un codigo IHEX_ERR_*.
+ * Parses Intel HEX from a buffer in memory. Invokes cb for each byte of the
+ * data records. Returns IHEX_OK or an IHEX_ERR_* code.
  */
 int ihex_parse_mem(const uint8_t* data, size_t size, IHexByteCb cb, void* ctx);
 
 #ifdef PIC18_HOST
 /*
- * Parsea Intel HEX desde un fichero (solo host). Devuelve IHEX_OK o error.
+ * Parses Intel HEX from a file (host only). Returns IHEX_OK or an error.
  */
 int ihex_parse_file(const char* path, IHexByteCb cb, void* ctx);
 #endif

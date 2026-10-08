@@ -1,42 +1,42 @@
 /*
- * thumb_core.h - Interprete / emulador funcional de CPU ARM Cortex-M3 (Thumb-2,
- *                ARMv7-M) en C puro (C99/C11).
+ * thumb_core.h - Functional ARM Cortex-M3 CPU interpreter / emulator (Thumb-2,
+ *                ARMv7-M) in pure C (C99/C11).
  *
- * Analogo ARM del nucleo PIC18 (applications/system/PandoraPIC/lib/pic18core/).
- * Pensado para ejecutar el firmware real de los keyfobs Pandora (EFM32
- * Cortex-M3): 2_5253623551453304897.flash.bin y PANDORA_MAX.flash.bin.
+ * ARM analogue of the PIC18 core (applications/system/PandoraPIC/lib/pic18core/).
+ * Intended to run the real Pandora keyfob firmware (EFM32 Cortex-M3):
+ * 2_5253623551453304897.flash.bin and PANDORA_MAX.flash.bin.
  *
- * Objetivo: compilable tanto para host (gcc -std=c11) como para Flipper Zero /
+ * Goal: compilable both for the host (gcc -std=c11) and for Flipper Zero /
  * ARM Cortex-M4 (arm-none-eabi-gcc -mcpu=cortex-m4 -mthumb -Os -Wall -Wextra
- * -Werror). Sin dependencias fuera de <stdint.h>, <stddef.h>, <string.h>.
+ * -Werror). No dependencies beyond <stdint.h>, <stddef.h>, <string.h>.
  *
  * ---------------------------------------------------------------------------
- * MODELO DE MEMORIA (importante):
- *   El core NO posee la memoria. El frontend decide el mapa (FLASH / RAM /
- *   MMIO del EFM32) mediante dos callbacks:
+ * MEMORY MODEL (important):
+ *   The core does NOT own the memory. The frontend decides the map (FLASH / RAM /
+ *   EFM32 MMIO) through two callbacks:
  *
  *     typedef uint32_t (*ThumbRead )(void* ctx, uint32_t addr, int size);
  *     typedef void     (*ThumbWrite)(void* ctx, uint32_t addr, uint32_t val, int size);
  *
- *   size es 1, 2 o 4 bytes. Todas las lecturas/escrituras son little-endian
- *   (igual que Cortex-M).
+ *   size is 1, 2 or 4 bytes. All reads/writes are little-endian
+ *   (same as Cortex-M).
  *
- *   RENDIMIENTO: ademas de los callbacks, el core acepta punteros directos a
- *   una region FLASH y a una region RAM (thumb_set_regions). Fetch y
- *   lecturas/escrituras alineadas que caigan dentro de esas regiones usan el
- *   puntero directo (sin pasar por el callback). Direcciones fuera de esas
- *   regiones (MMIO, PPB, etc.) siempre van por el callback. Las escrituras a
- *   RAM se reflejan en el buffer directo. Esto da ~N instr/seg altas en host
- *   manteniendo exactitud con Unicorn.
+ *   PERFORMANCE: in addition to the callbacks, the core accepts direct pointers
+ *   to a FLASH region and a RAM region (thumb_set_regions). Fetch and aligned
+ *   reads/writes that fall within those regions use the direct pointer (without
+ *   going through the callback). Addresses outside those regions (MMIO, PPB,
+ *   etc.) always go through the callback. Writes to RAM are reflected in the
+ *   direct buffer. This yields high ~N instr/sec on the host while keeping
+ *   accuracy with Unicorn.
  * ---------------------------------------------------------------------------
  *
- * COBERTURA: todo el Thumb-2 que usan ambos firmwares. Flags N,Z,C,V exactos,
- * bloques IT, TBB/TBH, UDIV/SDIV, bitfields, saturacion basica, barreras.
+ * COVERAGE: all the Thumb-2 used by both firmwares. Exact N,Z,C,V flags,
+ * IT blocks, TBB/TBH, UDIV/SDIV, bitfields, basic saturation, barriers.
  *
- * INTERRUPCIONES: el core NO implementa NVIC. Expone thumb_enter_exception()
- * (apila el stack frame Cortex-M {r0,r1,r2,r3,r12,lr,pc,xpsr}, pone PC=handler
- * y LR=EXC_RETURN) y detecta EXC_RETURN en BX/POP para hacer el unstacking
- * (replica de emu/pandora_tui.py _enter_irq/_exc_return).
+ * INTERRUPTS: the core does NOT implement NVIC. It exposes thumb_enter_exception()
+ * (pushes the Cortex-M stack frame {r0,r1,r2,r3,r12,lr,pc,xpsr}, sets PC=handler
+ * and LR=EXC_RETURN) and detects EXC_RETURN in BX/POP to do the unstacking
+ * (replica of emu/pandora_tui.py _enter_irq/_exc_return).
  */
 #ifndef THUMB_CORE_H
 #define THUMB_CORE_H
@@ -55,14 +55,14 @@ extern "C" {
 #define THUMB_PSR_V (1u << 28)
 #define THUMB_PSR_Q (1u << 27)
 #define THUMB_PSR_T (1u << 24)
-#define THUMB_PSR_ICI_IT_MASK 0x0600FC00u /* IT[7:0] disperso en xPSR */
+#define THUMB_PSR_ICI_IT_MASK 0x0600FC00u /* IT[7:0] scattered across xPSR */
 
-/* EXC_RETURN tipicos (Cortex-M). El core detecta el prefijo 0xFFFFFFxx. */
+/* Typical EXC_RETURN (Cortex-M). The core detects the 0xFFFFFFxx prefix. */
 #define THUMB_EXC_RETURN_MSP_THREAD  0xFFFFFFF9u
 #define THUMB_EXC_RETURN_PSP_THREAD  0xFFFFFFFDu
 #define THUMB_EXC_RETURN_MSP_HANDLER 0xFFFFFFF1u
 
-/* Codigos de fault devueltos por thumb_step (< 0). */
+/* Fault codes returned by thumb_step (< 0). */
 #define THUMB_OK           0
 #define THUMB_FAULT_UNDEF (-1)
 #define THUMB_FAULT_MEM   (-2)
@@ -73,12 +73,12 @@ struct ThumbCore; /* fwd */
 /* ----------------------------------------------------------------- callbacks */
 typedef uint32_t (*ThumbRead)(void* ctx, uint32_t addr, int size);  /* size 1/2/4 */
 typedef void     (*ThumbWrite)(void* ctx, uint32_t addr, uint32_t val, int size);
-/* Hook por instruccion: invocado con el PC (bit0 limpio) ANTES de ejecutar. */
+/* Per-instruction hook: invoked with the PC (bit0 cleared) BEFORE executing. */
 typedef void     (*ThumbHook)(void* ctx, uint32_t pc);
 
-/* ----------------------------------------------------------------- estado --- */
+/* ----------------------------------------------------------------- state --- */
 typedef struct ThumbCore {
-    uint32_t r[16];     /* r0..r15 ; r[13]=SP activo, r[14]=LR, r[15]=PC */
+    uint32_t r[16];     /* r0..r15 ; r[13]=active SP, r[14]=LR, r[15]=PC */
     uint32_t xpsr;      /* APSR(N,Z,C,V,Q) | IPSR | EPSR(T, IT) */
     uint32_t primask;   /* bit0 */
     uint32_t faultmask; /* bit0 */
@@ -87,80 +87,80 @@ typedef struct ThumbCore {
     uint32_t msp;       /* main stack pointer   */
     uint32_t psp;       /* process stack pointer */
 
-    /* Estado del bloque IT en curso (decodificado de EPSR para rapidez). */
-    uint8_t it_cond;    /* condicion base (firstcond) */
-    uint8_t it_mask;    /* mascara IT (4 bits), 0 = sin IT activo */
+    /* State of the IT block in progress (decoded from EPSR for speed). */
+    uint8_t it_cond;    /* base condition (firstcond) */
+    uint8_t it_mask;    /* IT mask (4 bits), 0 = no active IT */
 
-    uint64_t cycles;    /* contador de instrucciones ejecutadas */
-    uint8_t  halted;    /* BKPT / fault fatal */
-    uint8_t  sleeping;  /* WFI/WFE (el core igual avanza; el frontend decide) */
-    uint8_t  branched;  /* interno: la instruccion actual escribio PC (salto) */
+    uint64_t cycles;    /* counter of executed instructions */
+    uint8_t  halted;    /* BKPT / fatal fault */
+    uint8_t  sleeping;  /* WFI/WFE (the core advances anyway; the frontend decides) */
+    uint8_t  branched;  /* internal: the current instruction wrote PC (branch) */
     int      last_fault;
 
-    /* Regiones directas (opcional, para fetch/acceso rapido). */
+    /* Direct regions (optional, for fast fetch/access). */
     uint8_t* flash_ptr; uint32_t flash_base; uint32_t flash_size;
     uint8_t* ram_ptr;   uint32_t ram_base;   uint32_t ram_size;
 
-    /* Callbacks de memoria (MMIO y todo lo que no caiga en las regiones). */
+    /* Memory callbacks (MMIO and anything that does not fall in the regions). */
     ThumbRead  read_cb;
     ThumbWrite write_cb;
     void*      mem_ctx;
 
-    /* Hook opcional por instruccion. */
+    /* Optional per-instruction hook. */
     ThumbHook  hook;
     void*      hook_ctx;
 } ThumbCore;
 
 /* ---------------------------------------------------------------- API ------- */
 
-/* Inicializa todo a cero. Llamar antes de cualquier otra cosa. */
+/* Initializes everything to zero. Call before anything else. */
 void thumb_init(ThumbCore* c);
 
-/* Reset: fija SP(=MSP) y PC. Pone modo Thumb (T=1), limpia IT. */
+/* Reset: sets SP(=MSP) and PC. Sets Thumb mode (T=1), clears IT. */
 void thumb_reset(ThumbCore* c, uint32_t sp, uint32_t pc);
 
-/* Fija los callbacks de memoria (MMIO). */
+/* Sets the memory callbacks (MMIO). */
 void thumb_set_mem_cb(ThumbCore* c, ThumbRead rd, ThumbWrite wr, void* ctx);
 
-/* Fija regiones directas de FLASH y RAM para fetch/acceso rapido (opcional).
- * Pasa NULL/0 para deshabilitar una region. */
+/* Sets direct FLASH and RAM regions for fast fetch/access (optional).
+ * Pass NULL/0 to disable a region. */
 void thumb_set_regions(ThumbCore* c,
                        uint8_t* flash_ptr, uint32_t flash_base, uint32_t flash_size,
                        uint8_t* ram_ptr,   uint32_t ram_base,   uint32_t ram_size);
 
-/* Fija el hook por instruccion (opcional). */
+/* Sets the per-instruction hook (optional). */
 void thumb_set_hook(ThumbCore* c, ThumbHook hook, void* ctx);
 
-/* Ejecuta UNA instruccion. Devuelve 0 si ok, <0 en fault (codigo THUMB_FAULT_*). */
+/* Executes ONE instruction. Returns 0 if ok, <0 on fault (THUMB_FAULT_* code). */
 int thumb_step(ThumbCore* c);
 
-/* Ejecuta hasta max instrucciones o hasta fault/halt. Devuelve nº ejecutadas. */
+/* Executes up to max instructions or until fault/halt. Returns number executed. */
 uint64_t thumb_run(ThumbCore* c, uint64_t max);
 
-/* ---------------- memoria (respeta regiones directas + callbacks) ----------- */
+/* ---------------- memory (respects direct regions + callbacks) ------------- */
 uint32_t thumb_read_mem(ThumbCore* c, uint32_t addr, int size);
 void     thumb_write_mem(ThumbCore* c, uint32_t addr, uint32_t val, int size);
 
-/* ---------------- registros ------------------------------------------------- */
+/* ---------------- registers ------------------------------------------------- */
 uint32_t thumb_get_reg(const ThumbCore* c, int n);  /* n 0..15 */
 void     thumb_set_reg(ThumbCore* c, int n, uint32_t v);
 uint32_t thumb_get_xpsr(const ThumbCore* c);
 void     thumb_set_xpsr(ThumbCore* c, uint32_t v);
 
-/* ---------------- excepciones (NVIC lo maneja el frontend) ------------------
- * thumb_enter_exception: apila {r0,r1,r2,r3,r12,lr,pc,xpsr} en el SP activo,
- * pone PC=handler|1, LR=exc_return (p.ej. THUMB_EXC_RETURN_MSP_THREAD),
- * y fija IPSR=exc_num. Devuelve 0 ok. Replica _enter_irq de pandora_tui.py.
+/* ---------------- exceptions (NVIC handled by the frontend) -----------------
+ * thumb_enter_exception: pushes {r0,r1,r2,r3,r12,lr,pc,xpsr} onto the active SP,
+ * sets PC=handler|1, LR=exc_return (e.g. THUMB_EXC_RETURN_MSP_THREAD),
+ * and sets IPSR=exc_num. Returns 0 ok. Replica of _enter_irq in pandora_tui.py.
  */
 int thumb_enter_exception(ThumbCore* c, uint32_t handler, uint32_t exc_return, uint32_t exc_num);
 
-/* ¿'val' es un EXC_RETURN (0xFFFFFFFx)? Util para que el frontend detecte el
- * retorno de ISR en un BX LR. */
+/* Is 'val' an EXC_RETURN (0xFFFFFFFx)? Useful for the frontend to detect the
+ * ISR return in a BX LR. */
 int thumb_is_exc_return(uint32_t val);
 
-/* thumb_exc_return: deshace el apilado (unstacking) usando 'exc_return' para
- * saber de que stack sacar el frame. Deja PC en la instruccion interrumpida.
- * Replica _exc_return de pandora_tui.py. */
+/* thumb_exc_return: undoes the push (unstacking) using 'exc_return' to know
+ * which stack to pull the frame from. Leaves PC at the interrupted instruction.
+ * Replica of _exc_return in pandora_tui.py. */
 int thumb_exc_return(ThumbCore* c, uint32_t exc_return);
 
 #ifdef __cplusplus
