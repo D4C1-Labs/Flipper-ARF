@@ -50,13 +50,76 @@
 #define PA_RAM_SIZE 0x00008000u /* 32 KB */
 
 #define ALLOC_MARGIN 1024u
+
+/* ---------------------------------------------------------------- FLASH CACHE
+ * The emulated firmware's flash is loaded PAGED, not as one contiguous block.
+ *
+ * ROOT CAUSE of the "Out of memory" at Launch: load_firmware used to
+ * safe_malloc(flash_used) = ONE contiguous block of 77KB (pandora) / 84KB
+ * (pmax). Measured on hardware (Bluetooth OFF) the heap has ~71KB free but the
+ * largest contiguous block is only ~67KB -> the single big malloc never fits ->
+ * OOM. (See PandoraARM_mem_fix.md.)
+ *
+ * FIX (same pattern as the sister app FlipperGB's RomCache): split the flash
+ * into 4KB PAGES, each its own small safe_malloc (small blocks fit a fragmented
+ * heap), held in an LRU cache. The core reads flash through a CALLBACK (we pass
+ * flash_ptr=NULL to thumb_set_regions, leaving only the 32KB RAM as a direct
+ * region) and each flash byte is resolved via the cache.
+ *
+ * Why this stays fast: the EFM32 firmware is RAM-RESIDENT. At boot it copies
+ * ~25KB of flash into RAM (0x20000000) and EXECUTES FROM RAM. Instruction fetch
+ * post-boot therefore hits the DIRECT RAM region (never the cache). Only the few
+ * CONSTANT loads that still address flash (< ~11 distinct 4KB pages post-boot)
+ * go through the cache. So the cache is cold-path.
+ *
+ * Source of the pages: at load time we normalise the firmware (.hex parsed once
+ * in streaming, or .bin copied) into a canonical FLAT temp .bin on the SD
+ * (flash_used bytes, gaps = 0xFF). Paging is then a trivial seek+read of 4KB
+ * from that flat file -- robust and format-agnostic (no re-parsing of Intel HEX
+ * on a miss). */
+#define FLASH_PAGE_SIZE 0x1000u /* 4 KB cache granularity (matches FlipperGB) */
+/* Heap kept free for the GUI direct-draw takeover + input + system services
+ * while the emulator runs (rx_queue ~4KB, CC1101, canvas, etc.). Mirrors
+ * FlipperGB's HEAP_RESERVE, with the same degrade ladder if slots are scarce. */
+#define FLASH_HEAP_RESERVE (10u * 1024u)
+/* Minimum 4KB slots to accept. Post-boot the firmware runs from RAM and reads
+ * only ~11 distinct code pages, rarely (cold path): a small LRU cache is fully
+ * correct, only the SD miss rate changes. 4 is a safe floor (matches
+ * FlipperGB). */
+#define FLASH_MIN_SLOTS 4u
+
 #define FRAME_US 30000u /* ~33 Hz UI refresh */
+/* Firmware instructions executed per UI frame. Caps the emulation rate so the
+ * firmware's inactivity timeout (~280k insn) fires at a human scale (sub-mode
+ * stays ~a couple seconds before auto-returning), like the real keyfob. On the
+ * Flipper the Thumb-2 interpreter is slower than on a PC, so this is a ceiling;
+ * tune on hardware if needed.
+ *
+ * CALIBRATION @ ~70 k-insn/s (MEASURED on Cortex-M4 @64MHz, heartbeat log
+ * "rate=70 k-insn/s" -- the interpreter is ~33x slower than a PC's 2.3 M-insn/s):
+ *   - old 40000 -> 40000/70000 = ~570ms of CPU per main-loop iteration. Input is
+ *     only re-polled once per iteration, so buttons were polled ~1.75x/s -> laggy.
+ *   - new 10000 -> 10000/70000 = ~143ms per iteration -> input polled ~7x/s.
+ * This does NOT reduce total insn/s: the loop runs back-to-back, it just hands
+ * control back to the input poll more often. Render cost per iteration
+ * (render_oled ~5888 simple bit-twiddle ops + canvas_commit) stays constant, so
+ * at burst=10000 the interpreted work (10000 insn, each decoding to many ops)
+ * still dominates (~>90%); render overhead is <10%. Do NOT go below ~6000 or the
+ * per-frame render starts to dominate and useful insn/s drops. */
+#define EMU_INSN_PER_FRAME 10000u
 
 /* Window (in instructions) where the knock scanner is active after boot.
  * The keyfob enters low power afterwards; that is why the unlock is done at
  * startup (same as the Python TUI fix). */
+/* @ ~70 k-insn/s: 250000/70000 = ~3.5s settle at boot (runs ONCE, acceptable).
+ * Left unchanged -- it is the window the scanner must be active for the unlock. */
 #define KNOCK_SETTLE_INSN 250000ull
-#define KNOCK_STEP_BUDGET 4000000ull
+/* Per-knock-step SAFETY CAP (the step loop exits early when unlocked, so this is
+ * rarely reached). @ 70 k-insn/s: old 4M = ~57s/step worst case; new 1.5M =
+ * ~21s/step worst case. The unlock normally completes well before this, so this
+ * only trims the pathological "never unlocks" timeout; it does NOT reduce the
+ * budget available for a successful unlock within a step. */
+#define KNOCK_STEP_BUDGET 1500000ull
 #define KNOCK_RELEASE_AFTER 4
 
 /* --- POST-unlock navigation (nav_button) tuning. Mirrors pandora_tui.py:
@@ -65,9 +128,27 @@
  *   changes (UI redrew) -> ~0.2s response instead of ~1s. */
 #define NAV_HOLD_READS 40u
 #define NAV_LONG_READS 120u
-#define NAV_BUDGET_INSN 4000000ull
-#define NAV_SETTLE_INSN 500000ull
-#define NAV_SETTLE_MIN_INSN 120000ull /* don't cut before this even on fb change */
+/* --- Recalibrated @ ~70 k-insn/s (times below assume the worst case of the cap
+ * being reached; in practice the loops cut much earlier). ---
+ *
+ * NAV_BUDGET_INSN: SAFETY CAP for press+hold+release. The loop exits as soon as
+ * nav_phase==2 (release dispatched), which normally happens after the firmware
+ * has re-read our pin NAV_HOLD_READS(40)/NAV_LONG_READS(120) times. The press
+ * loop advances in 50000-insn bursts, so a long press needs on the order of a
+ * few hundred k insn to register. @ 70 k-insn/s: old 4M = ~57s cap; new 1.0M =
+ * ~14s cap. 1.0M still leaves a generous ~20x margin over the insn a long press
+ * actually needs to register, so the press is never clipped -- it only trims the
+ * "firmware never released" pathological timeout. */
+#define NAV_BUDGET_INSN 1000000ull
+/* NAV_SETTLE_INSN: adaptive post-dispatch settle CAP (only reached if the UI
+ * never redraws). @ 70 k-insn/s: old 500k = ~7.1s; new 180k = ~2.6s. */
+#define NAV_SETTLE_INSN 180000ull
+/* NAV_SETTLE_MIN_INSN: floor before an fb change is allowed to cut the settle,
+ * to avoid cutting on a mid-redraw transient. The settle advances in 60000-insn
+ * bursts, so one burst already clears this floor -> we can cut after the FIRST
+ * burst (~0.4s @ 70 k-insn/s) once the UI redraws. @ 70 k-insn/s: old 120k =
+ * ~1.7s; new 30k = ~0.43s. */
+#define NAV_SETTLE_MIN_INSN 30000ull /* don't cut before this even on fb change */
 
 /* Physical hold detection (Flipper keys). Hold > ~500ms = long press of the
  * corresponding keyfob button. Flipper UP held > 1s = EXIT the app (Button 1
@@ -108,6 +189,11 @@ typedef struct {
     uint32_t nav_reader; /* read_gpio_pin inlined used POST-unlock (nav_button):
                           * pandora=0x97ac, pmax=0x96ec. r0=port, r1=pin. */
 
+    /* --- physical outputs of the keyfob mapped to the Flipper (LED / buzzer) --- */
+    uint8_t led_port; /* GPIO port driving the indicator LED. pandora: port3 (D) */
+    uint8_t led_pin; /* GPIO pin of the indicator LED. pandora: pin14 (bit 0x4000).
+                      * See RE_DYN_pandora.md: "DOUT(port3) ^= 0x4000 ; blink LED". */
+
     /* --- RF bridge (software-demod; see EMU_MAP_pandora.md / arm_pandora.py) --- */
     bool rf_sw_demod; /* true: SW demodulation via ISR (pandora); false (pmax): HW FIFO */
     uint32_t demod_isr; /* demod GPIO ISR (0x09554 pandora) */
@@ -144,6 +230,9 @@ static const ArmProfile PROFILE_PANDORA = {
     .spin_count = 7,
     .unlock_pc = 0xD108u,
     .nav_reader = 0x97ACu,
+    /* indicator LED: GPIO port3 (D) pin14 (bit 0x4000), confirmed by the RE. */
+    .led_port = 3,
+    .led_pin = 14,
     /* RF bridge: pandora uses SW demod (ISR 0x09554), DATA pin = GPIO B0 */
     .rf_sw_demod = true,
     .demod_isr = 0x09554u,
@@ -176,6 +265,11 @@ static const ArmProfile PROFILE_PANDORAMAX = {
     .spin_count = 8,
     .unlock_pc = 0xD6E4u,
     .nav_reader = 0x96ECu,
+    /* indicator LED: NOT confirmed by the RE for pmax. Default to the pandora
+     * mapping (port3/pin14); if the pmax LED sits elsewhere the LED logs will
+     * reveal the real pin (look for the "LED:" throttled log). */
+    .led_port = 3,
+    .led_pin = 14,
     /* pmax: Si4432 in PACKET/FIFO mode (HW demod), there is NO reliable SW ISR
      * to inject into; the software-demod RX bridge is disabled on this profile.
      * TX (bit-bang + rf_tx_on detection) does work the same way. */
@@ -195,6 +289,12 @@ static const ArmProfile PROFILE_PANDORAMAX = {
 
 /* ------------------------------------------------------------ Si4432 model */
 
+/* Si4432 FIFO size. The real Si4432 has a 64-byte TX and 64-byte RX FIFO.
+ * In PACKET/FIFO mode the firmware writes the frame to REG[0x7F] (TX) and reads
+ * the demodulated frame back from REG[0x7F] (RX). We keep these small (64B) so
+ * AppState stays compact (the paged flash cache needs RAM). */
+#define SI_FIFO_LEN 64u
+
 typedef struct {
     uint8_t regs[0x80];
     uint8_t mode; /* 0 idle, 1 ready, 2 rx, 3 tx (derived from REG[0x07]) */
@@ -207,9 +307,14 @@ static void si4432_init(Si4432* s) {
     s->regs[0x26] = 0x60;
     s->mode = 0;
 }
+/* fwd: the FIFO-RX read path lives in AppState; si4432_read only touches regs. */
 static uint8_t si4432_read(Si4432* s, uint8_t reg) {
     reg &= 0x7F;
     uint8_t v = s->regs[reg];
+    /* REG 0x03/0x04 are the interrupt status registers: reading them clears the
+     * latched flags on the real part. REG[0x7F] (FIFO Access) is handled by the
+     * caller (spi_byte) because it needs the AppState RX FIFO; do NOT clear it
+     * here. */
     if(reg == 0x03 || reg == 0x04) s->regs[reg] = 0;
     return v;
 }
@@ -229,6 +334,12 @@ static int si4432_write(Si4432* s, uint8_t reg, uint8_t val) {
         else
             nm = 0; /* IDLE */
         if(nm != s->mode) {
+            /* DIAG: the firmware changed the radio operating mode. nm 3=TX 2=RX
+             * 1=READY 0=IDLE. This is the key signal that the firmware wants to
+             * transmit a frame (nm==3). If you press a button and this never logs
+             * TX, the firmware is not driving the radio for that action. */
+            FURI_LOG_I(TAG, "si4432: REG[0x07]=0x%02X -> mode %u (%s)", val, nm,
+                       nm == 3 ? "TX" : nm == 2 ? "RX" : nm == 1 ? "READY" : "IDLE");
             s->mode = nm;
             return (int)nm;
         }
@@ -285,8 +396,13 @@ static const uint8_t FK_TO_KBIT[FK_COUNT] = {
 /* TX: the ARM firmware enables rf_tx_on (Si4432 REG[0x07]=0x08) and bit-bangs
  * the DATA pin (GPIO DOUT port B bit0). We capture each edge with its duration
  * (measured by ninsn between toggles) in a LevelDuration ring and replay it
- * through furi_hal_subghz_start_async_tx. */
-#define TX_RING_LEN 2048u
+ * through furi_hal_subghz_start_async_tx.
+ *
+ * MEMORY: the ring lives inside AppState (one block). 512 edges (=4KB at 8B/edge)
+ * is ample for a keyfob frame (the drain fires every >=16 pending edges, many
+ * times per frame) and keeps AppState small so the paged flash cache gets more
+ * 4KB slots. The old 2048 (16KB) dominated AppState and starved the cache. */
+#define TX_RING_LEN 512u
 /* RX: furi_hal_subghz_start_async_rx delivers (level,duration_us) per edge
  * from IRQ. It is queued thread-safe; in the main loop it is injected into the
  * firmware demodulator (ISR 0x09554) replicating feed_sub from arm_pandora.py. */
@@ -299,6 +415,19 @@ static const uint8_t FK_TO_KBIT[FK_COUNT] = {
 #define ARM_INSN_US_NUM 1u
 #define ARM_INSN_US_DEN 1u
 
+/* --- buzzer detection / tentative beep tuning ---------------------------------
+ * These are heuristics: the buzzer mechanism is [DESC] (unknown from the RE), so
+ * the goal of the first version is to DETECT + LOG a candidate and emit a safe,
+ * non-blocking tentative beep. Tune once hardware logs confirm the real pin. */
+#define BUZZ_MIN_EDGES 4u /* toggles before we treat a pin as a buzzer candidate */
+#define BUZZ_GAP_INSN 20000u /* if a candidate is idle this many insn, reset it */
+#define BUZZ_TONE_MIN_HZ 100.0f /* Flipper speaker lower bound (coin buzzer) */
+#define BUZZ_TONE_MAX_HZ 2500.0f /* Flipper speaker upper bound */
+#define BUZZ_TONE_DEFAULT_HZ 2000.0f /* fallback when the period is unreliable */
+#define BUZZ_VOLUME 0.5f /* tentative volume (0..1) */
+#define BUZZ_HOLD_MS 60u /* keep the tone up this long after the last edge */
+#define SPK_ACQUIRE_TIMEOUT 0u /* non-blocking speaker acquire (do not stall) */
+
 /* RF bridge modes of the overlay (Left cycles). */
 typedef enum {
     RfModeOff = 0,
@@ -306,15 +435,57 @@ typedef enum {
     RfModeRx,
 } RfMode;
 
+/* Which CC1101 modulation preset is currently loaded. Tracked so we only reload
+ * a custom preset when the modulation actually changes (reloading is a bus
+ * transaction and must happen on an idle radio). */
+typedef enum {
+    CcPresetOok = 0, /* OOK/ASK 650kHz BW (Pandora common / OOK remotes) */
+    CcPreset2Fsk, /* 2-FSK, moderate deviation (Pandora FSK/GFSK firmwares) */
+} CcPreset;
+
+/* Si4432 data-source mode (REG[0x71] dtmod, bits[7:6]). This selects HOW the
+ * firmware moves frame bytes in/out of its radio and therefore which bridge path
+ * we take at runtime:
+ *   00 direct GPIO  -> bit-bang on the DATA pin (pandora common; existing path)
+ *   01 direct SDI   -> treated like direct (bit-bang) for our purposes
+ *   10 FIFO         -> packet mode; frame bytes go through REG[0x7F] (NEW path)
+ *   11 PN9          -> test pattern; treated like direct (no real frame)
+ * ONE codebase supports any firmware: dtmod decides bit-bang vs FIFO in runtime,
+ * independent of the profile's rf_sw_demod hint. */
+typedef enum {
+    DtModDirectGpio = 0,
+    DtModDirectSdi = 1,
+    DtModFifo = 2,
+    DtModPn9 = 3,
+} SiDtMod;
+
 typedef struct {
     bool level;
     uint32_t duration; /* us */
 } RfEdge;
 
+/* ---------------------------------------------------------------- FlashCache
+ * Paged LRU cache of the emulated firmware flash. Each slot is an independent
+ * 4KB safe_malloc (small blocks fit a fragmented heap; no single big block).
+ * Pages are streamed from a canonical flat temp .bin on the SD. Faithful port
+ * of FlipperGB's RomCache (slots/slot_page/slot_use + rc_fill LRU). */
+typedef struct {
+    File* file; /* flat .bin on SD (flash_used bytes, gaps=0xFF); kept open */
+    uint32_t flash_used; /* logical flash size (bytes of real code) */
+    uint32_t num_pages; /* ceil(flash_used / FLASH_PAGE_SIZE) */
+    uint8_t** slots; /* num_slots pointers to 4KB blocks */
+    uint32_t* slot_page; /* which flash page each slot holds (0xFFFFFFFF=empty) */
+    uint32_t* slot_use; /* LRU stamps */
+    uint32_t use_counter;
+    uint32_t miss_count; /* diagnostics: SD page misses */
+    uint16_t num_slots;
+    bool fully_resident; /* every page has a slot -> O(1) index, no eviction */
+} FlashCache;
+
 typedef struct {
     ThumbCore* cpu;
     const ArmProfile* prof;
-    uint8_t* flash; /* FLASH buffer (safe_malloc) */
+    FlashCache fc; /* paged flash cache (replaces the old contiguous buffer) */
     uint8_t* ram; /* RAM buffer 32KB */
 
     Si4432 si;
@@ -329,7 +500,58 @@ typedef struct {
     uint16_t gpio_din[16]; /* din per port (bit=1 released) */
     uint16_t gpio_dout[16];
 
-    uint16_t timer_cnt[4];
+    /* --- indicator LED (keyfob LED -> Flipper red LED) ---
+     * The keyfob drives an indicator LED on a GPIO pin (pandora: port3 pin14,
+     * bit 0x4000; see RE_DYN_pandora.md). On every GPIO DOUT write we read the
+     * FINAL state of that pin and mirror it to the Flipper's red LED via
+     * furi_hal_light_set (cheap, low latency). led_on caches the last state so we
+     * only call the HAL on a real change (no spam in the blink loop). */
+    bool led_on; /* last LED state pushed to the Flipper (true = lit) */
+    bool led_logged; /* 1 after the first LED toggle has been logged (throttle) */
+
+    /* --- buzzer detection / tentative beep ---
+     * The keyfob's buzzer pin/register is [DESC] (unknown from the RE). We do two
+     * things here, both best-effort:
+     *   (A) DETECT: log candidate mechanisms so a human can identify the real
+     *       buzzer on hardware. Two patterns are watched:
+     *         - a GPIO pin (NOT the LED / OLED-DC / Si4432-DATA / buttons) that
+     *           toggles repeatedly in a short window (square-wave => audible tone);
+     *         - TIMER writes to compare/CC or output-enable sub-registers that are
+     *           outside our delay/CNT/TOP model (a PWM tone generator).
+     *   (B) TENTATIVE BEEP: when a square-wave GPIO toggle burst is detected we
+     *       estimate its frequency from the toggle period (ninsn -> us) and request
+     *       a short non-blocking beep on the Flipper speaker. If we cannot derive a
+     *       reliable frequency we fall back to a fixed tone. The speaker is a shared
+     *       resource: we acquire it lazily, start the tone, and stop/release it
+     *       from the hot loop once the activity ceases (buzz_deadline_tick). We
+     *       NEVER block the emulator loop while the speaker is held. */
+    uint8_t buzz_cand_port; /* port of the current candidate buzzer pin (0xFF=none) */
+    uint8_t buzz_cand_pin; /* pin of the current candidate buzzer pin */
+    uint32_t buzz_edges; /* toggle count seen for the current candidate */
+    uint64_t buzz_last_edge_insn; /* ninsn at the previous candidate toggle */
+    uint64_t buzz_period_insn; /* latest measured toggle half-period (insn) */
+    bool buzz_logged; /* 1 after the first "BUZZER? gpio..." log (throttle) */
+    bool buzz_timer_logged; /* 1 after the first "BUZZER? timer..." log (throttle) */
+
+    /* Flipper speaker ownership + tentative-beep pacing (driven by the hot loop) */
+    bool spk_owned; /* true while we hold furi_hal_speaker (acquired) */
+    bool spk_playing; /* true while a tone is actively started */
+    float spk_freq; /* latest REQUESTED tone frequency (Hz, set by mmio_write) */
+    float spk_freq_playing; /* tone frequency currently started on the speaker */
+    uint32_t buzz_active_tick; /* furi_get_tick() of the last detected buzzer edge */
+    bool buzz_request; /* set by mmio_write when buzzer activity is detected;
+                        * consumed by the hot loop to start/refresh the beep */
+
+    uint16_t timer_cnt[4]; /* legacy (kept for the RX feed path) */
+    /* Faithful EFM32 timer model (CORE fix: eliminates UI "stutter"). CNT is a
+     * free-running counter that advances with TIME (modeled by instructions
+     * executed), NOT per read: CNT = ((ninsn - t0) * rate) mod (TOP+1). The old
+     * "+0x2000 per read" made delay() loops take a bimodal 1-or-7 reads ->
+     * irregular pacing. This makes each delay() consume a CONSISTENT number of
+     * instructions -> smooth pacing. */
+    uint64_t timer_t0[4]; /* ninsn at the last CNT reset (write) */
+    uint32_t timer_top[4]; /* TOP configured by the firmware (wrap) */
+    uint32_t timer_rate[4]; /* CNT advance per instruction (HFPERCLK proxy) */
 
     /* minimal NVIC */
     uint8_t in_irq;
@@ -365,6 +587,33 @@ typedef struct {
     /* buttons (logical mask) */
     uint8_t btn_pressed[BTN_COUNT];
 
+    /* --- OLED double buffering (fix: flicker / overwrite on screen) ---
+     * Faithful port of emu/pandora_tui.py (_oled_cmd/_oled_data/_oled_commit,
+     * _oled_work/_oled_fb, the 0xAF handling and the blank-frame skip).
+     *
+     * ROOT CAUSE (DISPLAY_DIAG.md / OLED_FIDELITY.md): render_oled used to read
+     * the firmware framebuffer DIRECTLY from RAM every UI frame. The firmware
+     * composes that framebuffer byte-by-byte during oled_flush @0xa550, which
+     * FIRST calls an internal CLEAR (sub_9fc8 @0xa554: 1472 bytes 0x00 = blank
+     * screen) and THEN paints the real content. A per-frame RAM read could catch
+     * a PARTIAL frame (mid-write) or a fully BLANK frame (just after the clear)
+     * -> flicker / overwrite / blink-to-black.
+     *
+     * FIX (Option A, same as the Python reference): intercept the OLED SPI bus in
+     * mmio_write -> spi_byte. The DC pin (port0 bit9, A9) selects command vs
+     * pixel data (oled_write_cmd @0xa5c8 sets A9 HIGH for a command, LOW for the
+     * 92 pixel bytes). We rebuild the frame in a WORK buffer and COMMIT it
+     * atomically to a VISIBLE buffer ONLY on the CONTENT 0xAF (display ON =
+     * end-of-flush), SKIPPING the commit if the work buffer is all-zero (that is
+     * the internal clear's 0xAF -> would be a black frame). render_oled reads the
+     * VISIBLE buffer, so it never sees a partial or black frame. */
+    uint8_t oled_fb[OLED_FB_SIZE]; /* VISIBLE buffer (what render_oled reads) */
+    uint8_t oled_work[OLED_FB_SIZE]; /* WORK buffer (written byte-by-byte on flush) */
+    uint8_t oled_page; /* current page pointer (set-page command) */
+    uint8_t oled_col; /* current column pointer (auto-increments on data) */
+    uint8_t oled_work_dirty; /* 1 if data was written in this pass */
+    uint32_t oled_frames; /* commits performed (diagnostic) */
+
     /* Flipper framebuffer */
     uint8_t screen[FB_SIZE];
     FuriMutex* fb_mutex;
@@ -398,6 +647,35 @@ typedef struct {
     uint32_t rx_events; /* counter of injected RX edges */
     uint32_t rx_frames; /* frames decoded by the firmware */
 
+    /* --- RF "follow firmware" bridge (Si4432 -> CC1101 auto mapping) ---
+     * When rf_follow is true (the default), the CC1101 mode/frequency track what
+     * the firmware programs into its Si4432: REG[0x07] drives TX/RX/IDLE and
+     * REG[0x75..0x77] drive the carrier frequency. The manual hold-BACK cycling
+     * still works as a diagnostic override (it flips rf_follow off). */
+    bool rf_follow; /* true: CC1101 mode/freq follow the firmware's Si4432 */
+    uint32_t rx_events_hb; /* rx_events snapshot for the RX heartbeat delta */
+    uint32_t rx_frames_hb; /* rx_frames snapshot for the RX heartbeat delta */
+    uint8_t si_modtyp; /* last REG[0x71] modtyp[1:0] seen (0=unmod 1=OOK 2=FSK 3=GFSK) */
+    uint8_t si_dtmod; /* last REG[0x71] dtmod[7:6] (SiDtMod: data source mode) */
+    uint32_t si_devi_hz; /* FSK frequency deviation derived from REG[0x71]/0x72 */
+    CcPreset cc_preset; /* which CC1101 custom preset is loaded right now */
+
+    /* --- Si4432 PACKET/FIFO bridge (dtmod==FIFO firmwares, e.g. pandoramax) ---
+     * TX: the firmware writes frame bytes to REG[0x7F] (FIFO access). We buffer
+     * them in si_tx_fifo; when the firmware then enters TX (REG[0x07] bit3) in
+     * FIFO mode we convert those bytes to an edge train and replay via async_tx.
+     * RX: when the CC1101 receives a packet we copy it to si_rx_fifo, raise the
+     * Si4432 "packet received" IRQ flags (REG 0x03/0x04) and let REG[0x7F] reads
+     * return the bytes, so the firmware's FIFO-drain path (si4432_read_fifo_block)
+     * sees a real frame. */
+    uint8_t si_tx_fifo[SI_FIFO_LEN]; /* bytes the firmware wrote to the TX FIFO */
+    uint8_t si_tx_fifo_len; /* number of valid bytes in si_tx_fifo */
+    uint8_t si_rx_fifo[SI_FIFO_LEN]; /* bytes to hand back on REG[0x7F] reads (RX) */
+    uint8_t si_rx_fifo_len; /* number of valid bytes in si_rx_fifo */
+    uint8_t si_rx_fifo_pos; /* read cursor into si_rx_fifo */
+    uint32_t fifo_tx_frames; /* diagnostics: FIFO frames transmitted */
+    uint32_t fifo_rx_frames; /* diagnostics: FIFO frames received */
+
     volatile bool exit_requested;
     volatile bool menu_requested;
     bool menu_active;
@@ -416,6 +694,8 @@ typedef struct {
     Widget* about_widget; /* About screen (scrollable text) */
     FuriString* fw_path; /* chosen firmware path */
     char fw_name[32]; /* short name for the label */
+
+    Storage* storage; /* kept for the flash cache (streams pages at runtime) */
 } AppState;
 
 static volatile uint32_t s_fb_cb_inflight = 0;
@@ -429,6 +709,20 @@ static void wait_inflight_zero(volatile uint32_t* counter) {
 /* RF bridge fwd decls (used from the MMIO callbacks) */
 static void tx_on_si_mode(AppState* app, int new_mode);
 static void tx_capture_data_edge(AppState* app, bool level);
+/* Si4432 -> CC1101 "follow firmware" bridge (used from spi_byte). */
+static void rf_follow_apply_mode(AppState* app, int new_mode);
+static void rf_follow_apply_freq(AppState* app);
+static void rx_bridge_start(AppState* app);
+static void rx_bridge_stop(AppState* app);
+static void radio_rx_callback(bool level, uint32_t duration, void* context);
+/* FIFO (packet-mode) bridge: TX transmits the buffered FIFO as an edge train;
+ * RX polls the CC1101 packet pipe and loads the Si4432 RX FIFO + IRQ flags. */
+static void fifo_tx_transmit(AppState* app);
+static void fifo_rx_poll(AppState* app);
+
+/* Flash cache fwd decl (used from the MMIO read callback; defined with the rest
+ * of the FlashCache code in the load+boot section). */
+static uint32_t fc_read(FlashCache* fc, uint32_t addr, int size);
 
 /* ------------------------------------------------------------ buttons */
 
@@ -467,11 +761,14 @@ static uint32_t mmio_read(void* ctx, uint32_t addr, int size) {
     uint32_t base = addr & 0xFFFFF000u;
     uint32_t off = addr & 0xFFFu;
     uint32_t v = 0;
-    /* Unallocated flash (above flash_used and below 0x42000): the real firmware
-     * would see 0xFF there. We only allocate the used code to save heap; we
-     * return 0xFF so that reads of that region are faithful (not 0). */
-    if(addr < 0x42000u && addr >= app->prof->flash_used) {
-        return (size == 1) ? 0xFFu : (size == 2) ? 0xFFFFu : 0xFFFFFFFFu;
+    /* EMULATED FLASH (0x00000000..0x00042000). The flash is NOT a direct region
+     * anymore (flash_ptr=NULL), so EVERY flash read lands here and is resolved
+     * through the paged LRU cache. In practice this is cold-path: the firmware is
+     * RAM-resident (fetch hits the direct RAM region), only the few flash CONSTANT
+     * loads reach this. Bytes at/above flash_used are open-bus 0xFF (handled
+     * inside fc_read, without polluting the cache). */
+    if(addr < 0x42000u) {
+        return fc_read(&app->fc, addr, size);
     }
     if(base == 0x4000C000u) { /* USART0 (SPI Si4432) */
         if(off == 0x10) {
@@ -493,7 +790,13 @@ static uint32_t mmio_read(void* ctx, uint32_t addr, int size) {
             v = (1u << 16); /* SINGLEDV ready */
         else if(off == 0x24)
             v = 0x0C00; /* data ~3.9V */
-    } else if(base == 0x40080000u || base == 0x400C8000u) { /* CMU */
+    } else if(base == 0x400C8000u) { /* CMU #2 */
+        /* FIX (CORE_DIAG P1): firmware busy-waits on bits 3/7/9 of 0x400C802C
+         * (clock-ready). If we return 0 it spins forever (~30% CPU). Return only
+         * those bits set (0x288) so the wait exits without flipping other bits
+         * (0xFFFFFFFF broke pmax's boot). */
+        v = (off == 0x2Cu) ? ((1u << 3) | (1u << 7) | (1u << 9)) : 0u;
+    } else if(base == 0x40080000u) { /* CMU #1 */
         v = 0;
     } else if(base == 0x40010000u) { /* TIMER0..3 */
         uint32_t tn = off >> 10;
@@ -504,16 +807,109 @@ static uint32_t mmio_read(void* ctx, uint32_t addr, int size) {
             if(tn == 1 && app->rx_feeding) {
                 v = app->rx_pulse_ticks & 0xFFFFu;
             } else {
-                app->timer_cnt[tn] = (uint16_t)(app->timer_cnt[tn] + 0x2000u);
-                v = app->timer_cnt[tn];
+                /* Faithful CNT: advances with time (instructions), wraps at TOP.
+                 * CONSISTENT per-delay cost -> smooth pacing (no stutter). */
+                uint32_t top = app->timer_top[tn] ? app->timer_top[tn] : 0xFFFFu;
+                uint64_t elapsed = (app->ninsn - app->timer_t0[tn]) * (uint64_t)app->timer_rate[tn];
+                v = (uint32_t)(elapsed % ((uint64_t)top + 1u));
             }
+        } else if(sub == 0x3C && tn < 4) { /* TOP reached? (IF overflow proxy) */
+            uint32_t top = app->timer_top[tn] ? app->timer_top[tn] : 0xFFFFu;
+            uint64_t elapsed = (app->ninsn - app->timer_t0[tn]) * (uint64_t)app->timer_rate[tn];
+            v = (elapsed >= top) ? 1u : 0u;
         }
     }
     (void)size;
     return v;
 }
 
+/* ------------------------------------------------------------ OLED capture (SPI)
+ * Double-buffered capture of the keyfob OLED (UC16xx/ST7528) off the SPI bus.
+ * Faithful port of emu/pandora_tui.py (_dc_level/_oled_cmd/_oled_data/
+ * _oled_commit). The DC pin is port0 bit9 (A9); the flush addresses by raw page
+ * number (0x00..0x0F), resets the column to 0 with 0x60/0x70, then streams 92
+ * data bytes/page, ending each pass with 0xAF (display ON). */
+
+/* OLED DC pin: port0 bit9 (A9). HIGH=command, LOW=pixel data. */
+#define OLED_DC_PORT 0u
+#define OLED_DC_PIN 9u
+
+static int oled_dc_level(AppState* app) {
+    return (app->gpio_dout[OLED_DC_PORT] >> OLED_DC_PIN) & 1u;
+}
+
+/* Atomic commit: copy the WORK buffer (a full freshly-flushed frame) to the
+ * VISIBLE buffer. Faithful port of _oled_commit. Skips the commit if:
+ *   - nothing was written this pass (not dirty), or
+ *   - the frame is entirely blank (all 0x00). The internal clear (sub_9fc8)
+ *     leaves the work buffer at zero and emits its OWN 0xAF; committing that
+ *     would make a BLACK frame visible (flicker). The real content of the flush
+ *     fills the SAME work buffer immediately after and commits on ITS 0xAF.
+ * Everything runs on the single emulator thread (run_emulator), so no lock is
+ * needed between this commit and render_oled (both main-thread); the Flipper GUI
+ * callback reads app->screen, not these buffers. */
+static void oled_commit(AppState* app) {
+    if(!app->oled_work_dirty) return;
+    bool any = false;
+    for(int i = 0; i < OLED_FB_SIZE; i++) {
+        if(app->oled_work[i]) {
+            any = true;
+            break;
+        }
+    }
+    if(!any) {
+        /* blank frame = internal clear of the flush; do not make it visible.
+         * (keep dirty: the real body reuses the same work buffer and will commit
+         *  the content on its own 0xAF.) */
+        return;
+    }
+    memcpy(app->oled_fb, app->oled_work, OLED_FB_SIZE);
+    app->oled_work_dirty = 0;
+    app->oled_frames++;
+}
+
+/* Processes one OLED controller command (set page / column / display-on).
+ * Faithful port of _oled_cmd. */
+static void oled_cmd(AppState* app, uint8_t b) {
+    uint8_t c = b;
+    if(c < OLED_PAGES) { /* 0x00..0x0F = raw page number */
+        app->oled_page = c;
+        app->oled_col = 0;
+    } else if(c == 0x60 || c == 0x70) { /* set column address -> column 0 */
+        app->oled_col = 0;
+    } else if(c == 0xAF) { /* display ON = end of a flush pass -> commit */
+        oled_commit(app);
+    }
+    /* other commands (init table 0xD2.., 0x60/0x70 handled, 0x81, etc.): ignored
+     * for the page/col pointer. */
+}
+
+/* Writes one pixel byte into the WORK buffer (not the visible buffer). Faithful
+ * port of _oled_data. Layout: fb[page*cols + col], byte = 8 vertical pixels,
+ * bit0 = top row. The column auto-increments; the flush emits an explicit
+ * set-page per page, so we clamp to avoid overflow. */
+static void oled_data(AppState* app, uint8_t b) {
+    if(app->oled_page < OLED_PAGES && app->oled_col < OLED_COLS) {
+        uint32_t idx = (uint32_t)app->oled_page * OLED_COLS + app->oled_col;
+        if(idx < (uint32_t)OLED_FB_SIZE) {
+            app->oled_work[idx] = b;
+            app->oled_work_dirty = 1;
+        }
+    }
+    if(app->oled_col < 0xFF) app->oled_col++;
+    /* if it exceeds, clamp until the next set-page/col */
+}
+
 static void spi_byte(AppState* app, uint8_t b) {
+    /* OLED capture: route by the DC pin (A9). DC HIGH=command, LOW=pixel data.
+     * (The OLED and the Si4432 share the SPI bus; the firmware selects the OLED
+     * via DC/CS on port0. We model both: OLED framebuffer AND the Si4432 regs so
+     * the firmware reads coherent values either way.) */
+    if(oled_dc_level(app))
+        oled_cmd(app, b);
+    else
+        oled_data(app, b);
+
     if(app->spi_phase < 0) {
         if(b & 0x80) {
             app->spi_kind = 'w';
@@ -528,14 +924,198 @@ static void spi_byte(AppState* app, uint8_t b) {
         app->spi_rx_tail = (uint8_t)((app->spi_rx_tail + 1) % SPI_RX_QUEUE_LEN);
     } else {
         if(app->spi_kind == 'w') {
-            int nm = si4432_write(&app->si, app->spi_reg, b);
-            if(nm >= 0) tx_on_si_mode(app, nm); /* rf_tx_on / rf_rx_on detected */
+            uint8_t wreg = app->spi_reg;
+            /* FIFO TX accumulation: in PACKET/FIFO mode the firmware writes the
+             * frame bytes to REG[0x7F] (FIFO Access) via SUCCESSIVE writes. Buffer
+             * them; they will be transmitted when the firmware enters TX. The
+             * register file is NOT used to store these (0x7F is a FIFO port). */
+            if(wreg == 0x7F) {
+                if(app->si_tx_fifo_len < SI_FIFO_LEN)
+                    app->si_tx_fifo[app->si_tx_fifo_len++] = b;
+                /* do not fall through to si4432_write for the FIFO port */
+                app->spi_phase = -1;
+                return;
+            }
+            int nm = si4432_write(&app->si, wreg, b);
+            /* Si4432 -> CC1101 "follow firmware" bridge: when the firmware
+             * reprograms the carrier (REG[0x75..0x77]) re-map the CC1101
+             * frequency; when it changes modulation / data-source (REG[0x71])
+             * track modtyp + dtmod and compute the FSK deviation. */
+            if(app->rf_follow) {
+                if(wreg == 0x75 || wreg == 0x76 || wreg == 0x77) {
+                    rf_follow_apply_freq(app);
+                } else if(wreg == 0x71 || wreg == 0x72) {
+                    uint8_t mt = app->si.regs[0x71] & 0x03;
+                    uint8_t dt = (app->si.regs[0x71] >> 6) & 0x03;
+                    /* Si4432 FSK deviation: fd[8:0] with fd[8]=REG71 bit2,
+                     * fd[7:0]=REG72. deviation = 625 Hz * fd (datasheet approx). */
+                    uint32_t fd = (uint32_t)app->si.regs[0x72] |
+                                  (((uint32_t)(app->si.regs[0x71] >> 2) & 1u) << 8);
+                    uint32_t devi = fd * 625u;
+                    if(mt != app->si_modtyp || dt != app->si_dtmod ||
+                       devi != app->si_devi_hz) {
+                        app->si_modtyp = mt;
+                        app->si_dtmod = dt;
+                        app->si_devi_hz = devi;
+                        static const char* const MODN[4] = {"unmod", "OOK", "FSK",
+                                                            "GFSK"};
+                        static const char* const SRC[4] = {"direct-GPIO", "direct-SDI",
+                                                           "FIFO", "PN9"};
+                        FURI_LOG_I(TAG,
+                                   "RF: firmware modulation = %s src = %s devi = %lu Hz "
+                                   "(REG71=0x%02X REG72=0x%02X)",
+                                   MODN[mt], SRC[dt], (unsigned long)devi,
+                                   app->si.regs[0x71], app->si.regs[0x72]);
+                        /* The actual CC1101 preset reload happens on the idle
+                         * radio right before TX/RX (rf_reapply_preset), so we do
+                         * NOT touch the radio here (it may be mid RX/TX). */
+                    }
+                }
+            }
+            if(nm >= 0) {
+                /* rf_tx_on / rf_rx_on detected. Manual overlay capture first
+                 * (unchanged), then the automatic follow bridge. */
+                tx_on_si_mode(app, nm);
+                if(app->rf_follow) rf_follow_apply_mode(app, nm);
+            }
         } else {
-            uint8_t rv = si4432_read(&app->si, app->spi_reg);
+            uint8_t rv;
+            if(app->spi_reg == 0x7F) {
+                /* FIFO RX read: hand back the bytes we loaded from the CC1101
+                 * packet. Successive reads advance the cursor; past the end we
+                 * return 0 (empty FIFO). When fully drained, mark the FIFO free so
+                 * fifo_rx_poll can load the next packet. */
+                if(app->si_rx_fifo_pos < app->si_rx_fifo_len) {
+                    rv = app->si_rx_fifo[app->si_rx_fifo_pos++];
+                    if(app->si_rx_fifo_pos >= app->si_rx_fifo_len) {
+                        app->si_rx_fifo_len = 0;
+                        app->si_rx_fifo_pos = 0;
+                    }
+                } else {
+                    rv = 0;
+                }
+            } else {
+                uint8_t rreg = app->spi_reg;
+                rv = si4432_read(&app->si, rreg);
+                /* Reading the interrupt-status regs de-asserts the nIRQ GPIO
+                 * (active-low) that fifo_rx_poll pulled low on a packet. */
+                if((rreg == 0x03 || rreg == 0x04) && app->si_dtmod == DtModFifo) {
+                    app->gpio_din[app->prof->data_port] |=
+                        (uint16_t)(1u << app->prof->data_pin);
+                }
+            }
             app->spi_rx[app->spi_rx_tail] = rv;
             app->spi_rx_tail = (uint8_t)((app->spi_rx_tail + 1) % SPI_RX_QUEUE_LEN);
         }
         app->spi_phase = -1;
+    }
+}
+
+/* Mirror the keyfob indicator LED (profile led_port/led_pin) onto the Flipper's
+ * red LED. Called after every GPIO DOUT write on that port, reading the FINAL
+ * pin state (so DOUTSET/DOUTCLR/DOUT are all handled uniformly). We only touch
+ * the HAL on a real change (led_on cache) to avoid spamming furi_hal_light_set in
+ * the firmware's fast blink loop. The first toggle is logged (throttled). */
+static void led_mirror(AppState* app, uint32_t port) {
+    if(port != app->prof->led_port) return;
+    bool on = (app->gpio_dout[port] >> app->prof->led_pin) & 1u;
+    if(on == app->led_on) return;
+    app->led_on = on;
+    furi_hal_light_set(LightRed, on ? 0xFF : 0x00);
+    if(!app->led_logged) {
+        app->led_logged = true;
+        FURI_LOG_I(TAG, "LED: port%u pin%u -> %s (first toggle; subsequent are silent)",
+                   (unsigned)app->prof->led_port, (unsigned)app->prof->led_pin,
+                   on ? "ON" : "OFF");
+    }
+}
+
+/* Buzzer GPIO detection. The buzzer pin is [DESC]: we watch for ANY GPIO pin
+ * that is NOT a known function (LED / OLED-DC / Si4432-DATA / buttons) and that
+ * toggles repeatedly in a short window (a square wave => audible tone). When such
+ * a burst is seen we (a) log the candidate once for hardware confirmation and
+ * (b) measure the toggle half-period to request a tentative beep (started
+ * non-blockingly by the hot loop). pin_prev/pin_now are the OLD/NEW pin levels. */
+static bool buzz_pin_is_reserved(AppState* app, uint32_t port, uint32_t pin) {
+    const ArmProfile* p = app->prof;
+    if(port == p->led_port && pin == p->led_pin) return true; /* LED */
+    if(port == OLED_DC_PORT && pin == OLED_DC_PIN) return true; /* OLED DC (A9) */
+    if(port == p->data_port && pin == p->data_pin) return true; /* Si4432 DATA */
+    /* the 6 keyfob buttons are DIN (inputs), but guard anyway in case a profile
+     * reuses a port for both; a button pin as DOUT is not a buzzer. */
+    if((port == p->up_port && pin == p->up_pin) ||
+       (port == p->down_port && pin == p->down_pin) ||
+       (port == p->ok_port && pin == p->ok_pin) ||
+       (port == p->back_port && pin == p->back_pin) ||
+       (port == p->b5_port && pin == p->b5_pin) ||
+       (port == p->b6_port && pin == p->b6_pin))
+        return true;
+    return false;
+}
+
+/* Request a tentative beep from the detected toggle period. Converts the
+ * half-period in insn -> us -> Hz (full period = 2 * half-period). Clamps to the
+ * Flipper speaker range; falls back to a fixed tone if the period is unreliable.
+ * This only SETS state (buzz_request/spk_freq/buzz_active_tick); the hot loop
+ * owns the speaker so mmio_write never blocks or touches the HAL. */
+static void buzz_request_tone(AppState* app) {
+    float freq = BUZZ_TONE_DEFAULT_HZ;
+    if(app->buzz_period_insn > 0) {
+        /* full square-wave period = 2 half-periods; period_us = periods*insn_us */
+        uint64_t half_us = (app->buzz_period_insn * ARM_INSN_US_NUM) / ARM_INSN_US_DEN;
+        uint64_t full_us = half_us * 2u;
+        if(full_us > 0) {
+            float f = 1000000.0f / (float)full_us;
+            if(f >= BUZZ_TONE_MIN_HZ && f <= BUZZ_TONE_MAX_HZ) freq = f;
+        }
+    }
+    app->spk_freq = freq;
+    app->buzz_active_tick = furi_get_tick();
+    app->buzz_request = true;
+}
+
+static void buzz_detect_gpio(AppState* app, uint32_t port, uint32_t pin_mask, uint16_t before) {
+    /* only consider pins that actually CHANGED and are not reserved functions */
+    uint16_t after = app->gpio_dout[port];
+    uint16_t changed = (uint16_t)((before ^ after) & pin_mask);
+    if(!changed) return;
+    for(uint32_t pin = 0; pin < 16; pin++) {
+        if(!((changed >> pin) & 1u)) continue;
+        if(buzz_pin_is_reserved(app, port, pin)) continue;
+        /* a non-reserved DOUT pin toggled. Track it as a buzzer candidate. */
+        if(app->buzz_cand_port != (uint8_t)port || app->buzz_cand_pin != (uint8_t)pin) {
+            /* new / different candidate: (re)start the measurement */
+            app->buzz_cand_port = (uint8_t)port;
+            app->buzz_cand_pin = (uint8_t)pin;
+            app->buzz_edges = 1;
+            app->buzz_last_edge_insn = app->ninsn;
+            app->buzz_period_insn = 0;
+            continue;
+        }
+        /* same candidate toggled again: measure the half-period */
+        uint64_t dinsn = app->ninsn - app->buzz_last_edge_insn;
+        app->buzz_last_edge_insn = app->ninsn;
+        if(dinsn == 0 || dinsn > BUZZ_GAP_INSN) {
+            /* too slow / stale -> restart the burst (not a tone) */
+            app->buzz_edges = 1;
+            app->buzz_period_insn = 0;
+            continue;
+        }
+        app->buzz_period_insn = dinsn;
+        app->buzz_edges++;
+        if(app->buzz_edges >= BUZZ_MIN_EDGES) {
+            if(!app->buzz_logged) {
+                app->buzz_logged = true;
+                FURI_LOG_I(TAG,
+                           "BUZZER? gpio port%u pin%u toggling (%lu edges, ~%lu insn/half) "
+                           "-- CONFIRM on hardware",
+                           (unsigned)port, (unsigned)pin,
+                           (unsigned long)app->buzz_edges,
+                           (unsigned long)app->buzz_period_insn);
+            }
+            /* square-wave burst detected -> request a tentative beep */
+            buzz_request_tone(app);
+        }
     }
 }
 
@@ -549,17 +1129,54 @@ static void mmio_write(void* ctx, uint32_t addr, uint32_t val, int size) {
         uint32_t port = (addr - 0x40006000u) / 36u;
         uint32_t poff = (addr - 0x40006000u) - port * 36u;
         if(port < 16) {
-            if(poff == 0x10)
+            uint16_t before = app->gpio_dout[port]; /* for LED/buzzer edge detect */
+            uint16_t touched = 0; /* which pins this write may have changed */
+            if(poff == 0x10) {
                 app->gpio_dout[port] &= (uint16_t)~val; /* DOUTCLR */
-            else if(poff == 0x14)
+                touched = (uint16_t)val;
+            } else if(poff == 0x14) {
                 app->gpio_dout[port] |= (uint16_t)val; /* DOUTSET */
-            else if(poff == 0x0C)
+                touched = (uint16_t)val;
+            } else if(poff == 0x0C) {
                 app->gpio_dout[port] = (uint16_t)val; /* DOUT */
+                touched = 0xFFFFu;
+            }
             /* TX capture: the firmware bit-bangs the DATA pin (DOUT port B bit0)
              * while it is in TX mode (rf_tx_on). */
             if(app->tx_capturing && port == app->prof->data_port) {
                 bool level = (app->gpio_dout[port] >> app->prof->data_pin) & 1u;
                 tx_capture_data_edge(app, level);
+            }
+            /* mirror the indicator LED (reads the FINAL pin state) */
+            led_mirror(app, port);
+            /* detect a buzzer square-wave on any non-reserved pin that changed */
+            if(touched) buzz_detect_gpio(app, port, touched, before);
+        }
+    } else if(base == 0x40010000u) { /* TIMER0..3: track CNT reset + TOP */
+        uint32_t tn = off >> 10;
+        uint32_t sub = off & 0x3FFu;
+        if(tn < 4) {
+            if(sub == 0x24) {
+                /* firmware writes CNT (usually 0): re-anchor t0 so CNT restarts
+                 * counting from here (faithful free-running model). */
+                app->timer_t0[tn] = app->ninsn;
+            } else if(sub == 0x3C) {
+                app->timer_top[tn] = val ? val : 0xFFFFu; /* TOP (wrap) */
+            } else if(!app->buzz_timer_logged &&
+                      (sub == 0x00 /* CTRL (mode/clk) */ ||
+                       (sub >= 0x30 && sub <= 0x74) /* ROUTE + CCx_CTRL/CCV/CCVB */)) {
+                /* BUZZER? candidate: the firmware programmed a TIMER sub-register
+                 * that is NOT part of our CNT/TOP delay model -- typically a
+                 * compare channel (CCx_CCV, PWM duty) or the output ROUTE/CTRL that
+                 * turns a TIMER CC pin into a PWM tone generator for a piezo buzzer.
+                 * Logged ONCE so a human can correlate it with an audible beep on
+                 * real hardware and confirm the exact register. */
+                app->buzz_timer_logged = true;
+                FURI_LOG_I(TAG,
+                           "BUZZER? timer%u write 0x%08lX=0x%lX (sub=0x%03lX, not CNT/TOP) "
+                           "-- possible PWM tone; CONFIRM on hardware",
+                           (unsigned)tn, (unsigned long)addr, (unsigned long)val,
+                           (unsigned long)sub);
             }
         }
     }
@@ -567,10 +1184,6 @@ static void mmio_write(void* ctx, uint32_t addr, uint32_t val, int size) {
 }
 
 /* ------------------------------------------------------------ minimal NVIC */
-
-static uint32_t read_u32_le(const uint8_t* p) {
-    return (uint32_t)p[0] | ((uint32_t)p[1] << 8) | ((uint32_t)p[2] << 16) | ((uint32_t)p[3] << 24);
-}
 
 /* Current VTOR (SCB->VTOR at 0xE000ED08). We read it via the core (callback). */
 static uint32_t cur_vtor(AppState* app) {
@@ -601,11 +1214,18 @@ static void nvic_tick(AppState* app) {
     app->next_pc = thumb_get_reg(app->cpu, 15);
 }
 
-/* Locates a WFI instruction (0xBF30) in the app code to detect sleep. */
-static uint32_t find_wfi(const uint8_t* flash, uint32_t size) {
+/* Locates a WFI instruction (0xBF30) in the app code to detect sleep. Scans the
+ * flash THROUGH the cache (the flash is paged now, no contiguous buffer). Called
+ * ONCE at init; it reads page-by-page (4KB) so each page is touched at most once
+ * -> at worst num_pages SD reads, then the result is kept in app->wfi_pc_hint.
+ * Returns the flash offset of the first WFI, or 0xFFFFFFFF if none. */
+static uint32_t find_wfi(FlashCache* fc) {
+    uint32_t size = fc->flash_used;
     uint32_t lim = size < 0x20000u ? size : 0x20000u;
     for(uint32_t off = 0x8100u; off + 1 < lim; off += 2) {
-        if(flash[off] == 0x30 && flash[off + 1] == 0xBF) return off;
+        /* 16-bit aligned read via the cache (half-word granularity) */
+        uint32_t hw = fc_read(fc, off, 2);
+        if(hw == 0xBF30u) return off; /* 0x30,0xBF little-endian */
     }
     return 0xFFFFFFFFu;
 }
@@ -740,16 +1360,15 @@ static void tap(AppState* app, int btn) {
     app->knock_active = 0;
 }
 
-/* Cheap hash of the keyfob framebuffer (92x16=1472B) read directly from the
- * emulated RAM, used by nav_button's adaptive settle to detect a UI redraw.
- * Mirrors hash(bytes(self.read_fb())) in pandora_tui.py (read_fb returns the
- * firmware's framebuffer). FNV-1a. */
+/* Cheap hash of the keyfob framebuffer (92x16=1472B), used by nav_button's
+ * adaptive settle to detect a UI redraw. Mirrors hash(bytes(self.read_fb())) in
+ * pandora_tui.py, where read_fb() defaults to the SPI/double-buffered frame: we
+ * hash the STABLE VISIBLE buffer (oled_fb) so the settle only fires on a real
+ * committed frame (end-of-flush), not on mid-flush RAM churn. FNV-1a. */
 static uint32_t fb_hash(AppState* app) {
     uint32_t h = 2166136261u;
-    uint32_t base = app->prof->fb_addr;
     for(uint32_t i = 0; i < (uint32_t)OLED_FB_SIZE; i++) {
-        uint8_t b = (uint8_t)thumb_read_mem(app->cpu, base + i, 1);
-        h ^= b;
+        h ^= app->oled_fb[i];
         h *= 16777619u;
     }
     return h;
@@ -776,6 +1395,7 @@ static uint32_t fb_hash(AppState* app) {
  * Returns true if the injection completed (press+hold+release). */
 static bool nav_button(AppState* app, int btn, bool hold) {
     if(btn < 0 || btn >= BTN_COUNT) return false;
+    FURI_LOG_I(TAG, "nav_button: btn=%d hold=%d unlocked=%d", btn, hold, app->unlocked);
     uint8_t port, pin;
     btn_port_pin(app->prof, btn, &port, &pin);
     app->nav_btn = (uint8_t)btn;
@@ -801,13 +1421,16 @@ static bool nav_button(AppState* app, int btn, bool hold) {
     /* adaptive settle: stop as soon as the firmware redraws the framebuffer. */
     uint32_t prev = fb_hash(app);
     done = 0;
+    bool redrew = false;
     while(done < NAV_SETTLE_INSN) {
         run_burst(app, 60000);
         done += 60000;
         uint32_t cur = fb_hash(app);
-        if(cur != prev && done >= NAV_SETTLE_MIN_INSN) break; /* UI redrew: feedback ready */
+        if(cur != prev && done >= NAV_SETTLE_MIN_INSN) { redrew = true; break; } /* UI redrew */
         prev = cur;
     }
+    FURI_LOG_I(TAG, "nav_button: done btn=%d completed=%d redrew=%d settle_insn=%llu",
+               btn, completed, redrew, (unsigned long long)done);
     return completed;
 }
 
@@ -878,12 +1501,16 @@ static bool auto_unlock(AppState* app) {
 static void render_oled(AppState* app) {
     furi_mutex_acquire(app->fb_mutex, FuriWaitForever);
     memset(app->screen, 0, FB_SIZE);
-    uint32_t fb = app->prof->fb_addr;
+    /* Read the STABLE VISIBLE buffer (double buffering), NOT the firmware RAM.
+     * oled_fb only changes in oled_commit() (on the CONTENT 0xAF of a flush), so
+     * it is always a COHERENT, non-blank frame -> no partial/black frames ->
+     * no flicker/overwrite. (See the OLED capture block above and the fix notes
+     * ported from emu/pandora_tui.py.) */
+    const uint8_t* fbv = app->oled_fb;
     const int x_off = (SCREEN_W - OLED_COLS) / 2; /* center 92 in 128 => 18 */
     for(int page = 0; page < OLED_PAGES; page++) {
         for(int col = 0; col < OLED_COLS; col++) {
-            uint32_t a = fb + (uint32_t)(page * OLED_COLS + col);
-            uint8_t v = (uint8_t)thumb_read_mem(app->cpu, a, 1);
+            uint8_t v = fbv[page * OLED_COLS + col];
             for(int k = 0; k < 4; k++) {
                 /* pixel level = popcount of the 2 bits (2k, 2k+1) */
                 int lvl = ((v >> (2 * k)) & 1) + ((v >> (2 * k + 1)) & 1);
@@ -939,10 +1566,22 @@ static uint8_t poll_raw_keys(void) {
         default: break;
         }
     }
+    /* DIAG: log raw key state only on change, so we can confirm on hardware that
+     * button presses are actually reaching the app (debug level). */
+    static uint8_t s_last_keys = 0;
+    if(keys != s_last_keys) {
+        FURI_LOG_D(TAG, "poll_raw_keys: 0x%02X (was 0x%02X)", keys, s_last_keys);
+        s_last_keys = keys;
+    }
     return keys;
 }
 
 /* ------------------------------------------------------------ load + boot */
+
+/* Canonical flat flash image on the SD (flash_used bytes, gaps=0xFF). The flash
+ * cache pages 4KB blocks from here at runtime. Lives in the app data dir. */
+#define PA_DATA_DIR "/ext/apps_data/pandora_arm"
+#define PA_FLASH_BIN PA_DATA_DIR "/flash.bin"
 
 typedef enum { LoadOk, LoadIoError, LoadNoMem, LoadBadFormat } LoadResult;
 
@@ -956,9 +1595,11 @@ static int hexbyte(const char* s) {
     return (hi << 4) | lo;
 }
 
-/* Processes ONE line of Intel HEX (without the leading ':') writing to flash.
- * Updates *ext_lin. Returns 1 if it was EOF, 0 if next, -1 on error. */
-static int ihex_line(const char* ln, size_t len, uint8_t* flash, uint32_t flash_size,
+/* Processes ONE line of Intel HEX (without the leading ':') writing the decoded
+ * data bytes into the open flat temp file `out` by absolute address (seek+write).
+ * Updates *ext_lin. Returns 1 if it was EOF, 0 if next, -1 on error. The temp
+ * file is pre-filled with 0xFF, so records can arrive out of order safely. */
+static int ihex_line(const char* ln, size_t len, File* out, uint32_t flash_size,
                      uint32_t* ext_lin) {
     if(len < 10) return 0; /* line too short: ignore (stray CR/LF) */
     int count = hexbyte(ln);
@@ -970,30 +1611,64 @@ static int ihex_line(const char* ln, size_t len, uint8_t* flash, uint32_t flash_
     const char* data = ln + 8;
     if(rtype == 0x00) { /* data */
         uint32_t base = *ext_lin + addr;
+        if(base >= flash_size) return 0; /* entirely above the used flash: skip */
+        /* decode into a small local buffer, then one seek + one write */
+        uint8_t buf[256];
+        int n = 0;
         for(int k = 0; k < count; k++) {
             int b = hexbyte(data + k * 2);
             if(b < 0) return -1;
-            if(base + (uint32_t)k < flash_size) flash[base + k] = (uint8_t)b;
+            if(base + (uint32_t)k < flash_size && n < (int)sizeof(buf))
+                buf[n++] = (uint8_t)b;
+        }
+        if(n > 0) {
+            if(!storage_file_seek(out, base, true)) return -1;
+            if(storage_file_write(out, buf, (size_t)n) != (size_t)n) return -1;
         }
     } else if(rtype == 0x01) { /* EOF */
         return 1;
-    } else if(rtype == 0x04) { /* ext linear addr */
+    } else if(rtype == 0x02) { /* ext SEGMENT addr: base = (seg << 4) */
+        /* pmax's .hex uses this form (:020000021000 -> 0x10000) to reach the
+         * code above 0x10000. Without it the upper flash (pmax code up to
+         * 0x150FF) would be written to the wrong, low addresses. */
+        int b0 = hexbyte(data), b1 = hexbyte(data + 2);
+        if(b0 < 0 || b1 < 0) return -1;
+        *ext_lin = (((uint32_t)b0 << 8) | (uint32_t)b1) << 4;
+    } else if(rtype == 0x04) { /* ext LINEAR addr: base = (hi << 16) */
         int b0 = hexbyte(data), b1 = hexbyte(data + 2);
         if(b0 < 0 || b1 < 0) return -1;
         *ext_lin = (((uint32_t)b0 << 8) | (uint32_t)b1) << 16;
     }
-    /* other types (02/03/05): ignore */
+    /* other types (03/05): ignore */
     return 0;
 }
 
-/* Loads the firmware by STREAMING from the SD (does NOT read the whole file to
- * RAM: the .hex files can be 600KB+ and the Flipper has little free heap). The
- * flash buffer is allocated to the real size the firmware uses (flash_used of
- * the profile). */
-static LoadResult load_firmware(AppState* app, Storage* storage, const char* path) {
-    File* f = storage_file_alloc(storage);
-    LoadResult res = LoadIoError;
+/* Pre-fills the open temp file with `size` bytes of 0xFF (open-bus value of the
+ * unused flash). Done in chunks; returns false on any write error. */
+static bool fill_file_ff(File* out, uint32_t size) {
+    static uint8_t ff[512];
+    memset(ff, 0xFF, sizeof(ff));
+    if(!storage_file_seek(out, 0, true)) return false;
+    uint32_t left = size;
+    while(left) {
+        size_t n = left < sizeof(ff) ? left : sizeof(ff);
+        if(storage_file_write(out, ff, n) != n) return false;
+        left -= (uint32_t)n;
+    }
+    return true;
+}
+
+/* Normalises the chosen firmware into the canonical FLAT temp .bin on the SD
+ * (flash_used bytes, gaps=0xFF). STREAMS from the source (the .hex can be 600KB+;
+ * the Flipper has little heap) and writes the flat image by absolute address.
+ * This is done ONCE at load; the flash cache then pages 4KB blocks from the flat
+ * file, never re-parsing Intel HEX. Robust and format-agnostic. */
+static LoadResult flatten_firmware(AppState* app, Storage* storage, const char* path) {
     const uint32_t flash_size = app->prof->flash_used;
+    File* f = storage_file_alloc(storage);
+    File* out = storage_file_alloc(storage);
+    LoadResult res = LoadIoError;
+    bool out_open = false;
     do {
         if(!storage_file_open(f, path, FSAM_READ, FSOM_OPEN_EXISTING)) break;
         uint64_t fsize = storage_file_size(f);
@@ -1002,15 +1677,12 @@ static LoadResult load_firmware(AppState* app, Storage* storage, const char* pat
             break;
         }
 
-        app->flash = (uint8_t*)safe_malloc(flash_size);
-        if(!app->flash) {
-            FURI_LOG_E(TAG, "no heap for flash (%lu B)", (unsigned long)flash_size);
-            res = LoadNoMem;
-            break;
-        }
-        memset(app->flash, 0xFF, flash_size);
+        storage_common_mkdir(storage, PA_DATA_DIR); /* ok if it already exists */
+        if(!storage_file_open(out, PA_FLASH_BIN, FSAM_READ_WRITE, FSOM_CREATE_ALWAYS)) break;
+        out_open = true;
+        if(!fill_file_ff(out, flash_size)) break; /* gaps/open-bus = 0xFF */
 
-        /* detect format by reading the first byte */
+        /* detect format by the first byte */
         uint8_t first = 0;
         if(storage_file_read(f, &first, 1) != 1) break;
         storage_file_seek(f, 0, true);
@@ -1021,7 +1693,8 @@ static LoadResult load_firmware(AppState* app, Storage* storage, const char* pat
         size_t rd;
 
         if(first == ':') {
-            /* Intel HEX: read in chunks and parse by lines (streaming). */
+            /* Intel HEX: read in chunks and parse by lines (streaming) ->
+             * seek+write each data record into the flat temp file. */
             size_t linepos = 0;
             uint32_t ext_lin = 0;
             bool eof_rec = false;
@@ -1033,7 +1706,7 @@ static LoadResult load_firmware(AppState* app, Storage* storage, const char* pat
                         linepos = 0; /* start of record */
                     } else if(ch == '\n' || ch == '\r') {
                         if(linepos > 0) {
-                            int r = ihex_line(line, linepos, app->flash, flash_size, &ext_lin);
+                            int r = ihex_line(line, linepos, out, flash_size, &ext_lin);
                             if(r < 0) { err = true; break; }
                             if(r == 1) { eof_rec = true; break; }
                             linepos = 0;
@@ -1049,19 +1722,197 @@ static LoadResult load_firmware(AppState* app, Storage* storage, const char* pat
                 break;
             }
         } else {
-            /* plain binary: copy in chunks directly to flash */
+            /* plain binary: copy the first flash_size bytes verbatim. */
+            if(!storage_file_seek(out, 0, true)) break;
             uint32_t off = 0;
-            while((rd = storage_file_read(f, chunk, sizeof(chunk))) > 0) {
-                for(size_t i = 0; i < rd && off < flash_size; i++, off++)
-                    app->flash[off] = chunk[i];
-                if(off >= flash_size) break;
+            bool werr = false;
+            while(off < flash_size && (rd = storage_file_read(f, chunk, sizeof(chunk))) > 0) {
+                size_t n = rd;
+                if(off + n > flash_size) n = flash_size - off;
+                if(storage_file_write(out, chunk, n) != n) { werr = true; break; }
+                off += (uint32_t)n;
             }
+            if(werr) break;
         }
         res = LoadOk;
     } while(false);
+    if(out_open) storage_file_close(out);
+    storage_file_free(out);
     storage_file_close(f);
     storage_file_free(f);
     return res;
+}
+
+/* ---------------------------------------------------------------- FlashCache */
+
+/* Reads one 4KB page from the flat .bin into `dst`. A short read (last partial
+ * page / SD hiccup) is padded with 0xFF (open-bus). Returns false on seek/IO
+ * fault only. */
+static bool fc_read_page(FlashCache* fc, uint32_t page, uint8_t* dst) {
+    fc->miss_count++;
+    uint32_t base = page * FLASH_PAGE_SIZE;
+    if(!storage_file_seek(fc->file, base, true)) return false;
+    size_t got = storage_file_read(fc->file, dst, FLASH_PAGE_SIZE);
+    if(got < FLASH_PAGE_SIZE) memset(dst + got, 0xFF, FLASH_PAGE_SIZE - got);
+    return true;
+}
+
+/* Allocates the cache slots (each an independent 4KB safe_malloc -> small blocks
+ * that fit a fragmented heap) and the bookkeeping arrays, leaving FLASH_HEAP_RESERVE
+ * free for the GUI/system. If every page gets a slot the flash is fully resident
+ * (no eviction). Returns LoadOk / LoadNoMem. Faithful port of FlipperGB's cache
+ * init (rom_load slot loop). */
+static LoadResult fc_init(AppState* app) {
+    FlashCache* fc = &app->fc;
+    fc->flash_used = app->prof->flash_used;
+    fc->num_pages = (fc->flash_used + FLASH_PAGE_SIZE - 1) / FLASH_PAGE_SIZE;
+    fc->use_counter = 0;
+    fc->miss_count = 0;
+    fc->num_slots = 0;
+    fc->fully_resident = false;
+
+    fc->file = storage_file_alloc(app->storage);
+    if(!storage_file_open(fc->file, PA_FLASH_BIN, FSAM_READ, FSOM_OPEN_EXISTING)) {
+        FURI_LOG_E(TAG, "flash cache: cannot open %s", PA_FLASH_BIN);
+        return LoadIoError;
+    }
+
+    /* bookkeeping arrays sized for the best case (all pages resident). Tiny:
+     * num_pages * (ptr + 2*u32) ~= 22 * 12 = 264 B. */
+    uint32_t cap = fc->num_pages;
+    fc->slots = (uint8_t**)safe_malloc(cap * sizeof(uint8_t*));
+    fc->slot_page = (uint32_t*)safe_malloc(cap * sizeof(uint32_t));
+    fc->slot_use = (uint32_t*)safe_malloc(cap * sizeof(uint32_t));
+    if(!fc->slots || !fc->slot_page || !fc->slot_use) return LoadNoMem;
+
+    /* Allocate as many 4KB slots as fit, keeping a heap reserve free for the GUI
+     * takeover/system. Degrade the reserve (10K -> 8K -> 6K) if the first pass
+     * can't reach FLASH_MIN_SLOTS -- same strategy as FlipperGB's rom_load. Each
+     * slot is its own small malloc (no big contiguous block). */
+    static const size_t reserve_ladder[3] = {FLASH_HEAP_RESERVE, 8u * 1024u, 6u * 1024u};
+    for(int step = 0; step < 3; step++) {
+        size_t reserve = reserve_ladder[step];
+        while(fc->num_slots < cap) {
+            if(memmgr_get_free_heap() < reserve + FLASH_PAGE_SIZE + ALLOC_MARGIN) break;
+            uint8_t* slot = (uint8_t*)safe_malloc(FLASH_PAGE_SIZE);
+            if(!slot) break;
+            fc->slots[fc->num_slots] = slot;
+            fc->slot_page[fc->num_slots] = 0xFFFFFFFFu; /* empty */
+            fc->slot_use[fc->num_slots] = 0;
+            fc->num_slots++;
+        }
+        if(fc->num_slots >= FLASH_MIN_SLOTS || fc->num_slots >= fc->num_pages) break;
+        FURI_LOG_W(TAG, "flash cache: degrading heap reserve to %uK for more slots",
+                   (unsigned)(reserve_ladder[step + 1 < 3 ? step + 1 : step] / 1024u));
+    }
+
+    if(fc->num_slots < FLASH_MIN_SLOTS && fc->num_slots < fc->num_pages) {
+        FURI_LOG_E(TAG, "flash cache: only %u slots (need >= %u)", fc->num_slots,
+                   (unsigned)FLASH_MIN_SLOTS);
+        return LoadNoMem;
+    }
+
+    if(fc->num_slots >= fc->num_pages) {
+        /* fully resident: pre-load every page, slot i == page i, no eviction */
+        for(uint32_t i = 0; i < fc->num_pages; i++) {
+            if(!fc_read_page(fc, i, fc->slots[i])) return LoadIoError;
+            fc->slot_page[i] = i;
+            fc->slot_use[i] = ++fc->use_counter;
+        }
+        fc->fully_resident = true;
+        /* the flat file is no longer needed for runtime paging */
+        storage_file_close(fc->file);
+        storage_file_free(fc->file);
+        fc->file = NULL;
+        FURI_LOG_I(TAG, "flash cache: fully resident (%lu pages x 4KB)",
+                   (unsigned long)fc->num_pages);
+    } else {
+        /* streaming LRU: warm the first num_slots pages (the boot/copy-to-RAM
+         * region is the low flash, so sequential warming is a good seed). */
+        for(uint16_t i = 0; i < fc->num_slots; i++) {
+            if(!fc_read_page(fc, i, fc->slots[i])) return LoadIoError;
+            fc->slot_page[i] = i;
+            fc->slot_use[i] = ++fc->use_counter;
+        }
+        FURI_LOG_I(TAG, "flash cache: streaming LRU (%u slots / %lu pages)",
+                   fc->num_slots, (unsigned long)fc->num_pages);
+    }
+    return LoadOk;
+}
+
+static void fc_deinit(FlashCache* fc) {
+    if(fc->slots) {
+        for(uint16_t i = 0; i < fc->num_slots; i++)
+            if(fc->slots[i]) free(fc->slots[i]);
+        free(fc->slots);
+        fc->slots = NULL;
+    }
+    if(fc->slot_page) { free(fc->slot_page); fc->slot_page = NULL; }
+    if(fc->slot_use) { free(fc->slot_use); fc->slot_use = NULL; }
+    if(fc->file) {
+        storage_file_close(fc->file);
+        storage_file_free(fc->file);
+        fc->file = NULL;
+    }
+    fc->num_slots = 0;
+}
+
+/* Streams `page` into the LRU victim slot and returns its index. Eviction is
+ * plain LRU (oldest slot_use). Unlike FlipperGB there are NO mapped-pointer
+ * invariants to protect here: every flash access resolves a single byte and
+ * returns immediately (the core copies the byte out; it never holds a page
+ * pointer across instructions), so any slot except the just-loaded ones is a
+ * safe victim. Faithful port of FlipperGB's rc_fill LRU core. */
+static uint16_t fc_fill(FlashCache* fc, uint32_t page) {
+    uint16_t lru = 0;
+    uint32_t lru_use = 0xFFFFFFFFu;
+    for(uint16_t i = 0; i < fc->num_slots; i++) {
+        if(fc->slot_use[i] < lru_use) {
+            lru_use = fc->slot_use[i];
+            lru = i;
+        }
+    }
+    if(!fc_read_page(fc, page, fc->slots[lru])) {
+        /* IO fault: fill with open-bus so we never serve stale data */
+        memset(fc->slots[lru], 0xFF, FLASH_PAGE_SIZE);
+    }
+    fc->slot_page[lru] = page;
+    fc->slot_use[lru] = ++fc->use_counter;
+    return lru;
+}
+
+/* Returns a pointer to the 4KB slot that holds `page`, loading it on a miss.
+ * O(1) when fully resident; otherwise a short linear scan + LRU fill. */
+static const uint8_t* fc_page_ptr(FlashCache* fc, uint32_t page) {
+    if(fc->fully_resident) return fc->slots[page]; /* slot i == page i */
+    for(uint16_t i = 0; i < fc->num_slots; i++) {
+        if(fc->slot_page[i] == page) {
+            fc->slot_use[i] = ++fc->use_counter;
+            return fc->slots[i];
+        }
+    }
+    return fc->slots[fc_fill(fc, page)];
+}
+
+/* Reads up to `size` (1/2/4) bytes of emulated flash at `addr` through the cache.
+ * Bytes at/above flash_used (the unused 0xFF region) are returned as 0xFF WITHOUT
+ * touching the cache. Handles the (rare) page-straddling access byte-by-byte. */
+static uint32_t fc_read(FlashCache* fc, uint32_t addr, int size) {
+    uint32_t v = 0;
+    for(int i = 0; i < size; i++) {
+        uint32_t a = addr + (uint32_t)i;
+        uint8_t b;
+        if(a >= fc->flash_used) {
+            b = 0xFF; /* open-bus: unused flash, do not pollute the cache */
+        } else {
+            uint32_t page = a / FLASH_PAGE_SIZE;
+            uint32_t poff = a % FLASH_PAGE_SIZE;
+            const uint8_t* p = fc_page_ptr(fc, page);
+            b = p[poff];
+        }
+        v |= (uint32_t)b << (8 * i);
+    }
+    return v;
 }
 
 static const ArmProfile* pick_profile(const char* path) {
@@ -1076,6 +1927,10 @@ static const ArmProfile* pick_profile(const char* path) {
 
 /* ------------------------------------------------------------ CC1101 RF */
 
+/* CC1101 OOK/ASK preset (650kHz BW, async serial). Register pairs {addr,val}
+ * followed by the 8-byte PATABLE. Identical to the Flipper's
+ * subghz_device_cc1101_preset_ook_650khz_async_regs. Used for Pandora OOK
+ * firmwares and the vast majority of OOK sub-GHz remotes. */
 static const uint8_t PRESET_OOK650[] = {
     0x02, 0x0D, 0x07, 0x04, 0x08, 0x32, 0x0B, 0x06, 0x10, 0xF8, 0x11, 0x32, 0x12, 0x30,
     0x14, 0x00, 0x15, 0x00, 0x18, 0x18, 0x19, 0x16, 0x1B, 0x07, 0x1C, 0x00, 0x1D, 0x91,
@@ -1083,18 +1938,275 @@ static const uint8_t PRESET_OOK650[] = {
     0x00, 0x00, 0x00,
 };
 
+/* CC1101 2-FSK preset (async serial). Register pairs {addr,val} + 8-byte PATABLE.
+ * Derived from the Flipper's subghz_device_cc1101_preset_2fsk_dev47_6khz_async_regs
+ * (deviation ~47.6 kHz, RxBW 270.8 kHz, data rate ~4.8 kBaud). This is a
+ * best-effort generic 2-FSK/GFSK front-end: the CC1101 cannot reproduce the exact
+ * Si4432 deviation/data-rate programmed by every firmware, but it switches the
+ * modem into FSK demod/mod so FSK Pandora variants are heard/sent instead of
+ * being silently decoded as OOK. The wide deviation/BW tolerates the most
+ * variants. Register meanings:
+ *   0x02 IOCFG0=0x0D (async serial data in/out), 0x0B FSCTRL1=0x06,
+ *   0x08 PKTCTRL0=0x32 (async continuous, no whitening), 0x07 PKTCTRL1=0x04,
+ *   0x14 MDMCFG0=0x00, 0x13 MDMCFG1=0x02, 0x12 MDMCFG2=0x04 (2-FSK, no sync),
+ *   0x11 MDMCFG3=0x83, 0x10 MDMCFG4=0x67, 0x15 DEVIATN=0x47 (~47.6 kHz),
+ *   0x18 MCSM0=0x18, 0x19 FOCCFG=0x16, 0x1D AGCCTRL0=0x91, 0x1C AGCCTRL1=0x00,
+ *   0x1B AGCCTRL2=0x07, 0x20 WORCTRL=0xFB, 0x22 FREND0=0x10, 0x21 FREND1=0x56. */
+static const uint8_t PRESET_2FSK[] = {
+    0x02, 0x0D, 0x0B, 0x06, 0x08, 0x32, 0x07, 0x04, 0x14, 0x00, 0x13, 0x02, 0x12, 0x04,
+    0x11, 0x83, 0x10, 0x67, 0x15, 0x47, 0x18, 0x18, 0x19, 0x16, 0x1D, 0x91, 0x1C, 0x00,
+    0x1B, 0x07, 0x20, 0xFB, 0x22, 0x10, 0x21, 0x56, 0x00, 0x00, 0xC0, 0x00, 0x00, 0x00,
+    0x00, 0x00, 0x00, 0x00, 0x00,
+};
+
+/* Select and (re)load the CC1101 modulation preset that matches what the firmware
+ * programmed into the Si4432 modulation type (REG[0x71] modtyp):
+ *   00 unmodulated / 01 OOK -> OOK preset,
+ *   10 FSK / 11 GFSK        -> 2-FSK preset (closest the CC1101 async modem can do).
+ * The preset is reloaded ONLY when it changes AND the radio is idle. Loading a
+ * custom preset drives the SPI bus and resets the modem, so callers must stop any
+ * active async RX/TX and go idle first (handled by rf_reapply_preset). Returns
+ * true if the loaded preset changed. */
+static bool cc_preset_for_modtyp(uint8_t modtyp) {
+    /* returns true if the desired preset is 2-FSK */
+    return (modtyp == 2 || modtyp == 3);
+}
+
 static void radio_init(AppState* app) {
-    app->frequency = 433920000;
+    app->frequency = 433920000; /* default / fallback until the firmware sets it */
     furi_hal_subghz_reset();
     furi_hal_subghz_load_custom_preset(PRESET_OOK650);
     furi_hal_subghz_set_frequency_and_path(app->frequency);
     furi_hal_subghz_idle();
     app->radio_on = true;
     app->rf_mode = RfModeOff;
-    FURI_LOG_I(TAG, "CC1101 init OOK650 @%lu Hz", (unsigned long)app->frequency);
+    /* Default to "RF follows firmware": the CC1101 mode and frequency track the
+     * Si4432 the firmware programs over SPI. Manual hold-BACK cycling is a
+     * diagnostic override (it clears this flag). */
+    app->rf_follow = true;
+    app->si_modtyp = 1; /* assume OOK until the firmware says otherwise */
+    app->si_dtmod = DtModDirectGpio; /* assume bit-bang until REG[0x71] says FIFO */
+    app->cc_preset = CcPresetOok;
+    FURI_LOG_I(TAG, "CC1101 init OOK650 @%lu Hz (RF follows firmware)",
+               (unsigned long)app->frequency);
 }
 
-static void rx_bridge_stop(AppState* app);
+/* Re-apply the CC1101 modulation preset to match the current Si4432 modtyp. Must
+ * be called with the radio IDLE-able; it stops any active async RX/TX, goes idle,
+ * loads the preset, restores the frequency, and leaves the radio idle. The caller
+ * is responsible for restarting RX/TX afterwards if needed. This is invoked right
+ * before starting a TX or RX so the radio is always in the modulation the
+ * firmware asked for. */
+static void rf_reapply_preset(AppState* app) {
+    if(!app->radio_on) return;
+    bool want_fsk = cc_preset_for_modtyp(app->si_modtyp);
+    CcPreset want = want_fsk ? CcPreset2Fsk : CcPresetOok;
+    if(want == app->cc_preset) return; /* already loaded: nothing to do */
+
+    /* Loading a custom preset must happen on an idle radio. */
+    if(app->tx_active) {
+        furi_hal_subghz_stop_async_tx();
+        app->tx_active = false;
+    }
+    if(app->rx_running) {
+        furi_hal_subghz_stop_async_rx();
+        /* keep app->rx_running as-is: the caller decides whether to restart */
+    }
+    furi_hal_subghz_idle();
+    furi_hal_subghz_load_custom_preset(want_fsk ? PRESET_2FSK : PRESET_OOK650);
+    furi_hal_subghz_set_frequency_and_path(app->frequency);
+    furi_hal_subghz_idle();
+    app->cc_preset = want;
+    static const char* const MODN[4] = {"OOK(unmod)", "OOK", "FSK", "GFSK"};
+    FURI_LOG_I(TAG,
+               "RF: modulation %s (REG71=0x%02X devi=%lu Hz) -> CC1101 preset %s",
+               MODN[app->si_modtyp & 3], app->si.regs[0x71],
+               (unsigned long)app->si_devi_hz, want_fsk ? "2FSK" : "OOK650");
+}
+
+/* --------------------------------------------- Si4432 -> CC1101 freq mapping
+ * Si4432 Rev B1 datasheet, "Frequency Control" (REG 0x75..0x77):
+ *   fb    = REG75 & 0x1F            (frequency band, 5 bits)
+ *   hbsel = (REG75 >> 5) & 1        (high band select; 0: low, 1: high band)
+ *   fc    = (REG76 << 8) | REG77    (nominal carrier, 16 bits)
+ * Carrier:
+ *   fcarrier = 10 MHz * (hbsel + 1) * (fb + 24 + fc/64000)
+ * i.e. low band  (hbsel=0): 240..480 MHz in steps,
+ *      high band (hbsel=1): 480..960 MHz.
+ * We compute in Hz with integer math (the fc/64000 term expanded):
+ *   fHz = 10e6*(hbsel+1)*(fb+24) + 10e6*(hbsel+1)*fc/64000
+ *       = (hbsel+1) * ( (fb+24)*10000000 + fc*(10000000/64000) )
+ *   10000000/64000 = 156.25 -> use fc*15625/100 to keep precision. */
+static uint32_t si4432_regs_to_hz(uint8_t reg75, uint8_t reg76, uint8_t reg77) {
+    uint32_t fb = (uint32_t)(reg75 & 0x1F);
+    uint32_t hbsel = (uint32_t)((reg75 >> 5) & 1u);
+    uint32_t fc = ((uint32_t)reg76 << 8) | (uint32_t)reg77;
+    /* base term: (fb+24) * 10 MHz */
+    uint64_t base = (uint64_t)(fb + 24u) * 10000000ull;
+    /* fc term: fc * 156.25 Hz = fc * 15625 / 100 */
+    uint64_t fcterm = ((uint64_t)fc * 15625ull) / 100ull;
+    uint64_t hz = (base + fcterm) * (uint64_t)(hbsel + 1u);
+    return (uint32_t)hz;
+}
+
+/* Clamp to a CC1101 band the Flipper supports (300-348, 387-464, 779-928 MHz).
+ * Returns true if the value falls inside a valid band. */
+static bool cc1101_band_ok(uint32_t hz) {
+    return (hz >= 300000000u && hz <= 348000000u) ||
+           (hz >= 387000000u && hz <= 464000000u) ||
+           (hz >= 779000000u && hz <= 928000000u);
+}
+
+/* Re-map the CC1101 carrier from the firmware's current Si4432 REG[0x75..0x77].
+ * Keeps the last valid frequency (default 433.92 MHz) if the computed value is
+ * out of band or the registers are still zero (firmware has not programmed the
+ * synth yet -> do NOT disturb the boot default). Re-tunes the CC1101 live if a
+ * receive/transmit is active. */
+static void rf_follow_apply_freq(AppState* app) {
+    uint8_t r75 = app->si.regs[0x75];
+    uint8_t r76 = app->si.regs[0x76];
+    uint8_t r77 = app->si.regs[0x77];
+    if(r75 == 0 && r76 == 0 && r77 == 0) return; /* synth not programmed yet */
+    uint32_t hz = si4432_regs_to_hz(r75, r76, r77);
+    if(!cc1101_band_ok(hz)) {
+        FURI_LOG_W(TAG,
+                   "RF: firmware freq %lu Hz out of CC1101 band; keeping %lu Hz "
+                   "(REG75=0x%02X 76=0x%02X 77=0x%02X)",
+                   (unsigned long)hz, (unsigned long)app->frequency, r75, r76, r77);
+        return;
+    }
+    if(hz == app->frequency) return; /* no change */
+    app->frequency = hz;
+    FURI_LOG_I(TAG, "RF: firmware set freq -> %lu Hz (REG75=0x%02X 76=0x%02X 77=0x%02X)",
+               (unsigned long)hz, r75, r76, r77);
+    /* Re-tune live if the radio is mid-RX/TX so the new carrier takes effect. */
+    if(app->radio_on && app->rx_running) {
+        if(app->si_dtmod == DtModFifo) {
+            /* packet receiver: idle, retune, re-arm */
+            furi_hal_subghz_idle();
+            furi_hal_subghz_set_frequency_and_path(app->frequency);
+            furi_hal_subghz_flush_rx();
+            furi_hal_subghz_rx();
+        } else {
+            furi_hal_subghz_stop_async_rx();
+            furi_hal_subghz_idle();
+            furi_hal_subghz_set_frequency_and_path(app->frequency);
+            furi_hal_subghz_start_async_rx(radio_rx_callback, app);
+        }
+    } else if(app->radio_on) {
+        furi_hal_subghz_idle();
+        furi_hal_subghz_set_frequency_and_path(app->frequency);
+    }
+}
+
+/* Map the firmware's Si4432 operating mode (REG[0x07]) onto the CC1101 when the
+ * "follow firmware" bridge is active. The firmware driving its Si4432 into RX is
+ * what makes the Flipper start receiving real air traffic AUTOMATICALLY, no
+ * manual hold-BACK needed.
+ *   new_mode: 3=TX, 2=RX, 1=READY, 0=IDLE (from si4432_write). */
+static void rf_follow_apply_mode(AppState* app, int new_mode) {
+    if(!app->rf_follow || !app->radio_on) return;
+    /* DATA-SOURCE ROUTING: dtmod (REG[0x71] bits[7:6]) decides the path at runtime.
+     * FIFO (dtmod==10) uses the packet FIFO bridge; everything else (direct GPIO /
+     * SDI / PN9) uses the existing bit-bang edge path. This lets ONE codebase
+     * support any firmware regardless of the profile's rf_sw_demod hint. */
+    bool fifo_mode = (app->si_dtmod == DtModFifo);
+    switch(new_mode) {
+    case 2: /* RX */
+        if(fifo_mode) {
+            /* FIFO RX: switch the CC1101 to the firmware's modulation, start the
+             * packet receiver, and poll it from the main loop (fifo_rx_poll).
+             * Received packets are pushed into si_rx_fifo + IRQ flags so the
+             * firmware's FIFO-drain path sees a real frame. */
+            app->rf_mode = RfModeRx;
+            if(!app->rx_running) {
+                if(app->tx_active) {
+                    furi_hal_subghz_stop_async_tx();
+                    app->tx_active = false;
+                }
+                rf_reapply_preset(app); /* OOK/FSK as the firmware asked */
+                furi_hal_subghz_idle();
+                furi_hal_subghz_set_frequency_and_path(app->frequency);
+                furi_hal_subghz_flush_rx();
+                furi_hal_subghz_rx();
+                app->rx_running = true;
+                FURI_LOG_I(TAG, "RF: CC1101 FIFO RX started @%lu Hz (firmware rf_rx_on)",
+                           (unsigned long)app->frequency);
+            }
+            break;
+        }
+        /* Direct/bit-bang RX via the firmware SW demodulator ISR. Requires a
+         * known demod ISR (profiles with rf_sw_demod). */
+        if(!app->prof->rf_sw_demod) {
+            FURI_LOG_W(TAG, "RF: firmware rf_rx_on but SW-demod RX not available on %s "
+                            "(direct mode, no demod ISR mapped)",
+                       app->prof->name);
+            break;
+        }
+        app->rf_mode = RfModeRx;
+        if(!app->rx_running) {
+            rf_reapply_preset(app); /* match modulation before RX */
+            rx_bridge_start(app);
+            if(app->rx_running)
+                FURI_LOG_I(TAG, "RF: CC1101 RX started @%lu Hz (firmware rf_rx_on)",
+                           (unsigned long)app->frequency);
+        }
+        break;
+    case 3: /* TX */
+        if(app->rx_running) {
+            if(fifo_mode) {
+                furi_hal_subghz_idle();
+                app->rx_running = false;
+            } else {
+                rx_bridge_stop(app);
+            }
+        }
+        app->rf_mode = RfModeTx;
+        if(fifo_mode) {
+            /* FIFO TX: the firmware already wrote the frame bytes to REG[0x7F]
+             * (buffered in si_tx_fifo). Transmit them now as an edge train on the
+             * firmware's modulation/data-rate. */
+            rf_reapply_preset(app);
+            fifo_tx_transmit(app);
+            break;
+        }
+        /* Direct/bit-bang TX: capture the DATA pin edges and replay them. */
+        app->tx_head = app->tx_tail = 0;
+        app->tx_edges_frame = 0;
+        rf_reapply_preset(app); /* match modulation before TX */
+        tx_on_si_mode(app, 3); /* begin capturing DATA edges now */
+        break;
+    case 1: /* READY */
+    case 0: /* IDLE */
+    default:
+        if(app->rx_running) {
+            if(fifo_mode) {
+                /* stop the packet receiver */
+                furi_hal_subghz_idle();
+                app->rx_running = false;
+                FURI_LOG_I(TAG, "RF: CC1101 FIFO RX stopped (firmware idle)");
+            } else {
+                rx_bridge_stop(app);
+            }
+        }
+        if(app->tx_capturing || app->tx_active ||
+           app->tx_head != app->tx_tail) {
+            /* A TX frame is being captured / is pending / is in flight. Close the
+             * capture but STAY in RfModeTx so tx_bridge_flush can replay & idle
+             * the CC1101 when async_tx completes. Do not force idle here. */
+            if(app->tx_capturing) {
+                app->tx_capturing = false;
+                FURI_LOG_I(TAG, "RF: firmware TX end (follow) %lu edges",
+                           (unsigned long)app->tx_edges_frame);
+            }
+            /* rf_mode left as RfModeTx on purpose */
+        } else {
+            app->rf_mode = RfModeOff;
+            furi_hal_subghz_idle();
+        }
+        break;
+    }
+}
 
 static void radio_deinit(AppState* app) {
     if(!app->radio_on) return;
@@ -1102,7 +2214,16 @@ static void radio_deinit(AppState* app) {
         furi_hal_subghz_stop_async_tx();
         app->tx_active = false;
     }
-    if(app->rx_running) rx_bridge_stop(app);
+    if(app->rx_running) {
+        if(app->si_dtmod == DtModFifo) {
+            /* FIFO RX uses the packet receiver (furi_hal_subghz_rx), not async_rx:
+             * just idle it. */
+            furi_hal_subghz_idle();
+            app->rx_running = false;
+        } else {
+            rx_bridge_stop(app);
+        }
+    }
     furi_hal_subghz_idle();
     furi_hal_subghz_sleep();
     app->radio_on = false;
@@ -1209,12 +2330,183 @@ static void tx_bridge_flush(AppState* app) {
     }
 }
 
+/* ================================================ Si4432 PACKET/FIFO bridge */
+
+/* Compute the Si4432 TX bit period in microseconds from REG[0x6E/0x6F] (TX data
+ * rate) and REG[0x70] bit5 (txdtrtscale). Datasheet:
+ *   txdr[15:0] = (REG6E<<8)|REG6F
+ *   if scaled (REG70 bit5 == 1): rate = txdr * 1e6 / 2^21
+ *   else:                        rate = txdr * 1e6 / 2^16
+ * Returns the bit period in us (clamped to a sane 50..5000 us if the firmware
+ * left the data-rate registers at 0 or an implausible value). */
+static uint32_t si4432_tx_bit_us(AppState* app) {
+    uint32_t txdr = ((uint32_t)app->si.regs[0x6E] << 8) | (uint32_t)app->si.regs[0x6F];
+    bool scaled = (app->si.regs[0x70] & 0x20u) != 0;
+    uint32_t bps = 0;
+    if(txdr) {
+        uint64_t num = (uint64_t)txdr * 1000000ull;
+        bps = (uint32_t)(num >> (scaled ? 21 : 16));
+    }
+    if(bps < 200 || bps > 200000) {
+        /* implausible / unset: fall back to ~4.8 kBaud, a common keyfob rate */
+        bps = 4800;
+    }
+    uint32_t us = 1000000u / bps;
+    if(us < 20) us = 20;
+    if(us > 5000) us = 5000;
+    return us;
+}
+
+/* FIFO TX: convert the bytes the firmware wrote to REG[0x7F] (si_tx_fifo) into an
+ * edge train (MSB-first, one bit = one bit-period) and transmit them via the
+ * async_tx engine on the CC1101. This is the portable path (works for both
+ * OOK and 2-FSK presets because async_tx just keys the modem high/low per edge).
+ * Runs edges contiguously; equal adjacent bits are merged into a single longer
+ * level so the ring holds whole frames comfortably. */
+static void fifo_tx_transmit(AppState* app) {
+    if(!app->radio_on) return;
+    if(app->si_tx_fifo_len == 0) {
+        FURI_LOG_W(TAG, "RF: FIFO TX requested but FIFO empty");
+        return;
+    }
+    if(app->tx_active) return; /* a transmission is already in flight */
+    if(!furi_hal_subghz_is_tx_allowed(app->frequency)) {
+        FURI_LOG_E(TAG, "RF: FIFO TX NOT allowed @%lu Hz; dropping %u bytes",
+                   (unsigned long)app->frequency, app->si_tx_fifo_len);
+        app->si_tx_fifo_len = 0;
+        return;
+    }
+    uint32_t bit_us = si4432_tx_bit_us(app);
+    /* Build the edge ring from the FIFO bytes (MSB first). Merge runs of equal
+     * bits into one edge of N*bit_us to save ring slots. */
+    app->tx_head = app->tx_tail = 0;
+    bool cur_level = false;
+    uint32_t run = 0;
+    bool have = false;
+    for(uint32_t i = 0; i < app->si_tx_fifo_len; i++) {
+        uint8_t byte = app->si_tx_fifo[i];
+        for(int b = 7; b >= 0; b--) {
+            bool bit = (byte >> b) & 1u;
+            if(!have) {
+                cur_level = bit;
+                run = 1;
+                have = true;
+            } else if(bit == cur_level) {
+                run++;
+            } else {
+                uint32_t next = (app->tx_head + 1) % TX_RING_LEN;
+                if(next != app->tx_tail) {
+                    app->tx_ring[app->tx_head].level = cur_level;
+                    app->tx_ring[app->tx_head].duration = run * bit_us;
+                    app->tx_head = next;
+                }
+                cur_level = bit;
+                run = 1;
+            }
+        }
+    }
+    if(have) { /* flush the final run */
+        uint32_t next = (app->tx_head + 1) % TX_RING_LEN;
+        if(next != app->tx_tail) {
+            app->tx_ring[app->tx_head].level = cur_level;
+            app->tx_ring[app->tx_head].duration = run * bit_us;
+            app->tx_head = next;
+        }
+    }
+    uint32_t edges = (app->tx_head + TX_RING_LEN - app->tx_tail) % TX_RING_LEN;
+    FURI_LOG_I(TAG, "RF: FIFO TX %u bytes -> CC1101 (%lu edges, bit=%lu us)",
+               app->si_tx_fifo_len, (unsigned long)edges, (unsigned long)bit_us);
+    furi_hal_subghz_idle();
+    furi_hal_subghz_set_frequency_and_path(app->frequency);
+    if(furi_hal_subghz_start_async_tx(radio_tx_callback, app)) {
+        app->tx_active = true;
+        app->fifo_tx_frames++;
+    } else {
+        FURI_LOG_E(TAG, "RF: FIFO start_async_tx failed");
+        app->tx_tail = app->tx_head;
+    }
+    /* the FIFO is consumed; the firmware will refill it for the next frame */
+    app->si_tx_fifo_len = 0;
+}
+
+/* FIFO RX: poll the CC1101 packet pipe. When a packet arrives, copy it into the
+ * Si4432 RX FIFO (si_rx_fifo) that REG[0x7F] reads return, set the Si4432
+ * "packet received" interrupt flags (REG 0x03 bit1 ipkvalid, and REG 0x04 bit1
+ * irxffafull as a secondary hint), and optionally pulse the nIRQ GPIO. The
+ * firmware's FIFO-drain path then reads the frame via REG[0x7F] and the status
+ * via REG 0x03/0x04.
+ *
+ * IRQ NOTE: the exact Si4432 nIRQ line / firmware handler was NOT positively
+ * identified from the RE (the pending DESC "ISR->buffer 0x20000B9C" concerns the
+ * firmware-internal drain, not our side). Measured firmwares (pmax) POLL REG
+ * 0x03/0x04 and the nIRQ GPIO DIN pin, so setting the flags + FIFO is sufficient
+ * for them. We additionally drive the DATA/IRQ GPIO (data_port.data_pin) LOW
+ * (active-low nIRQ convention) as a best-effort wake hint; if a given firmware
+ * truly needs a hardware IRQ vector we leave that as a documented limitation. */
+static void fifo_rx_poll(AppState* app) {
+    if(!app->rx_running || !app->radio_on) return;
+    if(app->si_dtmod != DtModFifo) return;
+    /* Do not clobber a frame the firmware has not finished draining yet. */
+    if(app->si_rx_fifo_len && app->si_rx_fifo_pos < app->si_rx_fifo_len) return;
+    if(!furi_hal_subghz_rx_pipe_not_empty()) return;
+
+    uint8_t buf[SI_FIFO_LEN];
+    uint8_t size = 0;
+    furi_hal_subghz_read_packet(buf, &size);
+    if(size == 0) {
+        furi_hal_subghz_flush_rx();
+        furi_hal_subghz_rx();
+        return;
+    }
+    if(size > SI_FIFO_LEN) size = SI_FIFO_LEN;
+    memcpy(app->si_rx_fifo, buf, size);
+    app->si_rx_fifo_len = size;
+    app->si_rx_fifo_pos = 0;
+    app->rx_events++;
+    app->fifo_rx_frames++;
+
+    /* Si4432 interrupt status: REG 0x03 (Interrupt Status 1) bit1 = ipkvalid
+     * (valid packet received), bit4 = irxffafull (RX FIFO almost full). These
+     * are the flags the firmware polls after seeing nIRQ. They are latched and
+     * cleared on read by si4432_read. */
+    app->si.regs[0x03] |= (1u << 1) | (1u << 4);
+    /* REG 0x04 (Interrupt Status 2): set bit1 as an extra "data present" hint. */
+    app->si.regs[0x04] |= (1u << 1);
+
+    /* Best-effort nIRQ GPIO assert (active-low): drive the Si4432 IRQ/DATA DIN
+     * pin LOW so a firmware that gates on GPIO_PinInGet(nIRQ) sees it asserted. */
+    app->gpio_din[app->prof->data_port] &= (uint16_t)~(1u << app->prof->data_pin);
+
+    FURI_LOG_I(TAG, "RF: FIFO RX %u bytes from CC1101 -> firmware", size);
+    {
+        char line[64];
+        int off = 0;
+        for(uint8_t i = 0; i < size && i < 16; i++) {
+            int w = snprintf(line + off, sizeof(line) - (size_t)off, "%02X", buf[i]);
+            if(w < 0 || (size_t)(off + w) >= sizeof(line)) break;
+            off += w;
+        }
+        FURI_LOG_D(TAG, "RF: FIFO RX frame[0..15]: %s", line);
+    }
+
+    /* re-arm the CC1101 receiver for the next packet */
+    furi_hal_subghz_flush_rx();
+    furi_hal_subghz_rx();
+}
+
 /* ===================================================================== RX bridge */
 
 /* CC1101 callback (runs in IRQ): enqueues the edge. Do NOT block. */
 static void radio_rx_callback(bool level, uint32_t duration, void* context) {
     AppState* app = (AppState*)context;
     RfEdge e = {.level = level, .duration = duration};
+    /* DIAG: count raw edges the CC1101 delivers from the air. If this stays 0
+     * while you press a real remote, the radio is not receiving on this
+     * frequency/modulation (check 433.92 OOK vs your remote's band). If it rises
+     * but no "RX frame decoded" appears, the firmware demodulator rejected it
+     * (wrong protocol: Pandora expects KeeLoq/its own fixed-code families, which
+     * a Princeton/PT2262 remote is NOT). Logged at debug, throttled. */
+    app->rx_events++;
     furi_message_queue_put(app->rx_queue, &e, 0);
 }
 
@@ -1376,7 +2668,26 @@ static void rx_bridge_pump(AppState* app) {
 }
 
 /* Toggles the RF bridge: OFF -> TX -> RX -> OFF. Logged (like PandoraPIC). */
+/* Manual hold-BACK override. Normally the bridge follows the firmware
+ * (app->rf_follow). The first hold-BACK DROPS OUT of follow mode into a manual
+ * diagnostic cycle: FOLLOW -> manual OFF -> TX -> RX -> FOLLOW (re-enables auto).
+ * This preserves the pre-existing OFF/TX/RX cycling while making "follow the
+ * firmware" the default and reachable again at the end of the cycle. */
 static void rf_cycle_mode(AppState* app) {
+    if(app->rf_follow) {
+        /* leaving auto-follow: tear down whatever the firmware had running */
+        app->rf_follow = false;
+        if(app->rx_running) rx_bridge_stop(app);
+        app->tx_capturing = false;
+        if(app->tx_active) {
+            furi_hal_subghz_stop_async_tx();
+            app->tx_active = false;
+        }
+        app->rf_mode = RfModeOff;
+        furi_hal_subghz_idle();
+        FURI_LOG_I(TAG, "RF mode MANUAL/OFF (follow-firmware disabled)");
+        return;
+    }
     switch(app->rf_mode) {
     case RfModeOff:
         app->rf_mode = RfModeTx;
@@ -1385,7 +2696,7 @@ static void rf_cycle_mode(AppState* app) {
         app->tx_edges_frame = 0;
         /* if the firmware is already in TX, start capturing immediately */
         if(app->si.mode == 3) tx_on_si_mode(app, 3);
-        FURI_LOG_I(TAG, "RF mode TX (capture firmware DATA pin)");
+        FURI_LOG_I(TAG, "RF mode TX (manual: capture firmware DATA pin)");
         break;
     case RfModeTx:
         app->tx_capturing = false;
@@ -1396,18 +2707,21 @@ static void rf_cycle_mode(AppState* app) {
         app->rf_mode = RfModeRx;
         rx_bridge_start(app);
         if(!app->rx_running) {
-            /* profile without SW-demod: jump directly to OFF */
+            /* profile without SW-demod: jump straight back to follow */
+            app->rf_follow = true;
             app->rf_mode = RfModeOff;
-            FURI_LOG_I(TAG, "RF mode OFF (RX not supported on this profile)");
+            FURI_LOG_I(TAG, "RF mode FOLLOW (RX not supported on this profile)");
         } else {
-            FURI_LOG_I(TAG, "RF mode RX (inject into firmware demodulator)");
+            FURI_LOG_I(TAG, "RF mode RX (manual: inject into firmware demodulator)");
         }
         break;
     case RfModeRx:
     default:
         rx_bridge_stop(app);
+        /* back to the default: let the firmware drive the radio again */
+        app->rf_follow = true;
         app->rf_mode = RfModeOff;
-        FURI_LOG_I(TAG, "RF mode OFF");
+        FURI_LOG_I(TAG, "RF mode FOLLOW (follow-firmware re-enabled)");
         break;
     }
 }
@@ -1430,7 +2744,9 @@ static void overlay_draw(AppState* app) {
     const char* rf = "OFF";
     if(app->rf_mode == RfModeTx) rf = "TX";
     if(app->rf_mode == RfModeRx) rf = "RX";
-    snprintf(buf, sizeof(buf), "RF:%s %luMHz", rf, (unsigned long)(app->frequency / 1000000u));
+    /* show whether the firmware is driving the radio (FOLLOW) or manual */
+    snprintf(buf, sizeof(buf), "RF:%s%s %luMHz", app->rf_follow ? "~" : "", rf,
+             (unsigned long)(app->frequency / 1000000u));
     canvas_draw_str(c, 2, 34, buf);
     snprintf(buf, sizeof(buf), "TX:%lu RX:%lu", (unsigned long)app->tx_frames,
              (unsigned long)app->rx_frames);
@@ -1703,9 +3019,9 @@ static void set_fw_name_from_path(AppState* app) {
 /* ------------------------------------------------------------ boot */
 
 static void emu_reset_and_unlock(AppState* app) {
-    /* core reset: SP=*(0), PC=*(4) from flash */
-    uint32_t sp0 = read_u32_le(app->flash + 0);
-    uint32_t rst = read_u32_le(app->flash + 4);
+    /* core reset: SP=*(0), PC=*(4) from flash (read through the paged cache) */
+    uint32_t sp0 = fc_read(&app->fc, 0, 4);
+    uint32_t rst = fc_read(&app->fc, 4, 4);
     memset(app->ram, 0, PA_RAM_SIZE);
     thumb_reset(app->cpu, sp0, rst);
     app->next_pc = rst | 1u;
@@ -1721,12 +3037,120 @@ static void emu_reset_and_unlock(AppState* app) {
     app->nav_phase = 0;
     app->spi_phase = -1;
     app->spi_rx_head = app->spi_rx_tail = 0;
+    /* faithful timer model init: TOP=0xFFFF, rate like the Python model
+     * (TIMER0 drives delay(): rate 0xC00 -> consistent per-delay cost). */
+    for(int i = 0; i < 4; i++) {
+        app->timer_t0[i] = 0;
+        app->timer_top[i] = 0xFFFF;
+        app->timer_rate[i] = (i == 0) ? 0xC00u : 0x400u;
+        app->timer_cnt[i] = 0;
+    }
+    /* OLED double-buffer reset (SPI capture). The visible buffer starts blank
+     * (black screen, matching the locked keyfob) and only fills from the first
+     * real flush commit. */
+    memset(app->oled_fb, 0, OLED_FB_SIZE);
+    memset(app->oled_work, 0, OLED_FB_SIZE);
+    app->oled_page = 0;
+    app->oled_col = 0;
+    app->oled_work_dirty = 0;
+    app->oled_frames = 0;
+    /* LED / buzzer output-mirror state reset. buzz_cand_port=0xFF means "no
+     * candidate buzzer pin yet". The LED/speaker are not touched here; they are
+     * driven from mmio_write (LED) and the hot loop (speaker). */
+    app->led_on = false;
+    app->led_logged = false;
+    app->buzz_cand_port = 0xFF;
+    app->buzz_cand_pin = 0xFF;
+    app->buzz_edges = 0;
+    app->buzz_last_edge_insn = 0;
+    app->buzz_period_insn = 0;
+    app->buzz_logged = false;
+    app->buzz_timer_logged = false;
+    app->spk_owned = false;
+    app->spk_playing = false;
+    app->spk_freq = BUZZ_TONE_DEFAULT_HZ;
+    app->spk_freq_playing = 0.0f;
+    app->buzz_active_tick = 0;
+    app->buzz_request = false;
     init_buttons_released(app);
     si4432_init(&app->si);
+    /* reset the Si4432 PACKET/FIFO bridge state */
+    app->si_tx_fifo_len = 0;
+    app->si_rx_fifo_len = 0;
+    app->si_rx_fifo_pos = 0;
+    app->si_dtmod = DtModDirectGpio;
     auto_unlock(app);
 }
 
 /* ============================================================ phase 2 emulator */
+
+/* Non-blocking tentative-beep driver, called once per UI frame from the hot loop.
+ * The speaker is a SHARED resource: we acquire it lazily (non-blocking: timeout 0;
+ * if acquire fails we simply skip sound, no crash), start the tone, and stop +
+ * release it once the buzzer activity has been quiet for BUZZ_HOLD_MS. We NEVER
+ * block the emulator loop while holding the speaker, and we NEVER leave it held.
+ *
+ * buzz_request is set by mmio_write when a square-wave GPIO burst is detected;
+ * buzz_active_tick is refreshed on every detected edge. This function reads those
+ * and owns all furi_hal_speaker calls (mmio_write never touches the HAL). */
+static void beep_pump(AppState* app) {
+    uint32_t now = furi_get_tick();
+    bool want = app->buzz_request &&
+                ((uint32_t)(now - app->buzz_active_tick) < BUZZ_HOLD_MS);
+
+    if(want) {
+        if(!app->spk_owned) {
+            /* lazy, non-blocking acquire; on failure continue silently */
+            if(furi_hal_speaker_acquire(SPK_ACQUIRE_TIMEOUT)) {
+                app->spk_owned = true;
+            } else {
+                /* could not take the shared speaker right now; try again next
+                 * frame. Clear the one-shot request so we do not busy-retry. */
+                app->buzz_request = false;
+                return;
+            }
+        }
+        if(app->spk_owned) {
+            float f = app->spk_freq;
+            if(f < BUZZ_TONE_MIN_HZ || f > BUZZ_TONE_MAX_HZ) f = BUZZ_TONE_DEFAULT_HZ;
+            if(!app->spk_playing || f != app->spk_freq_playing) {
+                furi_hal_speaker_start(f, BUZZ_VOLUME);
+                app->spk_playing = true;
+                app->spk_freq_playing = f;
+            }
+        }
+    } else {
+        /* activity ceased (or timed out): stop the tone and release the speaker
+         * so other apps can use it. */
+        if(app->spk_owned) {
+            if(app->spk_playing) {
+                furi_hal_speaker_stop();
+                app->spk_playing = false;
+            }
+            furi_hal_speaker_release();
+            app->spk_owned = false;
+        }
+        app->buzz_request = false;
+    }
+}
+
+/* Release the speaker and clear the LED unconditionally (teardown safety). Safe to
+ * call even if nothing was acquired/lit. */
+static void outputs_teardown(AppState* app) {
+    if(app->spk_owned) {
+        if(app->spk_playing) {
+            furi_hal_speaker_stop();
+            app->spk_playing = false;
+        }
+        furi_hal_speaker_release();
+        app->spk_owned = false;
+    }
+    /* turn the Flipper LED off so it does not stay lit after we exit */
+    if(app->led_on) {
+        furi_hal_light_set(LightRed, 0x00);
+        app->led_on = false;
+    }
+}
 
 /* Runs the emulator with a direct-draw takeover. The firmware is ALREADY loaded
  * and booted/unlocked and the view_dispatcher has ALREADY been freed (they do
@@ -1837,12 +3261,66 @@ static void run_emulator(AppState* app, Gui* gui) {
 
         if(app->exit_requested) break;
 
-        /* run a slice of the real firmware (captures TX via mmio_write) */
-        run_burst(app, 150000);
+        /* run a slice of the real firmware (captures TX via mmio_write).
+         * EMU_INSN_PER_FRAME caps how much firmware runs per UI frame. The
+         * firmware has an inactivity timeout (~280k insn) that returns a
+         * sub-mode to the main carousel -- a REAL feature. Running too fast makes
+         * it fire instantly; this value keeps it at a human scale. Tune on real
+         * hardware if the pacing feels off (lower = slower fw / longer timeout). */
+        run_burst(app, EMU_INSN_PER_FRAME);
+
+        /* DIAG: heartbeat every ~2s so we can confirm the loop keeps running and
+         * measure the REAL emulation rate on hardware (insn/s = ninsn delta / dt).
+         * If this stops printing, the loop is stuck (e.g. inside run_burst). */
+        {
+            static uint32_t s_hb_tick = 0;
+            static uint64_t s_hb_ninsn = 0;
+            uint32_t t = furi_get_tick();
+            if(s_hb_tick == 0) s_hb_tick = t;
+            if((uint32_t)(t - s_hb_tick) >= 2000) {
+                uint64_t di = app->ninsn - s_hb_ninsn;
+                uint32_t dt = t - s_hb_tick;
+                FURI_LOG_D(TAG, "hb: ninsn=%llu rate=%lu k-insn/s unlocked=%d",
+                           (unsigned long long)app->ninsn,
+                           (unsigned long)(dt ? (di / dt) : 0), /* insn/ms == k-insn/s */
+                           app->unlocked);
+                s_hb_tick = t;
+                s_hb_ninsn = app->ninsn;
+            }
+        }
+
+        /* DIAG: RX heartbeat every ~1.5s while the receiver is running. Reports
+         * how many RAW edges the CC1101 pulled off the air (rx_events delta) and
+         * how many frames the firmware demodulator decoded (rx_frames delta).
+         * This lets the user tell, on hardware, whether the radio is hearing a
+         * real remote at all (edges > 0) even if the firmware rejects the
+         * protocol (frames == 0). */
+        if(app->rx_running) {
+            static uint32_t s_rxhb_tick = 0;
+            uint32_t t = furi_get_tick();
+            if(s_rxhb_tick == 0) s_rxhb_tick = t;
+            if((uint32_t)(t - s_rxhb_tick) >= 1500) {
+                uint32_t de = app->rx_events - app->rx_events_hb;
+                uint32_t df = app->rx_frames - app->rx_frames_hb;
+                FURI_LOG_I(TAG,
+                           "RX hb: @%lu Hz air_edges=+%lu (tot %lu) decoded=+%lu (tot %lu)",
+                           (unsigned long)app->frequency, (unsigned long)de,
+                           (unsigned long)app->rx_events, (unsigned long)df,
+                           (unsigned long)app->rx_frames);
+                app->rx_events_hb = app->rx_events;
+                app->rx_frames_hb = app->rx_frames;
+                s_rxhb_tick = t;
+            }
+        }
 
         /* RF bridge: replay accumulated TX / inject received RX */
         tx_bridge_flush(app);
-        rx_bridge_pump(app);
+        rx_bridge_pump(app); /* direct/bit-bang RX (SW demod) */
+        fifo_rx_poll(app); /* packet/FIFO RX (dtmod==FIFO) */
+
+        /* tentative buzzer beep: non-blocking, owns the shared speaker only while
+         * active and releases it as soon as the firmware's buzzer burst ceases. */
+        beep_pump(app);
 
         /* redraw the screen from the firmware framebuffer */
         render_oled(app);
@@ -1865,10 +3343,19 @@ static void run_emulator(AppState* app, Gui* gui) {
     }
 
 teardown:
+    /* DIAG: log each teardown step so a crash (furi_check failed) that happens on
+     * exit / USB disconnect can be localised to the exact resource being freed. */
+    FURI_LOG_I(TAG, "teardown: begin (exit_req=%d)", app->exit_requested);
+    outputs_teardown(app); /* stop/release the speaker and clear the LED */
+    FURI_LOG_I(TAG, "teardown: outputs (speaker/LED) released");
     radio_deinit(app);
+    FURI_LOG_I(TAG, "teardown: radio_deinit done");
     if(fb_cb_added) gui_remove_framebuffer_callback(gui, framebuffer_commit_callback, app);
+    FURI_LOG_I(TAG, "teardown: fb callback removed");
     wait_inflight_zero(&s_fb_cb_inflight);
+    FURI_LOG_I(TAG, "teardown: inflight drained");
     if(canvas) gui_direct_draw_release(gui);
+    FURI_LOG_I(TAG, "teardown: direct_draw released");
     if(app->rx_queue) {
         furi_message_queue_free(app->rx_queue);
         app->rx_queue = NULL;
@@ -1888,6 +3375,7 @@ int32_t pandora_arm_app(void* p) {
     Storage* storage = (Storage*)furi_record_open(RECORD_STORAGE);
     DialogsApp* dialogs = (DialogsApp*)furi_record_open(RECORD_DIALOGS);
     Gui* gui = (Gui*)furi_record_open(RECORD_GUI);
+    app->storage = storage; /* kept so the flash cache can stream pages at runtime */
     app->fw_path = furi_string_alloc_set_str("/ext");
 
     bool launch = false;
@@ -1950,7 +3438,28 @@ int32_t pandora_arm_app(void* p) {
                 (unsigned long)(app->prof->flash_used / 1024u),
                 (unsigned)(PA_RAM_SIZE / 1024u));
 
-            LoadResult lr = load_firmware(app, storage, furi_string_get_cstr(app->fw_path));
+            /* Allocate the 32KB RAM region FIRST (single contiguous block, fits
+             * well under the 67KB limit). It MUST come before the flash cache so
+             * the cache sizes its slots against the heap that truly remains (and
+             * so RAM can never be starved by the cache grabbing it first). */
+            app->ram = (uint8_t*)safe_malloc(PA_RAM_SIZE);
+            if(!app->ram) {
+                FURI_LOG_E(TAG, "ram alloc failed");
+                DialogMessage* msg = dialog_message_alloc();
+                dialog_message_set_text(
+                    msg, "Out of memory\n(RAM 32K)", 64, 30, AlignCenter, AlignCenter);
+                dialog_message_set_buttons(msg, NULL, "OK", NULL);
+                dialog_message_show(dialogs, msg);
+                dialog_message_free(msg);
+                break;
+            }
+            memset(app->ram, 0, PA_RAM_SIZE);
+
+            /* STEP 1: normalise the firmware into a flat temp .bin on the SD
+             * (streaming; no big RAM buffer). STEP 2: init the paged flash cache
+             * (small 4KB slots -> fits a fragmented heap; NO single big malloc). */
+            LoadResult lr = flatten_firmware(app, storage, furi_string_get_cstr(app->fw_path));
+            if(lr == LoadOk) lr = fc_init(app);
             if(lr != LoadOk) {
                 char tbuf[64];
                 if(lr == LoadNoMem)
@@ -1971,22 +3480,17 @@ int32_t pandora_arm_app(void* p) {
                 break;
             }
 
-            app->ram = (uint8_t*)safe_malloc(PA_RAM_SIZE);
-            if(!app->ram) {
-                FURI_LOG_E(TAG, "ram alloc failed");
-                break;
-            }
-            memset(app->ram, 0, PA_RAM_SIZE);
-
-            /* connect memory: direct FLASH/RAM regions + MMIO callbacks.
-             * flash_size = real allocated size (flash_used of the profile). */
+            /* connect memory: ONLY RAM is a direct region now. FLASH is paged, so
+             * flash_ptr=NULL -> every flash read falls to the read callback
+             * (mmio_read -> fc_read -> cache). CRITICAL for speed: the firmware is
+             * RAM-resident, so instruction fetch hits the DIRECT RAM region and
+             * does NOT pay the cache cost; only the few flash constant loads do. */
             thumb_set_regions(
-                app->cpu, app->flash, PA_FLASH_BASE, app->prof->flash_used, app->ram,
-                PA_RAM_BASE, PA_RAM_SIZE);
+                app->cpu, NULL, PA_FLASH_BASE, 0, app->ram, PA_RAM_BASE, PA_RAM_SIZE);
             thumb_set_mem_cb(app->cpu, mmio_read, mmio_write, app);
             thumb_set_hook(app->cpu, code_hook, app);
 
-            app->wfi_pc_hint = find_wfi(app->flash, app->prof->flash_used);
+            app->wfi_pc_hint = find_wfi(&app->fc);
 
             app->fb_mutex = furi_mutex_alloc(FuriMutexTypeNormal);
             if(!app->fb_mutex) {
@@ -2010,7 +3514,7 @@ int32_t pandora_arm_app(void* p) {
 
     /* --- teardown --- */
     if(app->cpu) free(app->cpu);
-    if(app->flash) free(app->flash);
+    fc_deinit(&app->fc); /* free the 4KB slots + bookkeeping + close the .bin */
     if(app->ram) free(app->ram);
     if(app->fb_mutex) furi_mutex_free(app->fb_mutex);
     furi_string_free(app->fw_path);

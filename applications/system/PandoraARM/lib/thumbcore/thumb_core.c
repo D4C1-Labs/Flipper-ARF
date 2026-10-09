@@ -10,6 +10,17 @@
 #include "thumb_core.h"
 #include <string.h>
 
+/* Force-inline the tiny, extremely hot helpers even under -Os (the Flipper
+ * build flag), which otherwise leaves 'inline' as a hint only. Keeping these
+ * inlined removes call overhead on the per-instruction critical path. We apply
+ * it ONLY to small hot-path helpers to avoid code bloat on the memory-limited
+ * target. */
+#if defined(__GNUC__)
+#define THUMB_AINLINE static inline __attribute__((always_inline))
+#else
+#define THUMB_AINLINE static inline
+#endif
+
 /* ========================================================================= */
 /* Register helpers                                                          */
 /* ========================================================================= */
@@ -29,24 +40,64 @@ static inline uint32_t reg_read(ThumbCore* c, int n) {
 /* Memory access                                                             */
 /* ========================================================================= */
 
+/* Little-endian fast path guard. Cortex-M4 and the host (x86/ARM LE) are
+ * little-endian and permit unaligned halfword/word accesses in hardware. We take
+ * a single-access fast path only when the pointer is naturally aligned and the
+ * build is little-endian; otherwise we fall back to the byte-wise path, which is
+ * always bit-exact. This keeps the direct-region accesses fast without changing
+ * results. */
+#if defined(__BYTE_ORDER__) && (__BYTE_ORDER__ == __ORDER_LITTLE_ENDIAN__)
+#define THUMB_LE 1
+#else
+#define THUMB_LE 0
+#endif
+
+/* Read 'size' (1/2/4) bytes little-endian from a direct region pointer. */
+static inline uint32_t rd_bytes(const uint8_t* p, uint32_t addr, int size) {
+    if(size == 4) {
+#if THUMB_LE
+        if((addr & 3u) == 0) { uint32_t v; __builtin_memcpy(&v, p, 4); return v; }
+#endif
+        return (uint32_t)p[0] | ((uint32_t)p[1] << 8) |
+               ((uint32_t)p[2] << 16) | ((uint32_t)p[3] << 24);
+    }
+    if(size == 2) {
+#if THUMB_LE
+        if((addr & 1u) == 0) { uint16_t v; __builtin_memcpy(&v, p, 2); return v; }
+#endif
+        return (uint32_t)p[0] | ((uint32_t)p[1] << 8);
+    }
+    return p[0];
+}
+
+/* Write 'size' (1/2/4) bytes little-endian to a direct region pointer. */
+static inline void wr_bytes(uint8_t* p, uint32_t addr, uint32_t val, int size) {
+    if(size == 4) {
+#if THUMB_LE
+        if((addr & 3u) == 0) { __builtin_memcpy(p, &val, 4); return; }
+#endif
+        p[0] = (uint8_t)val; p[1] = (uint8_t)(val >> 8);
+        p[2] = (uint8_t)(val >> 16); p[3] = (uint8_t)(val >> 24);
+        return;
+    }
+    if(size == 2) {
+#if THUMB_LE
+        if((addr & 1u) == 0) { uint16_t v = (uint16_t)val; __builtin_memcpy(p, &v, 2); return; }
+#endif
+        p[0] = (uint8_t)val; p[1] = (uint8_t)(val >> 8);
+        return;
+    }
+    p[0] = (uint8_t)val;
+}
+
 static inline uint32_t mem_read(ThumbCore* c, uint32_t addr, int size) {
-    /* Direct FLASH */
+    /* Direct FLASH (keep original priority: FLASH before RAM). */
     if(c->flash_ptr && addr >= c->flash_base && (addr + (uint32_t)size) <= c->flash_base + c->flash_size) {
-        uint8_t* p = c->flash_ptr + (addr - c->flash_base);
-        switch(size) {
-        case 1: return p[0];
-        case 2: return (uint32_t)p[0] | ((uint32_t)p[1] << 8);
-        default: return (uint32_t)p[0] | ((uint32_t)p[1] << 8) | ((uint32_t)p[2] << 16) | ((uint32_t)p[3] << 24);
-        }
+        return rd_bytes(c->flash_ptr + (addr - c->flash_base), addr, size);
     }
     /* Direct RAM */
     if(c->ram_ptr && addr >= c->ram_base && (addr + (uint32_t)size) <= c->ram_base + c->ram_size) {
-        uint8_t* p = c->ram_ptr + (addr - c->ram_base);
-        switch(size) {
-        case 1: return p[0];
-        case 2: return (uint32_t)p[0] | ((uint32_t)p[1] << 8);
-        default: return (uint32_t)p[0] | ((uint32_t)p[1] << 8) | ((uint32_t)p[2] << 16) | ((uint32_t)p[3] << 24);
-        }
+        return rd_bytes(c->ram_ptr + (addr - c->ram_base), addr, size);
     }
     if(c->read_cb) return c->read_cb(c->mem_ctx, addr, size);
     return 0;
@@ -55,14 +106,7 @@ static inline uint32_t mem_read(ThumbCore* c, uint32_t addr, int size) {
 static inline void mem_write(ThumbCore* c, uint32_t addr, uint32_t val, int size) {
     /* Direct RAM (reflect writes). FLASH is typically not written. */
     if(c->ram_ptr && addr >= c->ram_base && (addr + (uint32_t)size) <= c->ram_base + c->ram_size) {
-        uint8_t* p = c->ram_ptr + (addr - c->ram_base);
-        switch(size) {
-        case 1: p[0] = (uint8_t)val; break;
-        case 2: p[0] = (uint8_t)val; p[1] = (uint8_t)(val >> 8); break;
-        default:
-            p[0] = (uint8_t)val; p[1] = (uint8_t)(val >> 8);
-            p[2] = (uint8_t)(val >> 16); p[3] = (uint8_t)(val >> 24); break;
-        }
+        wr_bytes(c->ram_ptr + (addr - c->ram_base), addr, val, size);
         return;
     }
     if(c->write_cb) c->write_cb(c->mem_ctx, addr, val, size);
@@ -75,20 +119,23 @@ void thumb_write_mem(ThumbCore* c, uint32_t addr, uint32_t val, int size) { mem_
 /* Flags                                                                     */
 /* ========================================================================= */
 
+/* set_nz is called from many instruction sites; leave it a plain inline so the
+ * compiler can share one copy and keep code size down on the target. */
 static inline void set_nz(ThumbCore* c, uint32_t res) {
     c->xpsr &= ~(THUMB_PSR_N | THUMB_PSR_Z);
     if(res & 0x80000000u) c->xpsr |= THUMB_PSR_N;
     if(res == 0) c->xpsr |= THUMB_PSR_Z;
 }
-static inline void set_c(ThumbCore* c, int carry) {
+THUMB_AINLINE void set_c(ThumbCore* c, int carry) {
     if(carry) c->xpsr |= THUMB_PSR_C; else c->xpsr &= ~THUMB_PSR_C;
 }
-static inline void set_v(ThumbCore* c, int ov) {
+THUMB_AINLINE void set_v(ThumbCore* c, int ov) {
     if(ov) c->xpsr |= THUMB_PSR_V; else c->xpsr &= ~THUMB_PSR_V;
 }
-static inline int get_c(ThumbCore* c) { return (c->xpsr & THUMB_PSR_C) ? 1 : 0; }
+THUMB_AINLINE int get_c(ThumbCore* c) { return (c->xpsr & THUMB_PSR_C) ? 1 : 0; }
 
-/* ARMv7-M AddWithCarry: returns result, sets carry_out/overflow_out. */
+/* ARMv7-M AddWithCarry: returns result, sets carry_out/overflow_out. Plain
+ * inline (many call sites) to avoid code bloat on the target. */
 static inline uint32_t add_with_carry(uint32_t x, uint32_t y, uint32_t cin,
                                       int* carry_out, int* overflow_out) {
     uint64_t usum = (uint64_t)x + (uint64_t)y + (uint64_t)cin;
@@ -198,10 +245,10 @@ static int cond_passed(ThumbCore* c, int cond) {
  * c->it_mask is used only as an "active block" flag (!=0). The effective
  * condition of the current instruction is ITSTATE<7:4>. ITAdvance: if
  * ITSTATE<2:0>==000 the block ends; otherwise ITSTATE<4:0> <<= 1. */
-static inline int in_it_block(ThumbCore* c) { return c->it_mask != 0; }
+THUMB_AINLINE int in_it_block(ThumbCore* c) { return c->it_mask != 0; }
 
 /* Effective condition (4 bits) = ITSTATE<7:4>. */
-static inline int it_current_cond(ThumbCore* c) {
+THUMB_AINLINE int it_current_cond(ThumbCore* c) {
     return (c->it_cond >> 4) & 0xF;
 }
 
@@ -223,7 +270,7 @@ static void it_advance(ThumbCore* c) {
 /* ========================================================================= */
 
 /* Writes PC (bit0 = Thumb selection; in ARMv7-M always Thumb). Marks branch. */
-static inline void branch_to(ThumbCore* c, uint32_t addr) {
+THUMB_AINLINE void branch_to(ThumbCore* c, uint32_t addr) {
     PC = addr & ~1u;
     c->branched = 1;
 }
@@ -245,13 +292,49 @@ static inline int is_32bit(uint16_t hw) {
 /* thumb_step                                                                */
 /* ========================================================================= */
 
+/* Fast instruction fetch of one 16-bit halfword at an even address. Mirrors
+ * mem_read(c, addr, 2) exactly (same region priority: FLASH first, then RAM,
+ * then the callback) but is force-inlined into thumb_step and reads the halfword
+ * directly from the region buffer. addr is always halfword-aligned here (PC bit0
+ * is cleared and instructions are 2-byte aligned), so on a LE host/Cortex-M4 we
+ * do a single 16-bit load. This is the hottest access in the core. */
+static inline uint16_t fetch_hw(ThumbCore* c, uint32_t addr) {
+    if(c->flash_ptr && addr >= c->flash_base &&
+       (addr + 2u) <= c->flash_base + c->flash_size) {
+        const uint8_t* p = c->flash_ptr + (addr - c->flash_base);
+#if THUMB_LE
+        uint16_t v; __builtin_memcpy(&v, p, 2); return v;
+#else
+        return (uint16_t)((uint32_t)p[0] | ((uint32_t)p[1] << 8));
+#endif
+    }
+    if(c->ram_ptr && addr >= c->ram_base &&
+       (addr + 2u) <= c->ram_base + c->ram_size) {
+        const uint8_t* p = c->ram_ptr + (addr - c->ram_base);
+#if THUMB_LE
+        uint16_t v; __builtin_memcpy(&v, p, 2); return v;
+#else
+        return (uint16_t)((uint32_t)p[0] | ((uint32_t)p[1] << 8));
+#endif
+    }
+    if(c->read_cb) return (uint16_t)c->read_cb(c->mem_ctx, addr, 2);
+    return 0;
+}
+
 int thumb_step(ThumbCore* c) {
     if(c->halted) { c->last_fault = THUMB_FAULT_HALT; return THUMB_FAULT_HALT; }
 
+    /* ARMv7-M never executes at an odd address: bit 0 of PC is the Thumb-state
+     * flag, not an address bit. Callers (run_burst) write next_pc with bit 0 set
+     * (e.g. rst | 1u); mask it here so the fetch is always halfword-aligned.
+     * Without this the fetch is off by one byte -> garbage decode -> a stray
+     * 0xBExx pattern halts the core (observed stall at insn ~6). Mirrors Unicorn,
+     * which the core was validated against. */
+    c->r[15] &= ~1u;
     uint32_t pc_instr = PC;
     if(c->hook) c->hook(c->hook_ctx, pc_instr);
 
-    uint16_t hw1 = (uint16_t)mem_read(c, pc_instr, 2);
+    uint16_t hw1 = fetch_hw(c, pc_instr);
 
     /* During execution, PC must be read as (instr + 4). */
     int ret;
@@ -269,7 +352,7 @@ int thumb_step(ThumbCore* c) {
     uint32_t instr_size;
     c->branched = 0;
     if(is_32bit(hw1)) {
-        uint16_t hw2 = (uint16_t)mem_read(c, pc_instr + 2, 2);
+        uint16_t hw2 = fetch_hw(c, pc_instr + 2);
         instr_size = 4;
         PC = pc_during;
         if(cond_ok) {
@@ -318,10 +401,19 @@ uint64_t thumb_run(ThumbCore* c, uint64_t max) {
 static int exec_thumb16(ThumbCore* c, uint16_t op) {
     uint32_t top6 = op >> 10;
 
+    /* Primary dispatch on the top 4 bits (op>>12). The compiler turns this into
+     * a table branch (tbb/tbh on Cortex-M4) instead of a long sequential
+     * if-chain; on an in-order core without branch prediction this replaces the
+     * 2-6 compare+branch pairs the original chain executed for the dominant
+     * encodings (load/store immediate, data-processing) with a single indexed
+     * jump. Each group body below is byte-for-byte identical to the original
+     * if-chain; only the outer guard changed, and every case returns. */
+    switch(op >> 12) {
+
     /* ---- Shift (imm), add, sub, mov, cmp  (00xxxx) ----
      * bits 13:11 (= g): 0,1,2 = LSL/LSR/ASR imm ; 3 = ADD/SUB reg/imm3 ;
      * 4,5,6,7 = MOV/CMP/ADD/SUB imm8. */
-    if((op >> 14) == 0) {
+    case 0: case 1: case 2: case 3: {
         uint32_t g = (op >> 11) & 0x7;
         if(g <= 2) {
             /* LSL/LSR/ASR (immediate) : 000 op(2) imm5 Rm Rd */
@@ -384,6 +476,9 @@ static int exec_thumb16(ThumbCore* c, uint16_t op) {
         }
     }
 
+    /* top4 == 4 (0100): data-proc(010000), special data/BX(010001),
+     * LDR literal(01001). */
+    case 4:
     /* ---- Data processing (010000) ---- */
     if(top6 == 0x10) {
         int opc = (op >> 6) & 0xF;
@@ -486,9 +581,11 @@ static int exec_thumb16(ThumbCore* c, uint16_t op) {
         c->r[rt] = mem_read(c, base + imm8, 4);
         return THUMB_OK;
     }
+    return THUMB_FAULT_UNDEF;
 
     /* ---- Load/store register offset & byte/halfword (0101) ---- */
-    if((op >> 12) == 0x5) {
+    case 5:
+    {
         int opb = (op >> 9) & 7;
         int rm = (op >> 6) & 7;
         int rn = (op >> 3) & 7;
@@ -508,7 +605,7 @@ static int exec_thumb16(ThumbCore* c, uint16_t op) {
     }
 
     /* ---- LDR/STR word/byte immediate (011x) ---- */
-    if((op >> 13) == 0x3) {
+    case 6: case 7: {
         int bflag = (op >> 12) & 1; /* 1 = byte */
         int load = (op >> 11) & 1;
         int imm5 = (op >> 6) & 0x1F;
@@ -527,7 +624,7 @@ static int exec_thumb16(ThumbCore* c, uint16_t op) {
     }
 
     /* ---- LDRH/STRH immediate (1000) ---- */
-    if((op >> 12) == 0x8) {
+    case 8: {
         int load = (op >> 11) & 1;
         int imm5 = (op >> 6) & 0x1F;
         int rn = (op >> 3) & 7;
@@ -539,7 +636,7 @@ static int exec_thumb16(ThumbCore* c, uint16_t op) {
     }
 
     /* ---- LDR/STR SP relative (1001) ---- */
-    if((op >> 12) == 0x9) {
+    case 9: {
         int load = (op >> 11) & 1;
         int rt = (op >> 8) & 7;
         uint32_t imm8 = (op & 0xFF) << 2;
@@ -550,7 +647,7 @@ static int exec_thumb16(ThumbCore* c, uint16_t op) {
     }
 
     /* ---- ADR / ADD SP (1010) ---- */
-    if((op >> 12) == 0xA) {
+    case 0xA: {
         int sp_rel = (op >> 11) & 1;
         int rd = (op >> 8) & 7;
         uint32_t imm8 = (op & 0xFF) << 2;
@@ -560,7 +657,7 @@ static int exec_thumb16(ThumbCore* c, uint16_t op) {
     }
 
     /* ---- Misc 16-bit (1011) ---- */
-    if((op >> 12) == 0xB) {
+    case 0xB: {
         /* ADD/SUB SP imm7 : 1011 0000 0 imm7 / 1011 0000 1 imm7 */
         if((op >> 8) == 0xB0) {
             uint32_t imm7 = (op & 0x7F) << 2;
@@ -664,7 +761,7 @@ static int exec_thumb16(ThumbCore* c, uint16_t op) {
     }
 
     /* ---- LDM/STM (1100) ---- */
-    if((op >> 12) == 0xC) {
+    case 0xC: {
         int load = (op >> 11) & 1;
         int rn = (op >> 8) & 7;
         uint32_t list = op & 0xFF;
@@ -680,7 +777,7 @@ static int exec_thumb16(ThumbCore* c, uint16_t op) {
     }
 
     /* ---- Conditional branch / SVC (1101) ---- */
-    if((op >> 12) == 0xD) {
+    case 0xD: {
         int cond = (op >> 8) & 0xF;
         if(cond == 0xE) { return THUMB_FAULT_UNDEF; } /* permanently undefined */
         if(cond == 0xF) { return THUMB_OK; } /* SVC: stub (not used by the fw) */
@@ -691,15 +788,20 @@ static int exec_thumb16(ThumbCore* c, uint16_t op) {
         return THUMB_OK;
     }
 
-    /* ---- Unconditional branch B (11100) ---- */
+    /* ---- Unconditional branch B (11100) ---- (top4==0xE; 11101 is a 32-bit
+     * prefix handled before reaching here) */
+    case 0xE:
     if((op >> 11) == 0x1C) {
         int32_t imm11 = op & 0x7FF;
         imm11 = (imm11 << 21) >> 21; /* sign extend 11 bits */
         branch_to(c, (uint32_t)((int32_t)PC + (imm11 << 1)));
         return THUMB_OK;
     }
-
     return THUMB_FAULT_UNDEF;
+
+    default:
+        return THUMB_FAULT_UNDEF;
+    } /* switch(op >> 12) */
 }
 
 /* ========================================================================= */
