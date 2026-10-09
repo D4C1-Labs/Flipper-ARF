@@ -194,11 +194,25 @@ typedef struct {
     uint8_t led_pin; /* GPIO pin of the indicator LED. pandora: pin14 (bit 0x4000).
                       * See RE_DYN_pandora.md: "DOUT(port3) ^= 0x4000 ; blink LED". */
 
-    /* --- RF bridge (software-demod; see EMU_MAP_pandora.md / arm_pandora.py) --- */
-    bool rf_sw_demod; /* true: SW demodulation via ISR (pandora); false (pmax): HW FIFO */
-    uint32_t demod_isr; /* demod GPIO ISR (0x09554 pandora) */
-    uint8_t data_port; /* Si4432 DATA pin (GPIO port): pandora=1 (B) */
-    uint8_t data_pin; /* DATA pin: pandora=0 */
+    /* --- RF bridge (direct-mode software demod; see DYN_HW_D605.md) ---
+     * BOTH firmwares use the Si4432 in DIRECT mode (bit-bang OOK/FSK), NOT the
+     * FIFO/packet mode -- confirmed by dynamic analysis (0 FIFO 0x7F accesses in
+     * RX). The old "pmax = HW FIFO" was wrong. The radio is wired identically on
+     * both: CS=PE9 (active-high), antenna PE14=RX/PE15=TX, RX-data pin=PB0 (the
+     * demod ISR samples it), TX-data pin=PB3 (the firmware bit-bangs the OOK
+     * waveform there). The CC1101 bridge: on RXON feed the demodulated OOK into
+     * PB0; on TXON read the PB3 waveform and transmit it. */
+    bool rf_sw_demod; /* true: SW demodulation via ISR (BOTH firmwares) */
+    uint32_t demod_isr; /* demod ISR: pandora=0x09554, pmax=0x0945C */
+    uint8_t data_port; /* RX-data pin port: PB0 -> port1 */
+    uint8_t data_pin; /* RX-data pin: PB0 -> pin0 */
+    uint8_t tx_data_port; /* TX-data pin port: PB3 -> port1 */
+    uint8_t tx_data_pin; /* TX-data pin: PB3 -> pin3 */
+    uint8_t rf_cs_port; /* Si4432 CS: PE9 -> port4 */
+    uint8_t rf_cs_pin; /* Si4432 CS pin: PE9 -> pin9 (active-high) */
+    uint8_t rf_ant_rx_port, rf_ant_rx_pin; /* RX antenna: PE14 -> port4/pin14 */
+    uint8_t rf_ant_tx_port, rf_ant_tx_pin; /* TX antenna: PE15 -> port4/pin15 */
+    uint16_t rf_tx_cell_us; /* OOK short-cell duration (pandora 400, pmax 500) */
     uint32_t timer1_cnt; /* TIMER1_CNT MMIO (0x40010424) = width timer */
     uint32_t rx_struct; /* base of the RX structure (0x20000000) */
     uint32_t rx_gate; /* [+0xF] active gate (!=0xFF) */
@@ -233,11 +247,17 @@ static const ArmProfile PROFILE_PANDORA = {
     /* indicator LED: GPIO port3 (D) pin14 (bit 0x4000), confirmed by the RE. */
     .led_port = 3,
     .led_pin = 14,
-    /* RF bridge: pandora uses SW demod (ISR 0x09554), DATA pin = GPIO B0 */
+    /* RF bridge (DYN_HW_D605.md): direct-mode SW demod, ISR 0x09554.
+     * RX-data=PB0, TX-data=PB3, CS=PE9, antenna PE14(RX)/PE15(TX). */
     .rf_sw_demod = true,
     .demod_isr = 0x09554u,
-    .data_port = 1, /* port B */
+    .data_port = 1, /* PB0 = RX-data */
     .data_pin = 0,
+    .tx_data_port = 1, .tx_data_pin = 3, /* PB3 = TX-data (OOK bit-bang) */
+    .rf_cs_port = 4, .rf_cs_pin = 9, /* PE9 = Si4432 CS (active-high) */
+    .rf_ant_rx_port = 4, .rf_ant_rx_pin = 14, /* PE14 = RX antenna/LNA */
+    .rf_ant_tx_port = 4, .rf_ant_tx_pin = 15, /* PE15 = TX antenna/PA */
+    .rf_tx_cell_us = 400, /* OOK short cell (long = 2x) */
     .timer1_cnt = 0x40010424u,
     .rx_struct = 0x20000000u,
     .rx_gate = 0x2000000Fu,
@@ -270,13 +290,21 @@ static const ArmProfile PROFILE_PANDORAMAX = {
      * reveal the real pin (look for the "LED:" throttled log). */
     .led_port = 3,
     .led_pin = 14,
-    /* pmax: Si4432 in PACKET/FIFO mode (HW demod), there is NO reliable SW ISR
-     * to inject into; the software-demod RX bridge is disabled on this profile.
-     * TX (bit-bang + rf_tx_on detection) does work the same way. */
-    .rf_sw_demod = false,
-    .demod_isr = 0,
-    .data_port = 1,
+    /* RF bridge (DYN_HW_D605.md): pmax uses the SAME DIRECT mode as pandora
+     * (NOT FIFO -- confirmed by dynamic analysis, 0 FIFO accesses). demod ISR is
+     * 0x0945C; radio pins identical (RX-data=PB0, TX-data=PB3, CS=PE9, antenna
+     * PE14/PE15). The RX chain runs; the pmax decoder's end-of-frame is not fully
+     * reverse-engineered yet, but that is firmware-side -- a real RF frame on the
+     * Flipper is demodulated by the firmware itself via PB0. */
+    .rf_sw_demod = true,
+    .demod_isr = 0x0945Cu,
+    .data_port = 1, /* PB0 = RX-data */
     .data_pin = 0,
+    .tx_data_port = 1, .tx_data_pin = 3, /* PB3 = TX-data (OOK bit-bang) */
+    .rf_cs_port = 4, .rf_cs_pin = 9, /* PE9 = Si4432 CS (active-high) */
+    .rf_ant_rx_port = 4, .rf_ant_rx_pin = 14, /* PE14 = RX antenna/LNA */
+    .rf_ant_tx_port = 4, .rf_ant_tx_pin = 15, /* PE15 = TX antenna/PA */
+    .rf_tx_cell_us = 500, /* OOK short cell (long = 2x) */
     .timer1_cnt = 0x40010424u,
     .rx_struct = 0x20000000u,
     .rx_gate = 0x2000000Fu,
@@ -289,11 +317,16 @@ static const ArmProfile PROFILE_PANDORAMAX = {
 
 /* ------------------------------------------------------------ Si4432 model */
 
-/* Si4432 FIFO size. The real Si4432 has a 64-byte TX and 64-byte RX FIFO.
- * In PACKET/FIFO mode the firmware writes the frame to REG[0x7F] (TX) and reads
- * the demodulated frame back from REG[0x7F] (RX). We keep these small (64B) so
- * AppState stays compact (the paged flash cache needs RAM). */
-#define SI_FIFO_LEN 64u
+/* DIRECT MODE ONLY (DYN_HW_D605.md §5/§9): both firmwares (pandora, pandoramax)
+ * drive the Si4432 in DIRECT mode (bit-bang OOK/FSK over a GPIO pin), NOT the
+ * FIFO/packet mode. Dynamic analysis recorded 0 accesses to the FIFO register
+ * (0x7F) during a full boot+unlock+RX run of EACH firmware. The old
+ * PACKET/FIFO bridge (si_tx_fifo / si_rx_fifo / fifo_tx_transmit / fifo_rx_poll
+ * / REG[0x7F] special handling) was therefore REMOVED: it was an incorrect path
+ * that never fires on real firmware and wasted 128 B of AppState RAM (good for
+ * the paged flash cache). The bridge is now a single DIRECT path: RX injects the
+ * demodulated OOK stream into PB0 and the firmware's demod ISR decodes it; TX
+ * captures the bit-banged waveform on PB3 and replays it through the CC1101. */
 
 typedef struct {
     uint8_t regs[0x80];
@@ -307,14 +340,13 @@ static void si4432_init(Si4432* s) {
     s->regs[0x26] = 0x60;
     s->mode = 0;
 }
-/* fwd: the FIFO-RX read path lives in AppState; si4432_read only touches regs. */
+/* Direct-mode register read. REG[0x7F] (FIFO Access) is NOT special-cased: the
+ * firmware never touches it in direct mode (DYN_HW_D605.md: 0 FIFO accesses). */
 static uint8_t si4432_read(Si4432* s, uint8_t reg) {
     reg &= 0x7F;
     uint8_t v = s->regs[reg];
     /* REG 0x03/0x04 are the interrupt status registers: reading them clears the
-     * latched flags on the real part. REG[0x7F] (FIFO Access) is handled by the
-     * caller (spi_byte) because it needs the AppState RX FIFO; do NOT clear it
-     * here. */
+     * latched flags on the real part. */
     if(reg == 0x03 || reg == 0x04) s->regs[reg] = 0;
     return v;
 }
@@ -359,25 +391,35 @@ enum {
 };
 
 /* Physical Flipper keys we track for hold-duration. Index into the key-tracking
- * arrays. NOTE: Flipper LEFT is mapped to keyfob Button 4 (BACK pin). */
+ * arrays.
+ *
+ * BUTTON LAYOUT (Flipper D-pad -> keyfob button number), as requested so the
+ * physical D-pad matches the keyfob visually:
+ *   Flipper UP    -> keyfob button 6 (B6)   trunk        (hold: back to menu)
+ *   Flipper LEFT  -> keyfob button 2 (OK)   confirm/mode (hold: erase cell)
+ *   Flipper OK    -> keyfob button 5 (B5)   AM+FM / open car
+ *   Flipper RIGHT -> keyfob button 1 (UP)   On / menu / cell +
+ *   Flipper DOWN  -> keyfob button 4 (BACK) RX frequency / close car
+ *   Flipper BACK  -> keyfob button 3 (DOWN) menu / cell - (hold: auto)
+ */
 enum {
-    FK_UP = 0, /* Flipper UP    -> Button 1 (UP pin);   long hold = EXIT app */
-    FK_OK, /* Flipper OK    -> Button 2 (OK pin) */
-    FK_DOWN, /* Flipper DOWN  -> Button 3 (DOWN pin) */
-    FK_LEFT, /* Flipper LEFT  -> Button 4 (BACK pin) */
-    FK_RIGHT, /* Flipper RIGHT -> Button 5 (B5 pin) */
-    FK_BACK, /* Flipper BACK  -> Button 6 (B6 pin);  long hold = RF cycle */
+    FK_UP = 0, /* Flipper UP    -> keyfob button 6 (B6) */
+    FK_OK, /* Flipper OK    -> keyfob button 5 (B5) */
+    FK_DOWN, /* Flipper DOWN  -> keyfob button 4 (BACK) */
+    FK_LEFT, /* Flipper LEFT  -> keyfob button 2 (OK) */
+    FK_RIGHT, /* Flipper RIGHT -> keyfob button 1 (UP) */
+    FK_BACK, /* Flipper BACK  -> keyfob button 3 (DOWN) */
     FK_COUNT,
 };
 
 /* Maps a tracked Flipper key (FK_*) to the keyfob logical button (B_*). */
 static const uint8_t FK_TO_BTN[FK_COUNT] = {
-    [FK_UP] = B_UP,
-    [FK_OK] = B_OK,
-    [FK_DOWN] = B_DOWN,
-    [FK_LEFT] = B_BACK,
-    [FK_RIGHT] = B5,
-    [FK_BACK] = B6,
+    [FK_UP] = B6, /* Flipper UP    -> keyfob 6 */
+    [FK_OK] = B5, /* Flipper OK    -> keyfob 5 */
+    [FK_DOWN] = B_BACK, /* Flipper DOWN  -> keyfob 4 */
+    [FK_LEFT] = B_OK, /* Flipper LEFT  -> keyfob 2 */
+    [FK_RIGHT] = B_UP, /* Flipper RIGHT -> keyfob 1 */
+    [FK_BACK] = B_DOWN, /* Flipper BACK  -> keyfob 3 */
 };
 
 /* Maps a tracked Flipper key (FK_*) to its KBIT_* mask bit. */
@@ -443,15 +485,16 @@ typedef enum {
     CcPreset2Fsk, /* 2-FSK, moderate deviation (Pandora FSK/GFSK firmwares) */
 } CcPreset;
 
-/* Si4432 data-source mode (REG[0x71] dtmod, bits[7:6]). This selects HOW the
- * firmware moves frame bytes in/out of its radio and therefore which bridge path
- * we take at runtime:
- *   00 direct GPIO  -> bit-bang on the DATA pin (pandora common; existing path)
- *   01 direct SDI   -> treated like direct (bit-bang) for our purposes
- *   10 FIFO         -> packet mode; frame bytes go through REG[0x7F] (NEW path)
- *   11 PN9          -> test pattern; treated like direct (no real frame)
- * ONE codebase supports any firmware: dtmod decides bit-bang vs FIFO in runtime,
- * independent of the profile's rf_sw_demod hint. */
+/* Si4432 data-source mode (REG[0x71] dtmod, bits[7:6]). Tracked for DIAGNOSTIC
+ * logging only. DYN_HW_D605.md proved both firmwares use DIRECT mode (dtmod=0,
+ * 0 FIFO accesses), so the runtime bridge path is ALWAYS direct bit-bang; the
+ * FIFO path was removed. We still decode dtmod so the log reveals if a future
+ * firmware ever programs FIFO (dtmod=2) -- it would print a warning rather than
+ * silently taking a wrong path.
+ *   00 direct GPIO  -> bit-bang on the DATA pin (both firmwares)
+ *   01 direct SDI   -> direct (bit-bang)
+ *   10 FIFO         -> packet mode (NOT used by any known firmware)
+ *   11 PN9          -> test pattern */
 typedef enum {
     DtModDirectGpio = 0,
     DtModDirectSdi = 1,
@@ -656,25 +699,15 @@ typedef struct {
     uint32_t rx_events_hb; /* rx_events snapshot for the RX heartbeat delta */
     uint32_t rx_frames_hb; /* rx_frames snapshot for the RX heartbeat delta */
     uint8_t si_modtyp; /* last REG[0x71] modtyp[1:0] seen (0=unmod 1=OOK 2=FSK 3=GFSK) */
-    uint8_t si_dtmod; /* last REG[0x71] dtmod[7:6] (SiDtMod: data source mode) */
+    uint8_t si_dtmod; /* last REG[0x71] dtmod[7:6] (SiDtMod); DIAGNOSTIC only */
     uint32_t si_devi_hz; /* FSK frequency deviation derived from REG[0x71]/0x72 */
     CcPreset cc_preset; /* which CC1101 custom preset is loaded right now */
 
-    /* --- Si4432 PACKET/FIFO bridge (dtmod==FIFO firmwares, e.g. pandoramax) ---
-     * TX: the firmware writes frame bytes to REG[0x7F] (FIFO access). We buffer
-     * them in si_tx_fifo; when the firmware then enters TX (REG[0x07] bit3) in
-     * FIFO mode we convert those bytes to an edge train and replay via async_tx.
-     * RX: when the CC1101 receives a packet we copy it to si_rx_fifo, raise the
-     * Si4432 "packet received" IRQ flags (REG 0x03/0x04) and let REG[0x7F] reads
-     * return the bytes, so the firmware's FIFO-drain path (si4432_read_fifo_block)
-     * sees a real frame. */
-    uint8_t si_tx_fifo[SI_FIFO_LEN]; /* bytes the firmware wrote to the TX FIFO */
-    uint8_t si_tx_fifo_len; /* number of valid bytes in si_tx_fifo */
-    uint8_t si_rx_fifo[SI_FIFO_LEN]; /* bytes to hand back on REG[0x7F] reads (RX) */
-    uint8_t si_rx_fifo_len; /* number of valid bytes in si_rx_fifo */
-    uint8_t si_rx_fifo_pos; /* read cursor into si_rx_fifo */
-    uint32_t fifo_tx_frames; /* diagnostics: FIFO frames transmitted */
-    uint32_t fifo_rx_frames; /* diagnostics: FIFO frames received */
+    /* NOTE: the old Si4432 PACKET/FIFO bridge (si_tx_fifo / si_rx_fifo and the
+     * fifo_tx_transmit / fifo_rx_poll functions) was REMOVED. DYN_HW_D605.md
+     * proved both firmwares use DIRECT mode with 0 accesses to REG[0x7F], so the
+     * FIFO path never fired on real firmware and only cost RAM. The bridge is now
+     * DIRECT-ONLY: RX injects into PB0 (demod ISR), TX captures PB3 (bit-bang). */
 
     volatile bool exit_requested;
     volatile bool menu_requested;
@@ -715,10 +748,6 @@ static void rf_follow_apply_freq(AppState* app);
 static void rx_bridge_start(AppState* app);
 static void rx_bridge_stop(AppState* app);
 static void radio_rx_callback(bool level, uint32_t duration, void* context);
-/* FIFO (packet-mode) bridge: TX transmits the buffered FIFO as an edge train;
- * RX polls the CC1101 packet pipe and loads the Si4432 RX FIFO + IRQ flags. */
-static void fifo_tx_transmit(AppState* app);
-static void fifo_rx_poll(AppState* app);
 
 /* Flash cache fwd decl (used from the MMIO read callback; defined with the rest
  * of the FlashCache code in the load+boot section). */
@@ -901,15 +930,28 @@ static void oled_data(AppState* app, uint8_t b) {
 }
 
 static void spi_byte(AppState* app, uint8_t b) {
-    /* OLED capture: route by the DC pin (A9). DC HIGH=command, LOW=pixel data.
-     * (The OLED and the Si4432 share the SPI bus; the firmware selects the OLED
-     * via DC/CS on port0. We model both: OLED framebuffer AND the Si4432 regs so
-     * the firmware reads coherent values either way.) */
-    if(oled_dc_level(app))
-        oled_cmd(app, b);
-    else
-        oled_data(app, b);
+    /* SPI bus routing by CHIP SELECT (DYN_HW_D605.md §0/§1): the OLED and the
+     * Si4432 SHARE USART0. The Si4432 CS is PE9 (port4.9, ACTIVE-HIGH); when PE9
+     * is LOW the byte belongs to the OLED (its command vs pixel-data chosen by the
+     * DC pin A9 = port0.9). The old code fed EVERY SPI byte (incl. ~55000 OLED
+     * pixel bytes) through the Si4432 model, corrupting the radio register state.
+     * Now we gate strictly on PE9: CS HIGH -> Si4432 transaction, CS LOW -> OLED.
+     * Faithful port of emu/pandora_tui.py _spi_byte (si_cs = (gpio_dout[4]>>9)&1). */
+    uint8_t si_cs = (uint8_t)((app->gpio_dout[app->prof->rf_cs_port] >>
+                               app->prof->rf_cs_pin) & 1u);
 
+    if(!si_cs) {
+        /* --- OLED byte (Si4432 CS inactive) --- */
+        /* Abort any partial Si4432 transaction that was in flight when CS fell. */
+        app->spi_phase = -1;
+        if(oled_dc_level(app))
+            oled_cmd(app, b); /* DC HIGH = command */
+        else
+            oled_data(app, b); /* DC LOW  = pixel data */
+        return;
+    }
+
+    /* --- Si4432 transaction (CS = PE9 HIGH) --- */
     if(app->spi_phase < 0) {
         if(b & 0x80) {
             app->spi_kind = 'w';
@@ -925,17 +967,9 @@ static void spi_byte(AppState* app, uint8_t b) {
     } else {
         if(app->spi_kind == 'w') {
             uint8_t wreg = app->spi_reg;
-            /* FIFO TX accumulation: in PACKET/FIFO mode the firmware writes the
-             * frame bytes to REG[0x7F] (FIFO Access) via SUCCESSIVE writes. Buffer
-             * them; they will be transmitted when the firmware enters TX. The
-             * register file is NOT used to store these (0x7F is a FIFO port). */
-            if(wreg == 0x7F) {
-                if(app->si_tx_fifo_len < SI_FIFO_LEN)
-                    app->si_tx_fifo[app->si_tx_fifo_len++] = b;
-                /* do not fall through to si4432_write for the FIFO port */
-                app->spi_phase = -1;
-                return;
-            }
+            /* DIRECT MODE ONLY: REG[0x7F] (FIFO Access) is NOT special-cased. The
+             * firmware never writes the FIFO in direct mode (DYN_HW_D605.md: 0
+             * accesses). It is treated as a plain register write below. */
             int nm = si4432_write(&app->si, wreg, b);
             /* Si4432 -> CC1101 "follow firmware" bridge: when the firmware
              * reprograms the carrier (REG[0x75..0x77]) re-map the CC1101
@@ -979,31 +1013,10 @@ static void spi_byte(AppState* app, uint8_t b) {
                 if(app->rf_follow) rf_follow_apply_mode(app, nm);
             }
         } else {
-            uint8_t rv;
-            if(app->spi_reg == 0x7F) {
-                /* FIFO RX read: hand back the bytes we loaded from the CC1101
-                 * packet. Successive reads advance the cursor; past the end we
-                 * return 0 (empty FIFO). When fully drained, mark the FIFO free so
-                 * fifo_rx_poll can load the next packet. */
-                if(app->si_rx_fifo_pos < app->si_rx_fifo_len) {
-                    rv = app->si_rx_fifo[app->si_rx_fifo_pos++];
-                    if(app->si_rx_fifo_pos >= app->si_rx_fifo_len) {
-                        app->si_rx_fifo_len = 0;
-                        app->si_rx_fifo_pos = 0;
-                    }
-                } else {
-                    rv = 0;
-                }
-            } else {
-                uint8_t rreg = app->spi_reg;
-                rv = si4432_read(&app->si, rreg);
-                /* Reading the interrupt-status regs de-asserts the nIRQ GPIO
-                 * (active-low) that fifo_rx_poll pulled low on a packet. */
-                if((rreg == 0x03 || rreg == 0x04) && app->si_dtmod == DtModFifo) {
-                    app->gpio_din[app->prof->data_port] |=
-                        (uint16_t)(1u << app->prof->data_pin);
-                }
-            }
+            /* DIRECT MODE ONLY: plain register read (incl. 0x03/0x04 INT_STATUS,
+             * cleared on read). REG[0x7F] is NOT special-cased -- the firmware
+             * never reads the FIFO in direct mode (DYN_HW_D605.md: 0 accesses). */
+            uint8_t rv = si4432_read(&app->si, app->spi_reg);
             app->spi_rx[app->spi_rx_tail] = rv;
             app->spi_rx_tail = (uint8_t)((app->spi_rx_tail + 1) % SPI_RX_QUEUE_LEN);
         }
@@ -1141,10 +1154,11 @@ static void mmio_write(void* ctx, uint32_t addr, uint32_t val, int size) {
                 app->gpio_dout[port] = (uint16_t)val; /* DOUT */
                 touched = 0xFFFFu;
             }
-            /* TX capture: the firmware bit-bangs the DATA pin (DOUT port B bit0)
-             * while it is in TX mode (rf_tx_on). */
-            if(app->tx_capturing && port == app->prof->data_port) {
-                bool level = (app->gpio_dout[port] >> app->prof->data_pin) & 1u;
+            /* TX capture: in direct mode the firmware bit-bangs the TX-DATA pin
+             * PB3 (tx_data_port/tx_data_pin), NOT the RX-data pin PB0. See
+             * DYN_HW_D605.md §9.B (TX waveform pin = port1.3/PB3). */
+            if(app->tx_capturing && port == app->prof->tx_data_port) {
+                bool level = (app->gpio_dout[port] >> app->prof->tx_data_pin) & 1u;
                 tx_capture_data_edge(app, level);
             }
             /* mirror the indicator LED (reads the FINAL pin state) */
@@ -2079,20 +2093,13 @@ static void rf_follow_apply_freq(AppState* app) {
     app->frequency = hz;
     FURI_LOG_I(TAG, "RF: firmware set freq -> %lu Hz (REG75=0x%02X 76=0x%02X 77=0x%02X)",
                (unsigned long)hz, r75, r76, r77);
-    /* Re-tune live if the radio is mid-RX/TX so the new carrier takes effect. */
+    /* Re-tune live if the radio is mid-RX so the new carrier takes effect.
+     * Direct-mode RX only (async serial); no FIFO/packet receiver. */
     if(app->radio_on && app->rx_running) {
-        if(app->si_dtmod == DtModFifo) {
-            /* packet receiver: idle, retune, re-arm */
-            furi_hal_subghz_idle();
-            furi_hal_subghz_set_frequency_and_path(app->frequency);
-            furi_hal_subghz_flush_rx();
-            furi_hal_subghz_rx();
-        } else {
-            furi_hal_subghz_stop_async_rx();
-            furi_hal_subghz_idle();
-            furi_hal_subghz_set_frequency_and_path(app->frequency);
-            furi_hal_subghz_start_async_rx(radio_rx_callback, app);
-        }
+        furi_hal_subghz_stop_async_rx();
+        furi_hal_subghz_idle();
+        furi_hal_subghz_set_frequency_and_path(app->frequency);
+        furi_hal_subghz_start_async_rx(radio_rx_callback, app);
     } else if(app->radio_on) {
         furi_hal_subghz_idle();
         furi_hal_subghz_set_frequency_and_path(app->frequency);
@@ -2106,37 +2113,13 @@ static void rf_follow_apply_freq(AppState* app) {
  *   new_mode: 3=TX, 2=RX, 1=READY, 0=IDLE (from si4432_write). */
 static void rf_follow_apply_mode(AppState* app, int new_mode) {
     if(!app->rf_follow || !app->radio_on) return;
-    /* DATA-SOURCE ROUTING: dtmod (REG[0x71] bits[7:6]) decides the path at runtime.
-     * FIFO (dtmod==10) uses the packet FIFO bridge; everything else (direct GPIO /
-     * SDI / PN9) uses the existing bit-bang edge path. This lets ONE codebase
-     * support any firmware regardless of the profile's rf_sw_demod hint. */
-    bool fifo_mode = (app->si_dtmod == DtModFifo);
+    /* DIRECT MODE ONLY (DYN_HW_D605.md): both firmwares bit-bang the waveform on
+     * a GPIO pin and demodulate RX by software. There is no FIFO/packet path.
+     * RX -> inject into PB0 (demod ISR); TX -> capture PB3 edges and replay. */
     switch(new_mode) {
     case 2: /* RX */
-        if(fifo_mode) {
-            /* FIFO RX: switch the CC1101 to the firmware's modulation, start the
-             * packet receiver, and poll it from the main loop (fifo_rx_poll).
-             * Received packets are pushed into si_rx_fifo + IRQ flags so the
-             * firmware's FIFO-drain path sees a real frame. */
-            app->rf_mode = RfModeRx;
-            if(!app->rx_running) {
-                if(app->tx_active) {
-                    furi_hal_subghz_stop_async_tx();
-                    app->tx_active = false;
-                }
-                rf_reapply_preset(app); /* OOK/FSK as the firmware asked */
-                furi_hal_subghz_idle();
-                furi_hal_subghz_set_frequency_and_path(app->frequency);
-                furi_hal_subghz_flush_rx();
-                furi_hal_subghz_rx();
-                app->rx_running = true;
-                FURI_LOG_I(TAG, "RF: CC1101 FIFO RX started @%lu Hz (firmware rf_rx_on)",
-                           (unsigned long)app->frequency);
-            }
-            break;
-        }
         /* Direct/bit-bang RX via the firmware SW demodulator ISR. Requires a
-         * known demod ISR (profiles with rf_sw_demod). */
+         * known demod ISR (both profiles set rf_sw_demod=true). */
         if(!app->prof->rf_sw_demod) {
             FURI_LOG_W(TAG, "RF: firmware rf_rx_on but SW-demod RX not available on %s "
                             "(direct mode, no demod ISR mapped)",
@@ -2153,42 +2136,18 @@ static void rf_follow_apply_mode(AppState* app, int new_mode) {
         }
         break;
     case 3: /* TX */
-        if(app->rx_running) {
-            if(fifo_mode) {
-                furi_hal_subghz_idle();
-                app->rx_running = false;
-            } else {
-                rx_bridge_stop(app);
-            }
-        }
+        if(app->rx_running) rx_bridge_stop(app);
         app->rf_mode = RfModeTx;
-        if(fifo_mode) {
-            /* FIFO TX: the firmware already wrote the frame bytes to REG[0x7F]
-             * (buffered in si_tx_fifo). Transmit them now as an edge train on the
-             * firmware's modulation/data-rate. */
-            rf_reapply_preset(app);
-            fifo_tx_transmit(app);
-            break;
-        }
-        /* Direct/bit-bang TX: capture the DATA pin edges and replay them. */
+        /* Direct/bit-bang TX: capture the PB3 TX-DATA pin edges and replay them. */
         app->tx_head = app->tx_tail = 0;
         app->tx_edges_frame = 0;
         rf_reapply_preset(app); /* match modulation before TX */
-        tx_on_si_mode(app, 3); /* begin capturing DATA edges now */
+        tx_on_si_mode(app, 3); /* begin capturing PB3 edges now */
         break;
     case 1: /* READY */
     case 0: /* IDLE */
     default:
-        if(app->rx_running) {
-            if(fifo_mode) {
-                /* stop the packet receiver */
-                furi_hal_subghz_idle();
-                app->rx_running = false;
-                FURI_LOG_I(TAG, "RF: CC1101 FIFO RX stopped (firmware idle)");
-            } else {
-                rx_bridge_stop(app);
-            }
-        }
+        if(app->rx_running) rx_bridge_stop(app);
         if(app->tx_capturing || app->tx_active ||
            app->tx_head != app->tx_tail) {
             /* A TX frame is being captured / is pending / is in flight. Close the
@@ -2214,16 +2173,7 @@ static void radio_deinit(AppState* app) {
         furi_hal_subghz_stop_async_tx();
         app->tx_active = false;
     }
-    if(app->rx_running) {
-        if(app->si_dtmod == DtModFifo) {
-            /* FIFO RX uses the packet receiver (furi_hal_subghz_rx), not async_rx:
-             * just idle it. */
-            furi_hal_subghz_idle();
-            app->rx_running = false;
-        } else {
-            rx_bridge_stop(app);
-        }
-    }
+    if(app->rx_running) rx_bridge_stop(app); /* direct-mode RX only */
     furi_hal_subghz_idle();
     furi_hal_subghz_sleep();
     app->radio_on = false;
@@ -2239,11 +2189,13 @@ static void tx_on_si_mode(AppState* app, int new_mode) {
     if(app->rf_mode != RfModeTx) return; /* we only capture if the overlay is in TX */
     if(new_mode == 3) { /* TX */
         app->tx_capturing = true;
-        app->tx_last_level = (app->gpio_dout[app->prof->data_port] >> app->prof->data_pin) & 1u;
+        /* TX waveform is bit-banged on PB3 (tx_data pin), not PB0 (RX-data). */
+        app->tx_last_level =
+            (app->gpio_dout[app->prof->tx_data_port] >> app->prof->tx_data_pin) & 1u;
         app->tx_last_insn = app->ninsn;
         app->tx_edges_frame = 0;
-        FURI_LOG_I(TAG, "RF: firmware rf_tx_on -> capturing DATA pin (B%u.%u)",
-                   app->prof->data_port, app->prof->data_pin);
+        FURI_LOG_I(TAG, "RF: firmware rf_tx_on -> capturing TX-DATA pin (B%u.%u)",
+                   app->prof->tx_data_port, app->prof->tx_data_pin);
     } else { /* IDLE/READY/RX: end of the frame */
         if(app->tx_capturing) {
             app->tx_capturing = false;
@@ -2328,170 +2280,6 @@ static void tx_bridge_flush(AppState* app) {
         FURI_LOG_E(TAG, "start_async_tx failed");
         app->tx_tail = app->tx_head;
     }
-}
-
-/* ================================================ Si4432 PACKET/FIFO bridge */
-
-/* Compute the Si4432 TX bit period in microseconds from REG[0x6E/0x6F] (TX data
- * rate) and REG[0x70] bit5 (txdtrtscale). Datasheet:
- *   txdr[15:0] = (REG6E<<8)|REG6F
- *   if scaled (REG70 bit5 == 1): rate = txdr * 1e6 / 2^21
- *   else:                        rate = txdr * 1e6 / 2^16
- * Returns the bit period in us (clamped to a sane 50..5000 us if the firmware
- * left the data-rate registers at 0 or an implausible value). */
-static uint32_t si4432_tx_bit_us(AppState* app) {
-    uint32_t txdr = ((uint32_t)app->si.regs[0x6E] << 8) | (uint32_t)app->si.regs[0x6F];
-    bool scaled = (app->si.regs[0x70] & 0x20u) != 0;
-    uint32_t bps = 0;
-    if(txdr) {
-        uint64_t num = (uint64_t)txdr * 1000000ull;
-        bps = (uint32_t)(num >> (scaled ? 21 : 16));
-    }
-    if(bps < 200 || bps > 200000) {
-        /* implausible / unset: fall back to ~4.8 kBaud, a common keyfob rate */
-        bps = 4800;
-    }
-    uint32_t us = 1000000u / bps;
-    if(us < 20) us = 20;
-    if(us > 5000) us = 5000;
-    return us;
-}
-
-/* FIFO TX: convert the bytes the firmware wrote to REG[0x7F] (si_tx_fifo) into an
- * edge train (MSB-first, one bit = one bit-period) and transmit them via the
- * async_tx engine on the CC1101. This is the portable path (works for both
- * OOK and 2-FSK presets because async_tx just keys the modem high/low per edge).
- * Runs edges contiguously; equal adjacent bits are merged into a single longer
- * level so the ring holds whole frames comfortably. */
-static void fifo_tx_transmit(AppState* app) {
-    if(!app->radio_on) return;
-    if(app->si_tx_fifo_len == 0) {
-        FURI_LOG_W(TAG, "RF: FIFO TX requested but FIFO empty");
-        return;
-    }
-    if(app->tx_active) return; /* a transmission is already in flight */
-    if(!furi_hal_subghz_is_tx_allowed(app->frequency)) {
-        FURI_LOG_E(TAG, "RF: FIFO TX NOT allowed @%lu Hz; dropping %u bytes",
-                   (unsigned long)app->frequency, app->si_tx_fifo_len);
-        app->si_tx_fifo_len = 0;
-        return;
-    }
-    uint32_t bit_us = si4432_tx_bit_us(app);
-    /* Build the edge ring from the FIFO bytes (MSB first). Merge runs of equal
-     * bits into one edge of N*bit_us to save ring slots. */
-    app->tx_head = app->tx_tail = 0;
-    bool cur_level = false;
-    uint32_t run = 0;
-    bool have = false;
-    for(uint32_t i = 0; i < app->si_tx_fifo_len; i++) {
-        uint8_t byte = app->si_tx_fifo[i];
-        for(int b = 7; b >= 0; b--) {
-            bool bit = (byte >> b) & 1u;
-            if(!have) {
-                cur_level = bit;
-                run = 1;
-                have = true;
-            } else if(bit == cur_level) {
-                run++;
-            } else {
-                uint32_t next = (app->tx_head + 1) % TX_RING_LEN;
-                if(next != app->tx_tail) {
-                    app->tx_ring[app->tx_head].level = cur_level;
-                    app->tx_ring[app->tx_head].duration = run * bit_us;
-                    app->tx_head = next;
-                }
-                cur_level = bit;
-                run = 1;
-            }
-        }
-    }
-    if(have) { /* flush the final run */
-        uint32_t next = (app->tx_head + 1) % TX_RING_LEN;
-        if(next != app->tx_tail) {
-            app->tx_ring[app->tx_head].level = cur_level;
-            app->tx_ring[app->tx_head].duration = run * bit_us;
-            app->tx_head = next;
-        }
-    }
-    uint32_t edges = (app->tx_head + TX_RING_LEN - app->tx_tail) % TX_RING_LEN;
-    FURI_LOG_I(TAG, "RF: FIFO TX %u bytes -> CC1101 (%lu edges, bit=%lu us)",
-               app->si_tx_fifo_len, (unsigned long)edges, (unsigned long)bit_us);
-    furi_hal_subghz_idle();
-    furi_hal_subghz_set_frequency_and_path(app->frequency);
-    if(furi_hal_subghz_start_async_tx(radio_tx_callback, app)) {
-        app->tx_active = true;
-        app->fifo_tx_frames++;
-    } else {
-        FURI_LOG_E(TAG, "RF: FIFO start_async_tx failed");
-        app->tx_tail = app->tx_head;
-    }
-    /* the FIFO is consumed; the firmware will refill it for the next frame */
-    app->si_tx_fifo_len = 0;
-}
-
-/* FIFO RX: poll the CC1101 packet pipe. When a packet arrives, copy it into the
- * Si4432 RX FIFO (si_rx_fifo) that REG[0x7F] reads return, set the Si4432
- * "packet received" interrupt flags (REG 0x03 bit1 ipkvalid, and REG 0x04 bit1
- * irxffafull as a secondary hint), and optionally pulse the nIRQ GPIO. The
- * firmware's FIFO-drain path then reads the frame via REG[0x7F] and the status
- * via REG 0x03/0x04.
- *
- * IRQ NOTE: the exact Si4432 nIRQ line / firmware handler was NOT positively
- * identified from the RE (the pending DESC "ISR->buffer 0x20000B9C" concerns the
- * firmware-internal drain, not our side). Measured firmwares (pmax) POLL REG
- * 0x03/0x04 and the nIRQ GPIO DIN pin, so setting the flags + FIFO is sufficient
- * for them. We additionally drive the DATA/IRQ GPIO (data_port.data_pin) LOW
- * (active-low nIRQ convention) as a best-effort wake hint; if a given firmware
- * truly needs a hardware IRQ vector we leave that as a documented limitation. */
-static void fifo_rx_poll(AppState* app) {
-    if(!app->rx_running || !app->radio_on) return;
-    if(app->si_dtmod != DtModFifo) return;
-    /* Do not clobber a frame the firmware has not finished draining yet. */
-    if(app->si_rx_fifo_len && app->si_rx_fifo_pos < app->si_rx_fifo_len) return;
-    if(!furi_hal_subghz_rx_pipe_not_empty()) return;
-
-    uint8_t buf[SI_FIFO_LEN];
-    uint8_t size = 0;
-    furi_hal_subghz_read_packet(buf, &size);
-    if(size == 0) {
-        furi_hal_subghz_flush_rx();
-        furi_hal_subghz_rx();
-        return;
-    }
-    if(size > SI_FIFO_LEN) size = SI_FIFO_LEN;
-    memcpy(app->si_rx_fifo, buf, size);
-    app->si_rx_fifo_len = size;
-    app->si_rx_fifo_pos = 0;
-    app->rx_events++;
-    app->fifo_rx_frames++;
-
-    /* Si4432 interrupt status: REG 0x03 (Interrupt Status 1) bit1 = ipkvalid
-     * (valid packet received), bit4 = irxffafull (RX FIFO almost full). These
-     * are the flags the firmware polls after seeing nIRQ. They are latched and
-     * cleared on read by si4432_read. */
-    app->si.regs[0x03] |= (1u << 1) | (1u << 4);
-    /* REG 0x04 (Interrupt Status 2): set bit1 as an extra "data present" hint. */
-    app->si.regs[0x04] |= (1u << 1);
-
-    /* Best-effort nIRQ GPIO assert (active-low): drive the Si4432 IRQ/DATA DIN
-     * pin LOW so a firmware that gates on GPIO_PinInGet(nIRQ) sees it asserted. */
-    app->gpio_din[app->prof->data_port] &= (uint16_t)~(1u << app->prof->data_pin);
-
-    FURI_LOG_I(TAG, "RF: FIFO RX %u bytes from CC1101 -> firmware", size);
-    {
-        char line[64];
-        int off = 0;
-        for(uint8_t i = 0; i < size && i < 16; i++) {
-            int w = snprintf(line + off, sizeof(line) - (size_t)off, "%02X", buf[i]);
-            if(w < 0 || (size_t)(off + w) >= sizeof(line)) break;
-            off += w;
-        }
-        FURI_LOG_D(TAG, "RF: FIFO RX frame[0..15]: %s", line);
-    }
-
-    /* re-arm the CC1101 receiver for the next packet */
-    furi_hal_subghz_flush_rx();
-    furi_hal_subghz_rx();
 }
 
 /* ===================================================================== RX bridge */
@@ -2844,7 +2632,7 @@ static void knock_rebuild(AppState* app) {
     char hdr[64];
     char seq[48];
     knock_seq_str(app, seq, sizeof(seq));
-    snprintf(hdr, sizeof(hdr), "Knock: %s", seq);
+    snprintf(hdr, sizeof(hdr), "PIN: %s", seq);
     submenu_set_header(app->submenu, hdr);
     submenu_add_item(app->submenu, "UP", KnockItemUp, knock_submenu_callback, app);
     submenu_add_item(app->submenu, "DOWN", KnockItemDown, knock_submenu_callback, app);
@@ -2865,19 +2653,19 @@ static const char* const ABOUT_TEXT =
     "keyfob hardware: the OLED screen and the 6 physical buttons, and bridges the "
     "Flipper CC1101 for real RX/TX.\n"
     "\n"
-    "Buttons (Flipper key = keyfob button):\n"
-    "Up = Btn1  (On / menu / cell+)\n"
-    "Ok = Btn2  (confirm / mode; hold: erase cell)\n"
-    "Down = Btn3  (menu / cell-; hold: auto)\n"
-    "Left = Btn4  (RX freq / close car; hold: accept)\n"
-    "Right = Btn5  (AM+FM / open car; hold: highway)\n"
-    "Back = Btn6  (trunk; hold: back to menu)\n"
+    "Buttons (Flipper D-pad = keyfob button number):\n"
+    "Up = Btn6  (trunk; hold: back to menu)\n"
+    "Left = Btn2  (confirm / mode; hold: erase cell)\n"
+    "Ok = Btn5  (AM+FM / open car)\n"
+    "Right = Btn1  (On / menu / cell+)\n"
+    "Down = Btn4  (RX freq / close car)\n"
+    "Back = Btn3  (menu / cell-; hold: auto)\n"
     "Hold Up (>1s) = EXIT app\n"
     "Hold Back (>1s) = cycle RF (OFF/TX/RX)\n"
     "Any key held = long press of that keyfob button. The firmware decides what "
     "each button does in each mode.\n"
     "\n"
-    "Unlock: the screen is black until a knock-code (blind button sequence) is "
+    "PIN: the screen is black until the unlock PIN (blind button sequence) is "
     "entered; the app auto-unlocks on launch (pandora: Up,Ok,Ok,Up,Up,Down / max: "
     "Up,Ok,Down,Ok,Up,Down).";
 
@@ -2890,7 +2678,7 @@ static void menu_rebuild(AppState* app) {
     submenu_add_item(app->submenu, buf, MenuItemFirmware, menu_submenu_callback, app);
     char seq[48];
     knock_seq_str(app, seq, sizeof(seq));
-    snprintf(buf, sizeof(buf), "Knock: %s", seq);
+    snprintf(buf, sizeof(buf), "PIN: %s", seq);
     submenu_add_item(app->submenu, buf, MenuItemKnock, menu_submenu_callback, app);
     submenu_add_item(app->submenu, "Launch", MenuItemLaunch, menu_submenu_callback, app);
     submenu_add_item(app->submenu, "About", MenuItemAbout, menu_submenu_callback, app);
@@ -3074,10 +2862,8 @@ static void emu_reset_and_unlock(AppState* app) {
     app->buzz_request = false;
     init_buttons_released(app);
     si4432_init(&app->si);
-    /* reset the Si4432 PACKET/FIFO bridge state */
-    app->si_tx_fifo_len = 0;
-    app->si_rx_fifo_len = 0;
-    app->si_rx_fifo_pos = 0;
+    /* DIRECT MODE ONLY: dtmod defaults to direct-GPIO (tracked for diagnostics;
+     * the FIFO bridge state no longer exists). */
     app->si_dtmod = DtModDirectGpio;
     auto_unlock(app);
 }
@@ -3218,7 +3004,9 @@ static void run_emulator(AppState* app, Gui* gui) {
                 /* still held: check hold thresholds (fire once) */
                 uint32_t held = now_tick - key_t0[fk];
                 if(fk == FK_UP) {
-                    if(held >= EXIT_HOLD_MS) { /* Button 1 long hold = EXIT */
+                    if(held >= EXIT_HOLD_MS) { /* Flipper UP long hold = EXIT app
+                                                * (host-side; keyfob button 6 has
+                                                * no long-press conflict) */
                         app->exit_requested = true;
                         key_consumed[fk] = true;
                     }
@@ -3242,10 +3030,11 @@ static void run_emulator(AppState* app, Gui* gui) {
                 } else if(app->unlocked) {
                     int btn = FK_TO_BTN[fk];
                     if(fk == FK_UP) {
-                        /* Button 1 has no keyfob long-press; always short click */
+                        /* Flipper UP -> keyfob 6; short click only (its >1s hold
+                         * is the host-side EXIT, consumed above). */
                         nav_button(app, btn, false);
                     } else if(fk == FK_BACK) {
-                        /* Button 6: short=trunk, 500ms..1s=long press. (>1s was
+                        /* Flipper BACK -> keyfob 3; short vs long press. (>1s was
                          * RF cycle, handled above as consumed.) */
                         nav_button(app, btn, held >= HOLD_MS);
                     } else {
@@ -3313,10 +3102,12 @@ static void run_emulator(AppState* app, Gui* gui) {
             }
         }
 
-        /* RF bridge: replay accumulated TX / inject received RX */
+        /* RF bridge: replay accumulated TX / inject received RX.
+         * DIRECT MODE ONLY: TX replays the PB3 bit-bang edges; RX injects the
+         * demodulated OOK stream into PB0 for the firmware's demod ISR. There is
+         * no FIFO/packet path (removed; DYN_HW_D605.md: 0 FIFO accesses). */
         tx_bridge_flush(app);
-        rx_bridge_pump(app); /* direct/bit-bang RX (SW demod) */
-        fifo_rx_poll(app); /* packet/FIFO RX (dtmod==FIFO) */
+        rx_bridge_pump(app); /* direct/bit-bang RX (SW demod via PB0) */
 
         /* tentative buzzer beep: non-blocking, owns the shared speaker only while
          * active and releases it as soon as the firmware's buzzer burst ceases. */
