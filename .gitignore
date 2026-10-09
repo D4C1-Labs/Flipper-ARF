@@ -78,6 +78,8 @@ node_modules/
 /block.bin
 /return_block.bin
 /RE-mario-full
+applications/system/PandoraARM/hosttest/
+applications/system/PandoraPIC/hosttest/
 
 #companion app
 /companion
