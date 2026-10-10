@@ -149,6 +149,11 @@
  * burst (~0.4s @ 70 k-insn/s) once the UI redraws. @ 70 k-insn/s: old 120k =
  * ~1.7s; new 30k = ~0.43s. */
 #define NAV_SETTLE_MIN_INSN 30000ull /* don't cut before this even on fb change */
+/* NAV_SETTLE_BURST: granularity of the adaptive settle loop. Smaller = the
+ * fb-change check runs more often -> the settle cuts sooner once the UI redraws.
+ * Matched to NAV_SETTLE_MIN_INSN so ONE burst reaches the floor and a redraw can
+ * be cut at the earliest allowed point (~0.43s @ 70 k-insn/s). */
+#define NAV_SETTLE_BURST 30000u
 
 /* Physical hold detection (Flipper keys). Hold > ~500ms = long press of the
  * corresponding keyfob button. Flipper UP held > 1s = EXIT the app (Button 1
@@ -1053,7 +1058,13 @@ static bool buzz_pin_is_reserved(AppState* app, uint32_t port, uint32_t pin) {
     const ArmProfile* p = app->prof;
     if(port == p->led_port && pin == p->led_pin) return true; /* LED */
     if(port == OLED_DC_PORT && pin == OLED_DC_PIN) return true; /* OLED DC (A9) */
-    if(port == p->data_port && pin == p->data_pin) return true; /* Si4432 DATA */
+    if(port == p->data_port && pin == p->data_pin) return true; /* Si4432 RX-data (PB0) */
+    /* RF control pins are NOT a buzzer (they toggle during radio activity):
+     * CS=PE9, TX-data=PB3, antenna PE14/PE15. PE9 (CS) was a false positive. */
+    if(port == p->tx_data_port && pin == p->tx_data_pin) return true; /* Si4432 TX-data (PB3) */
+    if(port == p->rf_cs_port && pin == p->rf_cs_pin) return true; /* Si4432 CS (PE9) */
+    if(port == p->rf_ant_rx_port && pin == p->rf_ant_rx_pin) return true; /* RX antenna (PE14) */
+    if(port == p->rf_ant_tx_port && pin == p->rf_ant_tx_pin) return true; /* TX antenna (PE15) */
     /* the 6 keyfob buttons are DIN (inputs), but guard anyway in case a profile
      * reuses a port for both; a button pin as DOUT is not a buzzer. */
     if((port == p->up_port && pin == p->up_pin) ||
@@ -1420,10 +1431,17 @@ static bool nav_button(AppState* app, int btn, bool hold) {
     app->nav_reads_target = hold ? NAV_LONG_READS : NAV_HOLD_READS;
     app->nav_active = 1;
 
+    /* FLUIDITY: the press loop exits the instant the firmware dispatches the
+     * release (nav_phase==2), which it detects only at a burst boundary. Smaller
+     * bursts (25000 vs 50000) check nav_phase twice as often -> the press returns
+     * sooner once the firmware has re-read our pin enough times, with NO change to
+     * how the firmware sees the press (same pin, same reader sync) and NO loss of
+     * useful insn/s (the firmware keeps running back-to-back). NAV_BUDGET_INSN is
+     * unchanged (still the same ~14s safety cap). */
     uint64_t done = 0;
     while(app->nav_phase != 2 && done < NAV_BUDGET_INSN) {
-        run_burst(app, 50000);
-        done += 50000;
+        run_burst(app, 25000);
+        done += 25000;
     }
     app->nav_active = 0;
     /* guarantee release (in case the budget ran out mid-hold) */
@@ -1432,13 +1450,19 @@ static bool nav_button(AppState* app, int btn, bool hold) {
 
     bool completed = (app->nav_phase == 2);
 
-    /* adaptive settle: stop as soon as the firmware redraws the framebuffer. */
+    /* adaptive settle: stop as soon as the firmware redraws the framebuffer.
+     * FLUIDITY: the settle burst is reduced 60000 -> NAV_SETTLE_BURST (30000) so
+     * the fb-change check runs twice as often. With NAV_SETTLE_MIN_INSN=30000 the
+     * first burst already clears the floor, so a redraw is now cut at ~0.43s
+     * instead of after a full 60000 burst. This only trims the WAIT after the UI
+     * has already redrawn; it does NOT skip any render (render_oled + canvas_commit
+     * still run every frame in the main loop) and does NOT reduce useful insn/s. */
     uint32_t prev = fb_hash(app);
     done = 0;
     bool redrew = false;
     while(done < NAV_SETTLE_INSN) {
-        run_burst(app, 60000);
-        done += 60000;
+        run_burst(app, NAV_SETTLE_BURST);
+        done += NAV_SETTLE_BURST;
         uint32_t cur = fb_hash(app);
         if(cur != prev && done >= NAV_SETTLE_MIN_INSN) { redrew = true; break; } /* UI redrew */
         prev = cur;
@@ -2383,6 +2407,13 @@ static bool rx_feed_edge(AppState* app, bool level, uint32_t dur_us) {
     rx_wr8(app, p->rx_struct + 0xA, pl);
 
     app->rx_feeding = true;
+    /* The demod ISR normally returns via the call sentinel after only a few
+     * hundred/thousand insn (one edge of processing); 200000 is a SAFETY cap for
+     * the pathological "ISR never returns" case. It is deliberately left UNCHANGED
+     * -- lowering it risks clipping the final edge that decodes a full frame and
+     * would silently break RX decoding. The fluidity win for RX comes from the
+     * drain cap (48 edges/frame, below) and the throttled inject log, not from
+     * starving the ISR. */
     call_subroutine(app, p->demod_isr, 200000);
     app->rx_feeding = false;
     app->rx_prev_level = level;
@@ -2450,8 +2481,24 @@ static void rx_bridge_pump(AppState* app) {
         if(drained >= 48) break; /* do not hog the frame */
     }
     if(drained) {
-        FURI_LOG_D(TAG, "RX injected %d edges (total %lu)", drained,
-                   (unsigned long)app->rx_events);
+        /* FLUIDITY: this log used to fire EVERY frame the queue had edges (many
+         * times/second while a remote is transmitting -> "RX injected 48 edges"
+         * spam). FURI_LOG has a non-trivial per-call cost (string format + mutex
+         * on the log bus) that competes with the interpreter. Throttle it to at
+         * most ~once/second so the diagnostic is kept but the per-frame overhead
+         * is gone. The useful counters (rx_events/rx_frames) are still reported
+         * precisely by the RX heartbeat; nothing functional depends on this log. */
+        static uint32_t s_rxinj_tick = 0;
+        static uint32_t s_rxinj_edges = 0;
+        s_rxinj_edges += (uint32_t)drained;
+        uint32_t t = furi_get_tick();
+        if(s_rxinj_tick == 0) s_rxinj_tick = t;
+        if((uint32_t)(t - s_rxinj_tick) >= 1000) {
+            FURI_LOG_D(TAG, "RX injected %lu edges/s (total %lu)",
+                       (unsigned long)s_rxinj_edges, (unsigned long)app->rx_events);
+            s_rxinj_edges = 0;
+            s_rxinj_tick = t;
+        }
     }
 }
 

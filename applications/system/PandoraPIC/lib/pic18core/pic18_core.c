@@ -75,6 +75,8 @@ static const SfrEntry SFR_TABLE[] = {
 #define A_FSR2H   0xFDA
 #define A_FSR2L   0xFD9
 #define A_STATUS  0xFD8
+#define A_INTCON2 0xFF1
+#define A_RCON    0xFD0
 
 /*
  * Fast SFR classification by address. 0 = normal RAM (not a special SFR);
@@ -215,6 +217,12 @@ static int     fsr_access(Pic18Cpu* c, int n, uint8_t kind, int write, uint8_t w
 
 /* --------------------------------------------------------------- utilities */
 static uint16_t pword(Pic18Cpu* c, uint32_t a) {
+    if(c->on_prog_read) {
+        uint8_t b0 = (a < c->prog_size) ? c->on_prog_read(c, a, c->prog_read_ctx) : 0xFF;
+        uint8_t b1 =
+            (a + 1 < c->prog_size) ? c->on_prog_read(c, a + 1, c->prog_read_ctx) : 0xFF;
+        return (uint16_t)(b0 | (b1 << 8));
+    }
     uint8_t b0 = (a < c->prog_size) ? c->prog[a] : 0xFF;
     uint8_t b1 = (a + 1 < c->prog_size) ? c->prog[a + 1] : 0xFF;
     return (uint16_t)(b0 | (b1 << 8));
@@ -475,7 +483,10 @@ static uint8_t config_read(Pic18Cpu* c, uint32_t a) {
 }
 
 static uint8_t prog_read(Pic18Cpu* c, uint32_t a) {
-    if(a < c->prog_size) return c->prog[a];
+    if(a < c->prog_size) {
+        if(c->on_prog_read) return c->on_prog_read(c, a, c->prog_read_ctx);
+        return c->prog[a];
+    }
     if(a >= 0x300000) return config_read(c, a);
     return 0xFF;
 }
@@ -501,7 +512,10 @@ static void tblwt(Pic18Cpu* c, int mode) {
         tblptr_set(c, ptr);
     }
     uint8_t val = c->ram[A_TABLAT];
-    if(ptr < c->prog_size) c->prog[ptr] = val;
+    /* Flash self-write: only when backed by a direct buffer. In paged mode
+     * (on_prog_read set) the program memory is read-only from the cache; the
+     * known firmwares do not self-program flash at runtime. */
+    if(!c->on_prog_read && ptr < c->prog_size) c->prog[ptr] = val;
     if(mode == 1)
         tblptr_set(c, (ptr + 1) & 0x3FFFFF);
     else if(mode == 2)
@@ -813,7 +827,9 @@ static void exec_op(Pic18Cpu* c, uint32_t pc, uint16_t op) {
             c->ram[A_STATUS] = c->statuss;
             c->ram[A_BSR] = (uint8_t)(c->bsrs & 0xF);
         }
+        /* GIE re-enabled (INTCON.7); leave the ISR so the model can re-fire. */
         c->ram[A_INTCON] |= 0x80;
+        c->in_isr = 0;
         c->cycles++;
         return;
     }
@@ -869,6 +885,62 @@ static void exec_op(Pic18Cpu* c, uint32_t pc, uint16_t op) {
     c->halted = 1;
 }
 
+/* ========================================================= interrupt model
+ * Faithful port of emu/pic18cpu.py check_interrupts / _deliver_interrupt.
+ * ADDITIVE: with irq_enabled==0 both functions are no-ops and step() behaves
+ * exactly as before.
+ */
+
+/* Delivers a high- (or low-)priority interrupt as the hardware would when it
+ * accepts it: sets TMR0IF, pushes the return PC, clears GIE, jumps to the
+ * vector, marks in_isr, and lowers the frame-tick semaphores. */
+static void deliver_interrupt(Pic18Cpu* c) {
+    uint8_t rcon = c->ram[A_RCON];
+    int ipen = (rcon >> 7) & 1;
+    /* Mark the source: TMR0IF (INTCON.2). Timer0 is the only timer this family
+     * of firmwares configures, so we model a Timer0 tick. */
+    c->ram[A_INTCON] |= 0x04; /* TMR0IF */
+    /* Push the return PC (as the HW does when accepting the interrupt). */
+    pic18_push(c, c->pc);
+    if(ipen) {
+        /* Priority mode: TMR0IP (INTCON2.2) selects high/low. */
+        uint8_t intcon2 = c->ram[A_INTCON2];
+        int high = (intcon2 >> 2) & 1;
+        if(high) {
+            c->ram[A_INTCON] &= (uint8_t)~0x80; /* clear GIEH */
+            c->pc = c->irq_vector_high;
+        } else {
+            c->ram[A_INTCON] &= (uint8_t)~0x40; /* clear GIEL */
+            c->pc = c->irq_vector_low;
+        }
+    } else {
+        /* Compatibility mode: single vector 0x08, GIE masks everything. */
+        c->ram[A_INTCON] &= (uint8_t)~0x80;
+        c->pc = c->irq_vector_high;
+    }
+    c->in_isr = 1;
+    c->irq_count++;
+    c->cycles++;
+    /* Frame-tick: lower the busy-wait semaphores the real timer ISR cadence
+     * would lower on the chip (see header + python NOTE). */
+    for(uint8_t i = 0; i < c->irq_release_count; i++) {
+        c->ram[c->irq_release_addr[i] & 0xFFF] &= (uint8_t)~(1u << c->irq_release_bit[i]);
+    }
+}
+
+/* Counts instructions and delivers a timer interrupt every irq_period steps, if
+ * GIE (INTCON.7) is set and we are not already inside an ISR. No-op when
+ * irq_enabled==0. */
+static void check_interrupts(Pic18Cpu* c) {
+    if(!c->irq_enabled || c->in_isr) return;
+    uint8_t intcon = c->ram[A_INTCON];
+    if(!(intcon & 0x80)) return; /* GIE/GIEH disabled */
+    c->irq_counter++;
+    if(c->irq_counter < c->irq_period) return;
+    c->irq_counter = 0;
+    deliver_interrupt(c);
+}
+
 /* ============================================================ public API */
 void pic18_init(Pic18Cpu* c) {
     memset(c, 0, sizeof(*c));
@@ -876,6 +948,15 @@ void pic18_init(Pic18Cpu* c) {
     c->prog = NULL;
     c->prog_size = 0;
     c->default_port = 0x00;
+    /* interrupt model defaults: DISABLED (additive) */
+    c->irq_enabled = 0;
+    c->irq_period = 4000;
+    c->irq_vector_high = 0x000008u;
+    c->irq_vector_low = 0x000018u;
+    c->irq_counter = 0;
+    c->in_isr = 0;
+    c->irq_count = 0;
+    c->irq_release_count = 0;
 }
 
 void pic18_set_prog(Pic18Cpu* c, uint8_t* prog, uint32_t size) {
@@ -893,6 +974,11 @@ void pic18_reset(Pic18Cpu* c) {
     c->steps = 0;
     c->halted = 0;
     c->sleeping = 0;
+    /* Interrupt model runtime state (config irq_enabled/period/vectors/release
+     * is user configuration and is preserved, like the python reset()). */
+    c->irq_counter = 0;
+    c->in_isr = 0;
+    c->irq_count = 0;
     memset(c->ram, 0, sizeof(c->ram));
     c->ram[A_BSR] = 0;
     c->ram[A_STKPTR] = 0;
@@ -949,6 +1035,8 @@ int pic18_load_hex(Pic18Cpu* c, const char* path) {
 int pic18_step(Pic18Cpu* c) {
     if(c->halted) return 0;
     if(c->sleeping) c->sleeping = 0;
+    /* Interrupt model (no-op when irq_enabled==0). */
+    check_interrupts(c);
     uint32_t pc = c->pc;
     if(c->on_code) c->on_code(c, pc, c->code_ctx);
     uint16_t op = pword(c, pc);
@@ -1027,4 +1115,27 @@ uint16_t pic18_fsr(const Pic18Cpu* c, int n) {
     else if(n == 1) { h = c->ram[A_FSR1H]; l = c->ram[A_FSR1L]; }
     else { h = c->ram[A_FSR2H]; l = c->ram[A_FSR2L]; }
     return (uint16_t)(((h & 0xF) << 8) | l);
+}
+
+/* ------------------------------------------------------- interrupt model API */
+void pic18_enable_interrupts(Pic18Cpu* c, uint32_t period) {
+    if(period) c->irq_period = period;
+    c->irq_enabled = 1;
+    c->irq_counter = 0;
+    c->in_isr = 0;
+}
+
+void pic18_disable_interrupts(Pic18Cpu* c) {
+    c->irq_enabled = 0;
+}
+
+void pic18_irq_release_clear(Pic18Cpu* c) {
+    c->irq_release_count = 0;
+}
+
+void pic18_irq_release_add(Pic18Cpu* c, uint16_t addr, uint8_t bit) {
+    if(c->irq_release_count >= PIC18_IRQ_RELEASE_MAX) return;
+    c->irq_release_addr[c->irq_release_count] = (uint16_t)(addr & 0xFFF);
+    c->irq_release_bit[c->irq_release_count] = (uint8_t)(bit & 7);
+    c->irq_release_count++;
 }

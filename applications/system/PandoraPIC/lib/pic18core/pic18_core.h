@@ -37,6 +37,9 @@ extern "C" {
 #define PIC18_RAM_SIZE  0x1000u  /* data RAM + SFR (banks 0..F)            */
 #define PIC18_STACK_LEVELS 31    /* return stack                           */
 
+/* Max (addr,bit) semaphores the frame-tick can release (see irq model). */
+#define PIC18_IRQ_RELEASE_MAX 4
+
 /* STATUS bit positions (PIC18) */
 #define PIC18_ST_C  0
 #define PIC18_ST_DC 1
@@ -71,6 +74,15 @@ typedef void (*Pic18PortWrite)(struct Pic18Cpu* cpu, uint16_t addr, uint8_t val,
  * Equivalent to the set of address hooks + trace in the python; the caller
  * decides whether to filter by pc. */
 typedef void (*Pic18CodeHook)(struct Pic18Cpu* cpu, uint32_t pc, void* ctx);
+
+/* Program-memory read callback (OPTIONAL). When set (on_prog_read != NULL) the
+ * core fetches program bytes through it INSTEAD of the direct `prog` pointer.
+ * This lets the caller serve program memory from a PAGED cache (small 4KB
+ * allocations) instead of one big contiguous malloc that would OOM on the
+ * Flipper. `a` is a byte address in [0, prog_size); must return the byte, or
+ * 0xFF for not-present. With on_prog_read == NULL the direct `prog` pointer is
+ * used (fast path, host tests). */
+typedef uint8_t (*Pic18ProgRead)(struct Pic18Cpu* cpu, uint32_t a, void* ctx);
 
 /* ----------------------------------------------------------------- state --- */
 typedef struct Pic18Cpu {
@@ -112,6 +124,36 @@ typedef struct Pic18Cpu {
     void*          port_write_ctx;
     Pic18CodeHook  on_code;      /* address trace/hook (optional) */
     void*          code_ctx;
+    Pic18ProgRead  on_prog_read; /* paged program memory (optional) */
+    void*          prog_read_ctx;
+
+    /* ------------------------------------------------- interrupt model ---
+     * Instruction-count based interrupt model (faithful port of the python
+     * emu/pic18cpu.py check_interrupts/_deliver_interrupt). ADDITIVE: with
+     * irq_enabled=false the core behaves EXACTLY as before. When enabled, every
+     * irq_period instructions a timer tick is generated and, if GIE (INTCON.7)
+     * is set and we are not already inside an ISR, a high/low priority interrupt
+     * is delivered: TMR0IF (INTCON.2) is set, PC is pushed on the HW return
+     * stack, GIE is cleared, and PC jumps to vector 0x08 (high) or 0x18 (low,
+     * when IPEN in RCON.7 + TMR0IP in INTCON2.2 select low). RETFIE (0x0010/11,
+     * already handled) clears in_isr and re-enables GIE.
+     *
+     * The firmware busy-waits on a software semaphore bit in RAM (the "frame
+     * tick") that on real silicon the timer ISR cadence lowers; the model
+     * lowers those bits (irq_release[]) on every tick so the firmware leaves the
+     * idle busy-wait and renders on its own. Default: disabled, no semaphores;
+     * the app enables it after boot and sets the per-profile semaphore. */
+    uint8_t  irq_enabled;        /* master switch (default 0 = no change)   */
+    uint32_t irq_period;         /* instructions per timer tick             */
+    uint32_t irq_vector_high;    /* high-priority vector (default 0x000008) */
+    uint32_t irq_vector_low;     /* low-priority vector  (default 0x000018) */
+    uint32_t irq_counter;        /* instruction counter toward the tick     */
+    uint8_t  in_isr;             /* 1 while inside an ISR (no re-entry)      */
+    uint32_t irq_count;          /* diagnostics: # of ISRs delivered        */
+    /* Frame-tick semaphores (addr,bit) cleared on each delivered tick. */
+    uint16_t irq_release_addr[PIC18_IRQ_RELEASE_MAX];
+    uint8_t  irq_release_bit[PIC18_IRQ_RELEASE_MAX];
+    uint8_t  irq_release_count;
 } Pic18Cpu;
 
 /* ---------------------------------------------------------------- API ------- */
@@ -170,6 +212,22 @@ uint16_t pic18_fsr(const Pic18Cpu* cpu, int n);
 /* Return stack (for setting up return sentinels in tests/harness). */
 void     pic18_push(Pic18Cpu* cpu, uint32_t addr);
 uint32_t pic18_pop(Pic18Cpu* cpu);
+
+/* ------------------------------------------------------- interrupt model API */
+
+/* Enables the interrupt model with the given period (instructions per timer
+ * tick). period==0 keeps the current period. Resets the counter and in_isr. */
+void pic18_enable_interrupts(Pic18Cpu* cpu, uint32_t period);
+
+/* Disables the interrupt model (back to the plain, additive-off behavior). */
+void pic18_disable_interrupts(Pic18Cpu* cpu);
+
+/* Clears the frame-tick semaphore list. */
+void pic18_irq_release_clear(Pic18Cpu* cpu);
+
+/* Adds an (addr,bit) frame-tick semaphore that is cleared on every delivered
+ * tick (the firmware's idle busy-wait flag). Up to PIC18_IRQ_RELEASE_MAX. */
+void pic18_irq_release_add(Pic18Cpu* cpu, uint16_t addr, uint8_t bit);
 
 #ifdef __cplusplus
 }
