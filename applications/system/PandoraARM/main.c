@@ -37,8 +37,13 @@
 #define SCREEN_H 64
 #define FB_SIZE (SCREEN_W * SCREEN_H / 8) /* 1024 bytes */
 
-/* Keyfob OLED: 92 columns x 16 pages = 1472 bytes (panel 92x64 2bpp) */
+/* Keyfob OLED: the firmware writes a 92 columns x 16 pages = 1472-byte
+ * framebuffer (2bpp). But the PHYSICAL glass is only 88 columns wide (the D-605
+ * status screen blits with width=0x58=88; columns 88..91 are off-glass margin,
+ * see RE_display_D605_auto.md). So we capture 92 but only RENDER the 88 visible
+ * columns, centered on the Flipper's 128-wide screen. */
 #define OLED_COLS 92
+#define OLED_VISIBLE_COLS 88 /* physical glass width (cols 88..91 = off-glass) */
 #define OLED_PAGES 16
 #define OLED_FB_SIZE (OLED_COLS * OLED_PAGES)
 
@@ -153,7 +158,7 @@
  * fb-change check runs more often -> the settle cuts sooner once the UI redraws.
  * Matched to NAV_SETTLE_MIN_INSN so ONE burst reaches the floor and a redraw can
  * be cut at the earliest allowed point (~0.43s @ 70 k-insn/s). */
-#define NAV_SETTLE_BURST 30000u
+#define NAV_SETTLE_BURST 60000u
 
 /* Physical hold detection (Flipper keys). Hold > ~500ms = long press of the
  * corresponding keyfob button. Flipper UP held > 1s = EXIT the app (Button 1
@@ -1431,17 +1436,14 @@ static bool nav_button(AppState* app, int btn, bool hold) {
     app->nav_reads_target = hold ? NAV_LONG_READS : NAV_HOLD_READS;
     app->nav_active = 1;
 
-    /* FLUIDITY: the press loop exits the instant the firmware dispatches the
-     * release (nav_phase==2), which it detects only at a burst boundary. Smaller
-     * bursts (25000 vs 50000) check nav_phase twice as often -> the press returns
-     * sooner once the firmware has re-read our pin enough times, with NO change to
-     * how the firmware sees the press (same pin, same reader sync) and NO loss of
-     * useful insn/s (the firmware keeps running back-to-back). NAV_BUDGET_INSN is
-     * unchanged (still the same ~14s safety cap). */
+    /* The press loop exits when the firmware dispatches the release
+     * (nav_phase==2). Burst 50000 (reverted from a 25000 fluidity tweak that
+     * could alter how the firmware times the press and spuriously trigger
+     * AUTO/JAMM when entering a submenu). */
     uint64_t done = 0;
     while(app->nav_phase != 2 && done < NAV_BUDGET_INSN) {
-        run_burst(app, 25000);
-        done += 25000;
+        run_burst(app, 50000);
+        done += 50000;
     }
     app->nav_active = 0;
     /* guarantee release (in case the budget ran out mid-hold) */
@@ -1545,9 +1547,10 @@ static void render_oled(AppState* app) {
      * no flicker/overwrite. (See the OLED capture block above and the fix notes
      * ported from emu/pandora_tui.py.) */
     const uint8_t* fbv = app->oled_fb;
-    const int x_off = (SCREEN_W - OLED_COLS) / 2; /* center 92 in 128 => 18 */
+    /* center the 88 VISIBLE columns in the Flipper's 128 wide screen (=> 20) */
+    const int x_off = (SCREEN_W - OLED_VISIBLE_COLS) / 2;
     for(int page = 0; page < OLED_PAGES; page++) {
-        for(int col = 0; col < OLED_COLS; col++) {
+        for(int col = 0; col < OLED_VISIBLE_COLS; col++) {
             uint8_t v = fbv[page * OLED_COLS + col];
             for(int k = 0; k < 4; k++) {
                 /* pixel level = popcount of the 2 bits (2k, 2k+1) */
