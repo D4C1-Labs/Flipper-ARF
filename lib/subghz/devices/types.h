@@ -49,6 +49,23 @@ typedef void (*SubGhzStopAsyncRx)(void);
 typedef float (*SubGhzGetRSSI)(void);
 typedef uint8_t (*SubGhzGetLQI)(void);
 
+// [ARF_PORT 2026-10-26] Ported from doctor-firmware so apps that measure the RSSI
+// envelope (Mod Analyzer, SubGHz Analyzer) and query the frequency-error estimate
+// work through the device abstraction, for both the internal and external radios.
+typedef int8_t (*SubGhzGetFreqEst)(void);
+typedef uint32_t (*SubGhzRssiBurst)(uint8_t* out, size_t count, uint32_t period_us);
+
+// [ARF_PORT 2026-10-26] Hopping callbacks (also from doctor-firmware). Ported as
+// part of the same struct so the interconnect layout never diverges from the
+// drivers; drivers that do not implement hopping simply leave them NULL.
+typedef bool (*SubGhzHopBegin)(void);
+typedef bool (*SubGhzHopPrepare)(uint32_t frequency);
+typedef bool (*SubGhzHopGoto)(uint32_t frequency, const uint8_t* preset_data);
+typedef void (*SubGhzHopResume)(void);
+typedef void (*SubGhzHopEnd)(void);
+typedef bool (*SubGhzHopReadImage)(uint8_t* out);
+typedef bool (*SubGhzHopGetShadow)(uint8_t* out);
+
 typedef bool (*SubGhzRxPipeNotEmpty)(void);
 typedef bool (*SubGhzRxIsDataCrcValid)(void);
 typedef void (*SubGhzReadPacket)(uint8_t* data, uint8_t* size);
@@ -82,11 +99,22 @@ typedef struct {
 
     SubGhzGetRSSI get_rssi;
     SubGhzGetLQI get_lqi;
+    SubGhzGetFreqEst get_freq_est; // [ARF_PORT] optional, NULL on radios that lack it
+    SubGhzRssiBurst rssi_burst; // [ARF_PORT] optional, NULL on radios that lack it
 
     SubGhzRxPipeNotEmpty rx_pipe_not_empty;
     SubGhzRxIsDataCrcValid is_rx_data_crc_valid;
     SubGhzReadPacket read_packet;
     SubGhzWritePacket write_packet;
+
+    // [ARF_PORT] Optional hopping callbacks; NULL on radios without hopping.
+    SubGhzHopBegin hop_begin;
+    SubGhzHopPrepare hop_prepare;
+    SubGhzHopGoto hop_goto;
+    SubGhzHopResume hop_resume;
+    SubGhzHopEnd hop_end;
+    SubGhzHopReadImage hop_read_image;
+    SubGhzHopGetShadow hop_get_shadow;
 
 } SubGhzDeviceInterconnect;
 

@@ -1,7 +1,7 @@
 App(
     appid="subghz_bruteforcer",
     name="Sub-GHz Bruteforcer",
-    apptype=FlipperAppType.MENUEXTERNAL,
+    apptype=FlipperAppType.EXTERNAL,
     entry_point="subbrute_app",
     requires=["gui", "dialogs"],
     stack_size=4 * 1024,

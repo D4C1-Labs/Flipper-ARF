@@ -1,7 +1,7 @@
 App(
     appid="jammer_app",
     name="Jammer",
-    apptype=FlipperAppType.MENUEXTERNAL,
+    apptype=FlipperAppType.EXTERNAL,
     entry_point="jammer_app",
     requires=["gui", "subghz"],
     cdefines=["APP_JAMMER"],

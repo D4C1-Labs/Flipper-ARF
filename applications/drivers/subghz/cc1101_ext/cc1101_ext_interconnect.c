@@ -91,6 +91,8 @@ const SubGhzDeviceInterconnect subghz_device_cc1101_ext_interconnect = {
 
     .get_rssi = subghz_device_cc1101_ext_get_rssi,
     .get_lqi = subghz_device_cc1101_ext_get_lqi,
+    .get_freq_est = subghz_device_cc1101_ext_get_freq_est, // [ARF_PORT]
+    .rssi_burst = subghz_device_cc1101_ext_rssi_burst, // [ARF_PORT]
 
     .rx_pipe_not_empty = subghz_device_cc1101_ext_rx_pipe_not_empty,
     .is_rx_data_crc_valid = subghz_device_cc1101_ext_is_rx_data_crc_valid,

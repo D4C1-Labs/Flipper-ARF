@@ -28,6 +28,8 @@ env.Append(
         File("devices/cc1101_configs.h"),
         File("devices/cc1101_int/cc1101_int_interconnect.h"),
         File("subghz_file_encoder_worker.h"),
+        # [ARF_PORT 2026-10-26] expose the shared radio device loader + devices API
+        File("devices/devices.h"),
     ],
 )
 

@@ -28,9 +28,14 @@
   and PSA decrypt screens now show the waiting dolphin while they work, next to
   the live stats (level, keys/sec, ETA, elapsed and progress). Bluetooth offload
   to your phone still works exactly as before.
+- **Second external radio supported: Si4463.** Alongside the external CC1101,
+  the firmware now ships a driver for Si4463-based external modules. Apps that
+  use an external radio pick whichever one is connected automatically.
 - **New companion apps** (available from the Apps menu):
   - **Freq Analyzer** — standalone Sub-GHz frequency analyzer (internal or
     external CC1101).
+  - **Mod Analyzer** — tells you whether a signal is AM (ASK/OOK) or FM (2-FSK)
+    by measuring its RSSI envelope.
   - **Spectrum Analyzer** — spectrogram view of the RF activity around you.
   - **Sub-GHz RAW Edit** — open a recorded RAW `.sub`, find the real burst in the
     noise, and save just the trimmed signal.
@@ -49,6 +54,21 @@
   garage/gate protocols now live in the Cars and Garage Door apps instead of
   inside the firmware image. This frees internal flash and keeps NFC, 125 kHz
   RFID and everything else intact.
+
+### Fixed
+- **Fiat V0 — fixed crashes and signals that didn't open the car.** Three bugs
+  were hiding in this protocol:
+  - **Memory leak / crash:** every time you changed the custom button, the app
+    reloaded the signal and leaked about 10 KB of RAM each time, crashing the
+    Flipper after a dozen presses. The old buffer is now freed before a new one
+    is allocated, so you can switch buttons as much as you like.
+  - **Wrong frame length:** the transmitter was sending 70 bits in roughly half
+    of the attempts, but the car's receiver needs exactly 71 and silently throws
+    a 70-bit frame away — which is why it worked sometimes and failed others. It
+    now always sends the correct 71-bit frame.
+  - **Corrupted button byte:** a bad bit-shift in the transmitter mangled the
+    "end byte", so even the transmissions that did go out often didn't open the
+    car. The end byte is now sent intact.
 
 ### Earlier
 
@@ -79,8 +99,9 @@ Big thanks to the firmwares and authors this release borrows from:
 - **The Doctor's Firmware** (@thedoctorz) — https://github.com/thedoctorz — for
   the Hitag2 key database, several of the new vehicle protocols (BMW, Mercedes
   V0/V1, Mazda V2, Opel V1, Toyota, Urmet, X10), the waiting-dolphin brute-force
-  look, the improved Sub-GHz Bruteforcer, and the companion apps (Freq Analyzer,
-  Spectrum Analyzer, Sub-GHz RAW Edit, Jammer, NFC Sniffer).
+  look, the improved Sub-GHz Bruteforcer, the Si4463 external-radio driver (plus
+  the RSSI-burst support it needs), and the companion apps (Freq Analyzer, Mod
+  Analyzer, Spectrum Analyzer, Sub-GHz RAW Edit, Jammer, NFC Sniffer).
 
 All imported code was adapted to ARF and credited in-source with `[ARF_PORT]`
 comments explaining what changed and why.

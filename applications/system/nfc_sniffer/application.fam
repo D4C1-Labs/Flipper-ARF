@@ -1,7 +1,7 @@
 App(
     appid="nfc_sniffer",
     name="NFC Sniffer",
-    apptype=FlipperAppType.MENUEXTERNAL,
+    apptype=FlipperAppType.EXTERNAL,
     entry_point="nfc_sniffer_app",
     requires=["gui"],
     sources=["*.c*", "!tools"],

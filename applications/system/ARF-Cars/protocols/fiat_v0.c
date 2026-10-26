@@ -4,7 +4,7 @@
 #include <lib/subghz/blocks/encoder.h>
 #include <lib/subghz/blocks/generic.h>
 #include <lib/subghz/blocks/math.h>
-#include <lib/subghz/blocks/custom_btn_i.h>
+#include "custom_btn_i.h"
 #include <lib/toolbox/manchester_decoder.h>
 
 #define TAG                     "FiatProtocolV0"
@@ -12,7 +12,12 @@
 #define FIAT_V0_GAP_US          800
 #define FIAT_V0_TOTAL_BURSTS    3
 #define FIAT_V0_INTER_BURST_GAP 25000
-#define FIAT_V0_UPLOAD_CAPACITY 1328U
+// [ARF_FIX 2026-10-26] Raised from 1328 to 1344. The 71-bit frame fix adds one
+// more tail bit per burst (worst case 2 symbols), pushing the old 1328 worst
+// case to 1331 — a 3-symbol overflow of the upload buffer. 1344 keeps a safe
+// margin. Worst case per burst = 1 gap + 300 preamble + 2 first-bit + 126 data
+// + 14 tail + 1 close = 444; x3 bursts = 1331.
+#define FIAT_V0_UPLOAD_CAPACITY 1344U
 
 static const SubGhzBlockConst subghz_protocol_fiat_v0_const = {
     .te_short = 200,
@@ -137,7 +142,19 @@ static void subghz_protocol_encoder_fiat_v0_get_upload(SubGhzProtocolEncoderFiat
     uint32_t te_long = subghz_protocol_fiat_v0_const.te_long;
 
     uint64_t data = ((uint64_t)instance->hop << 32) | instance->fix;
-    uint8_t endbyte_to_send = instance->endbyte >> 1;
+
+    // [ARF_FIX 2026-10-26] Frame length + endbyte fix.
+    // The decoder reads 71 bits total: 64 data bits, then 7 more bits, keeping
+    // the low 6 (data_low & 0x3F) as the endbyte. The old encoder emitted only
+    // 64 + 6 = 70 bits (endbyte >> 1) and tried to patch the missing bit with a
+    // conditional "if(prev_bit)" tail, which:
+    //   * produced 70 bits about half the time (the receiver needs exactly 71
+    //     and silently drops a 70-bit frame), and
+    //   * corrupted the endbyte because of the >> 1 shift.
+    // Fix: emit a full 7-bit tail = one leading 0 guard bit followed by the 6
+    // real endbyte bits (endbyte & 0x3F). That is always 64 + 7 = 71 bits and
+    // carries the captured endbyte unchanged, so no conditional tail is needed.
+    uint8_t endbyte_tail = (uint8_t)(instance->endbyte & 0x3FU); // 6 real bits
 
     for(uint8_t burst = 0; burst < FIAT_V0_TOTAL_BURSTS; burst++) {
         if(burst > 0) {
@@ -175,8 +192,10 @@ static void subghz_protocol_encoder_fiat_v0_get_upload(SubGhzProtocolEncoderFiat
             prev_bit = curr_bit;
         }
 
-        for(int bit = 5; bit >= 0; bit--) {
-            bool curr_bit = (endbyte_to_send >> bit) & 1;
+        // Emit the 7-bit tail: bit 6 is the leading guard bit (0), bits 5..0 are
+        // the real endbyte. 64 data bits + 7 tail bits = 71 bits total.
+        for(int bit = 6; bit >= 0; bit--) {
+            bool curr_bit = (bit == 6) ? false : ((endbyte_tail >> bit) & 1);
             if(!prev_bit && !curr_bit) {
                 up[index++] = level_duration_make(true, te_short);
                 up[index++] = level_duration_make(false, te_short);
@@ -191,9 +210,11 @@ static void subghz_protocol_encoder_fiat_v0_get_upload(SubGhzProtocolEncoderFiat
             prev_bit = curr_bit;
         }
 
-        if(prev_bit) {
-            up[index++] = level_duration_make(false, te_short);
-        }
+        // [ARF_FIX] The old code appended one more symbol here only when the last
+        // bit was high (an attempt to reach 71 bits). The 7-bit tail above
+        // already emits exactly 71 bits, so this conditional symbol — which
+        // shifted the frame and corrupted the endbyte — is removed. Close the
+        // burst with the normal long low gap.
         up[index++] = level_duration_make(false, te_short * 8);
     }
 
@@ -279,6 +300,12 @@ SubGhzProtocolStatus
         flipper_format_read_uint32(flipper_format, "Repeat", &repeat, 1);
         instance->encoder.repeat = repeat;
 
+        // [ARF_FIX 2026-10-26] Memory leak: the Sub-GHz app re-runs deserialize
+        // every time you change the custom button, and the old upload buffer was
+        // never freed before allocating a new one (~10 KB leaked per press, which
+        // crashes the device after a dozen presses). Free any previous buffer
+        // first. (Same fix doctor-firmware applies.)
+        free(instance->encoder.upload);
         instance->encoder.upload = malloc(FIAT_V0_UPLOAD_CAPACITY * sizeof(LevelDuration));
         subghz_protocol_encoder_fiat_v0_get_upload(instance);
         instance->encoder.is_running = true;

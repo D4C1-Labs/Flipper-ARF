@@ -1,0 +1,15 @@
+App(
+    appid="mod_analyzer",
+    name="Mod Analyzer",
+    apptype=FlipperAppType.EXTERNAL,
+    entry_point="mod_analyzer_app",
+    requires=["gui"],
+    stack_size=4 * 1024,
+    fap_icon="icon.png",
+    fap_icon_assets="icons",
+    fap_category="Sub-GHz",
+    fap_author="@thedoctorz",
+    fap_weburl="https://github.com/thedoctorz/doctor-firmware",
+    fap_version="1.0",
+    fap_description="Measures whether a signal is AM (ASK/OOK) or FM (2-FSK) from its RSSI envelope",
+)

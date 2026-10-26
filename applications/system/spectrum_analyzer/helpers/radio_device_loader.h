@@ -5,6 +5,8 @@
 
 #define SUBGHZ_DEVICE_CC1101_INT_NAME "cc1101_int"
 #define SUBGHZ_DEVICE_CC1101_EXT_NAME "cc1101_ext"
+// [ARF_PORT] second external radio
+#define SUBGHZ_DEVICE_SI4463_EXT_NAME "si4463_ext"
 
 /** SubGhzRadioDeviceType */
 typedef enum {

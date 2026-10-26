@@ -501,6 +501,50 @@ uint8_t subghz_device_cc1101_ext_get_lqi(void) {
     return data[0] & 0x7F;
 }
 
+// [ARF_PORT 2026-10-26] Frequency-error estimate for the external CC1101, ported
+// from doctor-firmware. Mirrors furi_hal_subghz_get_freq_est() for the ext radio.
+int8_t subghz_device_cc1101_ext_get_freq_est(void) {
+    furi_hal_spi_acquire(subghz_device_cc1101_ext->spi_bus_handle);
+    uint8_t data[1];
+    cc1101_read_reg(
+        subghz_device_cc1101_ext->spi_bus_handle, CC1101_STATUS_FREQEST | CC1101_BURST, data);
+    furi_hal_spi_release(subghz_device_cc1101_ext->spi_bus_handle);
+    return (int8_t)data[0];
+}
+
+// [ARF_PORT 2026-10-26] Raw RSSI read + burst sampler for the external CC1101,
+// ported from doctor-firmware. Same contract as the furi_hal version, but on the
+// external radio's SPI handle. The upstream "SPI already held" fast-path is
+// dropped (always owns the transaction), which is correct for the analyzer apps.
+static inline uint8_t subghz_device_cc1101_ext_rssi_raw(void) {
+    uint8_t tx[2] = {CC1101_STATUS_RSSI | CC1101_BURST | CC1101_READ, 0};
+    uint8_t rx[2] = {0};
+    furi_hal_spi_bus_trx(
+        subghz_device_cc1101_ext->spi_bus_handle, tx, rx, 2, CC1101_TIMEOUT);
+    return rx[1];
+}
+
+uint32_t subghz_device_cc1101_ext_rssi_burst(uint8_t* out, size_t count, uint32_t period_us) {
+    furi_check(out);
+    if(count == 0) return 0;
+
+    const uint32_t cycles_per_us = furi_hal_cortex_instructions_per_microsecond();
+    const uint32_t period_cycles = period_us * cycles_per_us;
+
+    furi_hal_spi_acquire(subghz_device_cc1101_ext->spi_bus_handle);
+    const uint32_t t0 = DWT->CYCCNT;
+    for(size_t i = 0; i < count; i++) {
+        const uint32_t deadline = t0 + (uint32_t)i * period_cycles;
+        while((int32_t)(DWT->CYCCNT - deadline) < 0) {
+        }
+        out[i] = subghz_device_cc1101_ext_rssi_raw();
+    }
+    const uint32_t span = DWT->CYCCNT - t0;
+    furi_hal_spi_release(subghz_device_cc1101_ext->spi_bus_handle);
+
+    return span / cycles_per_us;
+}
+
 bool subghz_device_cc1101_ext_is_frequency_valid(uint32_t value) {
     if(!(value >= 281000000 && value <= 361000000) &&
        !(value >= 378000000 && value <= 481000000) &&

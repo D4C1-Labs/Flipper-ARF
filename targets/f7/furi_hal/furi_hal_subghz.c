@@ -416,6 +416,52 @@ uint8_t furi_hal_subghz_get_lqi(void) {
     return data[0] & 0x7F;
 }
 
+// [ARF_PORT 2026-10-26] Frequency-error estimate from the CC1101 demodulator,
+// ported from doctor-firmware. Used by the Mod/SubGHz analyzer apps.
+int8_t furi_hal_subghz_get_freq_est(void) {
+    furi_hal_spi_acquire(&furi_hal_spi_bus_handle_subghz);
+    uint8_t data[1];
+    cc1101_read_reg(
+        &furi_hal_spi_bus_handle_subghz, CC1101_STATUS_FREQEST | CC1101_BURST, data);
+    furi_hal_spi_release(&furi_hal_spi_bus_handle_subghz);
+    return (int8_t)data[0];
+}
+
+// [ARF_PORT 2026-10-26] Single raw RSSI register read (no scaling), used by the
+// burst sampler below. static inline, not exported.
+static inline uint8_t furi_hal_subghz_rssi_raw(void) {
+    uint8_t tx[2] = {CC1101_STATUS_RSSI | CC1101_BURST | CC1101_READ, 0};
+    uint8_t rx[2] = {0};
+    furi_hal_spi_bus_trx(&furi_hal_spi_bus_handle_subghz, tx, rx, 2, CC1101_TIMEOUT);
+    return rx[1];
+}
+
+// [ARF_PORT 2026-10-26] Sample `count` raw RSSI values spaced `period_us` apart,
+// into `out`. Returns the total elapsed time in microseconds. Ported from
+// doctor-firmware; the upstream "SPI already held" fast-path (for the hopper) is
+// dropped here — this variant always owns the SPI transaction, which is correct
+// for the standalone analyzer apps that are the consumers of this call.
+uint32_t furi_hal_subghz_rssi_burst(uint8_t* out, size_t count, uint32_t period_us) {
+    furi_check(out);
+    if(count == 0) return 0;
+
+    const uint32_t cycles_per_us = furi_hal_cortex_instructions_per_microsecond();
+    const uint32_t period_cycles = period_us * cycles_per_us;
+
+    furi_hal_spi_acquire(&furi_hal_spi_bus_handle_subghz);
+    const uint32_t t0 = DWT->CYCCNT;
+    for(size_t i = 0; i < count; i++) {
+        const uint32_t deadline = t0 + (uint32_t)i * period_cycles;
+        while((int32_t)(DWT->CYCCNT - deadline) < 0) {
+        }
+        out[i] = furi_hal_subghz_rssi_raw();
+    }
+    const uint32_t span = DWT->CYCCNT - t0;
+    furi_hal_spi_release(&furi_hal_spi_bus_handle_subghz);
+
+    return span / cycles_per_us;
+}
+
 /* 
  Modified by @tkerby & MX to the full YARD Stick One extended range of 281-361 MHz, 378-481 MHz, and 749-962 MHz. 
  These changes are at your own risk. The PLL may not lock and FZ devs have warned of possible damage!

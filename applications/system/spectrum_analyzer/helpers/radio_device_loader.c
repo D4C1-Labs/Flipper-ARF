@@ -2,6 +2,7 @@
 #include "radio_device_loader.h"
 
 #include <applications/drivers/subghz/cc1101_ext/cc1101_ext_interconnect.h>
+#include <applications/drivers/subghz/si4463_ext/si4463_ext_interconnect.h>
 #include <lib/subghz/devices/cc1101_int/cc1101_int_interconnect.h>
 #include <furi.h>
 #include <furi_hal.h>
@@ -59,12 +60,17 @@ const SubGhzDevice* radio_device_loader_set(
     const SubGhzDevice* target_radio_device = NULL;
 
     // Decide the target device first (external if requested+present, else internal)
-    if(radio_device_type == SubGhzRadioDeviceTypeExternalCC1101 &&
-       radio_device_loader_is_connect_external(SUBGHZ_DEVICE_CC1101_EXT_NAME)) {
-        radio_device_loader_power_on();
-        target_radio_device = subghz_devices_get_by_name(SUBGHZ_DEVICE_CC1101_EXT_NAME);
+    if(radio_device_type == SubGhzRadioDeviceTypeExternalCC1101) {
+        // [ARF_PORT] Try CC1101 first, then the Si4463 external radio.
+        if(radio_device_loader_is_connect_external(SUBGHZ_DEVICE_CC1101_EXT_NAME)) {
+            radio_device_loader_power_on();
+            target_radio_device = subghz_devices_get_by_name(SUBGHZ_DEVICE_CC1101_EXT_NAME);
+        } else if(radio_device_loader_is_connect_external(SUBGHZ_DEVICE_SI4463_EXT_NAME)) {
+            radio_device_loader_power_on();
+            target_radio_device = subghz_devices_get_by_name(SUBGHZ_DEVICE_SI4463_EXT_NAME);
+        }
         if(!target_radio_device) {
-            FURI_LOG_E(TAG, "Failed to get external CC1101 device, falling back to internal");
+            FURI_LOG_E(TAG, "No external radio present, falling back to internal");
         }
     }
 
