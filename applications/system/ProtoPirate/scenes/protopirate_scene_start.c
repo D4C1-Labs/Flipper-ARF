@@ -101,9 +101,6 @@ void protopirate_scene_start_on_enter(void* context) {
         app->submenu, scene_manager_get_scene_state(app->scene_manager, ProtoPirateSceneStart));
 
     view_dispatcher_switch_to_view(app->view_dispatcher, ProtoPirateViewSubmenu);
-
-    //Kill Widget if it exists now to save memory.
-    protopirate_widget_free(app);
 }
 
 bool protopirate_scene_start_on_event(void* context, SceneManagerEvent event) {

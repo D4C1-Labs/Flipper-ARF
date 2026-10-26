@@ -24,6 +24,7 @@ typedef struct ProtoPirateSharedPluginHostApi {
     bool (*ensure_receiver_view)(void* app);
     bool (*ensure_widget)(void* app);
     Widget* (*get_widget)(ProtoPirateApp* app);
+    void (*widget_free)(ProtoPirateApp* app);
     bool (*ensure_view_about)(void* app);
     bool (*ensure_text_input)(ProtoPirateApp* app);
     void (*free_text_input)(ProtoPirateApp* app);

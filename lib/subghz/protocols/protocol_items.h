@@ -98,8 +98,20 @@
 #include "mazda_infinity.h"
 #include "audi.h"
 #include "hundai.h"
-#include "gm.h"
+#include "gm_v0.h"
 
+#include "gm_v1.h"
+// [ARF_PORT 2026-10-26] Imported from doctor-firmware / FoxFW.
+#include "urmet.h"
+#include "opel_v1.h"
+#include "mercedes_v0.h"
+#include "mercedes_v1.h"
+#include "mazda_v1.h"
+#include "mazda_v2.h"
+#include "bmw.h"
+#include "x10.h"
+#include "toyota_v0.h"
+#include "toyota_v1.h"
 // [UNLEASHED_PORT] New protocols from Unleashed firmware
 #include "allstar_firefly.h"
 #include "ditec_gol4.h"

@@ -24,6 +24,7 @@ struct SubBruteWorker {
     volatile bool worker_running; /**< Worker running state */
     volatile bool initiated; /**< Initiated state */
     volatile bool transmit_mode; /**< Transmit mode */
+    volatile bool async_tx_active; /**< True while devices async TX is running */
 
     uint64_t step; /**< Current step */
 

@@ -1,4 +1,5 @@
 #include "fiat_v1.h"
+#include "hitag2_key_db.h"
 #include <lib/subghz/blocks/const.h>
 #include <lib/subghz/blocks/decoder.h>
 #include <lib/subghz/blocks/encoder.h>
@@ -577,6 +578,25 @@ static void fiat_v1_verify_hitag2_key(SubGhzProtocolDecoderFiatV1* instance) {
             return;
         }
     }
+
+    // [ARF_PORT 2026-10-26] Hitag2 key database lookup (ported from
+    // doctor-firmware). If the built-in keys did not match, try a key previously
+    // cracked for THIS car (keyed by UID). This only ADDS a resolution path; the
+    // brute-force cascade, the flat dictionary and all existing behaviour are
+    // untouched. A bad DB record simply fails fiat_v1_key_matches() and we fall
+    // through exactly as before.
+    if(uid != 0U && uid != UINT32_MAX) {
+        Hitag2KeyDbRecord record = {0};
+        if(hitag2_key_db_find(uid, &record) && record.has_key) {
+            const uint32_t db_epoch = record.epoch & 0x3FFFFUL;
+            if(fiat_v1_key_matches(uid, button, control, hop, record.key, db_epoch)) {
+                memcpy(instance->hitag2_key, record.key, sizeof(instance->hitag2_key));
+                instance->hitag2_epoch = db_epoch;
+                instance->hitag2_key_valid = true;
+                return;
+            }
+        }
+    }
 }
 
 static bool fiat_v1_encoder_build_upload(SubGhzProtocolEncoderFiatV1* instance) {
@@ -1024,6 +1044,14 @@ SubGhzProtocolStatus subghz_protocol_decoder_fiat_v1_serialize(
            !flipper_format_write_uint32(
                flipper_format, FIAT_V1_HITAG2_EPOCH_FIELD, &epoch, 1)) {
             return SubGhzProtocolStatusErrorParserOthers;
+        }
+
+        // [ARF_PORT 2026-10-26] Also remember this key in the global UID->key DB
+        // (ported from doctor-firmware), so a future capture of the same car
+        // resolves instantly via the lookup in fiat_v1_verify_hitag2_key().
+        // Best-effort: failure to write the DB does not fail the save.
+        if(instance->uid != 0U && instance->uid != UINT32_MAX) {
+            hitag2_key_db_save_key(instance->uid, instance->hitag2_key, epoch);
         }
     }
 

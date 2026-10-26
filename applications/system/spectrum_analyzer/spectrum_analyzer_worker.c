@@ -7,15 +7,18 @@
 #include "helpers/radio_device_loader.h"
 
 #include <lib/drivers/cc1101_regs.h>
+#include <lib/subghz/devices/cc1101_int/cc1101_int_interconnect.h>
 
 struct SpectrumAnalyzerWorker {
     FuriThread* thread;
-    bool should_work;
+    volatile bool should_work;
 
     SpectrumAnalyzerWorkerCallback callback;
     void* callback_context;
 
-    const SubGhzDevice* radio_device;
+    const SubGhzDevice* radio_device; // radio A (internal in dual mode, or the single radio)
+    const SubGhzDevice* radio_device_ext; // radio B (external), only in dual mode
+    bool dual; // both radios present: sweep is split across them (~2x faster)
 
     uint32_t channel0_frequency;
     uint32_t spacing;
@@ -28,44 +31,26 @@ struct SpectrumAnalyzerWorker {
     uint8_t channel_ss[NUM_CHANNELS];
 };
 
-/* set the channel bandwidth */
-void spectrum_analyzer_worker_set_filter(SpectrumAnalyzerWorker* instance) {
-    uint8_t filter_config[2][2] = {
-        {CC1101_MDMCFG4, 0},
-        {0, 0},
-    };
-
-    // FURI_LOG_D("SpectrumWorker", "spectrum_analyzer_worker_set_filter: width = %u", instance->width);
-
-    /* channel spacing should fit within 80% of channel filter bandwidth */
-    switch(instance->width) {
-    case NARROW:
-        filter_config[0][1] = 0xFC; /* 39.2 kHz / .8 = 49 kHz --> 58 kHz */
-        break;
-    case ULTRAWIDE:
-        filter_config[0][1] = 0x0C; /* 784 kHz / .8 = 980 kHz --> 812 kHz */
-        break;
-    default:
-        filter_config[0][1] = 0x6C; /* 196 kHz / .8 = 245 kHz --> 270 kHz */
-        break;
-    }
-
-    UNUSED(filter_config);
-    // furi_hal_subghz_load_registers((uint8_t*)filter_config);
-}
-
 static int32_t spectrum_analyzer_worker_thread(void* context) {
     furi_assert(context);
     SpectrumAnalyzerWorker* instance = context;
 
     FURI_LOG_D("SpectrumWorker", "spectrum_analyzer_worker_thread: Start");
 
-    // Start CC1101
+    // Start CC1101 (both radios in dual mode)
     subghz_devices_reset(instance->radio_device);
     subghz_devices_load_preset(instance->radio_device, FuriHalSubGhzPresetOok650Async, NULL);
     subghz_devices_set_frequency(instance->radio_device, 433920000);
     subghz_devices_flush_rx(instance->radio_device);
     subghz_devices_set_rx(instance->radio_device);
+    if(instance->dual) {
+        subghz_devices_reset(instance->radio_device_ext);
+        subghz_devices_load_preset(
+            instance->radio_device_ext, FuriHalSubGhzPresetOok650Async, NULL);
+        subghz_devices_set_frequency(instance->radio_device_ext, 433920000);
+        subghz_devices_flush_rx(instance->radio_device_ext);
+        subghz_devices_set_rx(instance->radio_device_ext);
+    }
 
     // Default modulation
     const uint8_t default_modulation[] = {
@@ -198,44 +183,86 @@ static int32_t spectrum_analyzer_worker_thread(void* context) {
             instance->radio_device,
             FuriHalSubGhzPresetCustom,
             (uint8_t*)modulations[instance->modulation]);
-        //subghz_devices_load_preset(
-        //    instance->radio_device, FuriHalSubGhzPresetCustom, (uint8_t*)default_modulation);
-        //furi_hal_subghz_load_custom_preset(modulations[instance->modulation]);
-
-        // TODO: Check filter!
-        // spectrum_analyzer_worker_set_filter(instance);
+        if(instance->dual) {
+            subghz_devices_idle(instance->radio_device_ext);
+            subghz_devices_load_preset(
+                instance->radio_device_ext,
+                FuriHalSubGhzPresetCustom,
+                (uint8_t*)modulations[instance->modulation]);
+        }
 
         instance->max_rssi_dec = 0;
 
-        // Visit each channel non-consecutively
-        for(uint8_t ch_offset = 0, chunk = 0; ch_offset < CHUNK_SIZE;
-            ++chunk >= NUM_CHUNKS && ++ch_offset && (chunk = 0)) {
-            uint8_t ch = chunk * CHUNK_SIZE + ch_offset;
+        if(instance->dual) {
+            // Dual radio: internal scans the lower half of channels, external the
+            // upper half, sharing a single settle delay per pair -> ~2x faster refresh.
+            uint8_t half = NUM_CHANNELS / 2;
+            for(uint8_t i = 0; i < half && instance->should_work; i++) {
+                uint8_t cha = i;
+                uint8_t chb = half + i;
+                uint32_t fa = instance->channel0_frequency + (cha * instance->spacing);
+                uint32_t fb = instance->channel0_frequency + (chb * instance->spacing);
 
-            if(subghz_devices_is_frequency_valid(
-                   instance->radio_device,
-                   instance->channel0_frequency + (ch * instance->spacing)))
-                subghz_devices_set_frequency(
-                    instance->radio_device,
-                    instance->channel0_frequency + (ch * instance->spacing));
+                if(subghz_devices_is_frequency_valid(instance->radio_device, fa))
+                    subghz_devices_set_frequency(instance->radio_device, fa);
+                if(subghz_devices_is_frequency_valid(instance->radio_device_ext, fb))
+                    subghz_devices_set_frequency(instance->radio_device_ext, fb);
 
-            subghz_devices_set_rx(instance->radio_device);
-            furi_delay_ms(3);
+                subghz_devices_set_rx(instance->radio_device);
+                subghz_devices_set_rx(instance->radio_device_ext);
+                furi_delay_ms(3); // both radios settle in parallel
 
-            //         dec      dBm
-            //max_ss = 127 ->  -10.5
-            //max_ss = 0   ->  -74.0
-            //max_ss = 255 ->  -74.5
-            //max_ss = 128 -> -138.0
-            instance->channel_ss[ch] = (subghz_devices_get_rssi(instance->radio_device) + 138) * 2;
+                instance->channel_ss[cha] =
+                    (subghz_devices_get_rssi(instance->radio_device) + 138) * 2;
+                instance->channel_ss[chb] =
+                    (subghz_devices_get_rssi(instance->radio_device_ext) + 138) * 2;
 
-            if(instance->channel_ss[ch] > instance->max_rssi_dec) {
-                instance->max_rssi_dec = instance->channel_ss[ch];
-                instance->max_rssi = (instance->channel_ss[ch] / 2) - 138;
-                instance->max_rssi_channel = ch;
+                if(instance->channel_ss[cha] > instance->max_rssi_dec) {
+                    instance->max_rssi_dec = instance->channel_ss[cha];
+                    instance->max_rssi = (instance->channel_ss[cha] / 2) - 138;
+                    instance->max_rssi_channel = cha;
+                }
+                if(instance->channel_ss[chb] > instance->max_rssi_dec) {
+                    instance->max_rssi_dec = instance->channel_ss[chb];
+                    instance->max_rssi = (instance->channel_ss[chb] / 2) - 138;
+                    instance->max_rssi_channel = chb;
+                }
+
+                subghz_devices_idle(instance->radio_device);
+                subghz_devices_idle(instance->radio_device_ext);
             }
+        } else {
+            // Single radio: visit each channel non-consecutively
+            for(uint8_t ch_offset = 0, chunk = 0; ch_offset < CHUNK_SIZE;
+                ++chunk >= NUM_CHUNKS && ++ch_offset && (chunk = 0)) {
+                uint8_t ch = chunk * CHUNK_SIZE + ch_offset;
 
-            subghz_devices_idle(instance->radio_device);
+                if(subghz_devices_is_frequency_valid(
+                       instance->radio_device,
+                       instance->channel0_frequency + (ch * instance->spacing)))
+                    subghz_devices_set_frequency(
+                        instance->radio_device,
+                        instance->channel0_frequency + (ch * instance->spacing));
+
+                subghz_devices_set_rx(instance->radio_device);
+                furi_delay_ms(3);
+
+                //         dec      dBm
+                //max_ss = 127 ->  -10.5
+                //max_ss = 0   ->  -74.0
+                //max_ss = 255 ->  -74.5
+                //max_ss = 128 -> -138.0
+                instance->channel_ss[ch] =
+                    (subghz_devices_get_rssi(instance->radio_device) + 138) * 2;
+
+                if(instance->channel_ss[ch] > instance->max_rssi_dec) {
+                    instance->max_rssi_dec = instance->channel_ss[ch];
+                    instance->max_rssi = (instance->channel_ss[ch] / 2) - 138;
+                    instance->max_rssi_channel = ch;
+                }
+
+                subghz_devices_idle(instance->radio_device);
+            }
         }
 
         // FURI_LOG_T("SpectrumWorker", "channel_ss[0]: %u", instance->channel_ss[0]);
@@ -251,6 +278,11 @@ static int32_t spectrum_analyzer_worker_thread(void* context) {
         }
     }
 
+    subghz_devices_idle(instance->radio_device);
+    if(instance->dual && instance->radio_device_ext) {
+        subghz_devices_idle(instance->radio_device_ext);
+    }
+
     return 0;
 }
 
@@ -258,6 +290,16 @@ SpectrumAnalyzerWorker* spectrum_analyzer_worker_alloc() {
     FURI_LOG_D("Spectrum", "spectrum_analyzer_worker_alloc: Start");
 
     SpectrumAnalyzerWorker* instance = malloc(sizeof(SpectrumAnalyzerWorker));
+
+    instance->should_work = false;
+    instance->channel0_frequency = DEFAULT_FREQ * 1000; // DEFAULT_FREQ is in kHz
+    instance->spacing = WIDE_SPACING;
+    instance->width = WIDE;
+    instance->modulation = DEFAULT_MODULATION;
+    instance->max_rssi = 0;
+    instance->max_rssi_dec = 0;
+    instance->max_rssi_channel = 0;
+    memset(instance->channel_ss, 0, sizeof(instance->channel_ss));
 
     instance->thread = furi_thread_alloc();
     furi_thread_set_name(instance->thread, "SpectrumWorker");
@@ -267,12 +309,30 @@ SpectrumAnalyzerWorker* spectrum_analyzer_worker_alloc() {
 
     subghz_devices_init();
 
-    instance->radio_device =
-        radio_device_loader_set(instance->radio_device, SubGhzRadioDeviceTypeExternalCC1101);
+    // If the external CC1101 is present, run BOTH radios: internal = radio A,
+    // external = radio B. The sweep is then split across them (~2x faster). If no
+    // external module, fall back to a single radio (internal).
+    // radio_device_loader_set() powers-on + begins the external module when present,
+    // and returns the internal device otherwise.
+    const SubGhzDevice* int_device = subghz_devices_get_by_name(SUBGHZ_DEVICE_CC1101_INT_NAME);
+    const SubGhzDevice* preferred =
+        radio_device_loader_set(NULL, SubGhzRadioDeviceTypeExternalCC1101);
+    instance->radio_device = int_device;
+    instance->radio_device_ext = NULL;
+    instance->dual = false;
+    if(preferred != int_device) {
+        instance->radio_device_ext = preferred; // external, already powered + begun
+        instance->dual = true;
+    }
 
-    FURI_LOG_D("Spectrum", "spectrum_analyzer_worker_alloc: End");
+    FURI_LOG_D("Spectrum", "spectrum_analyzer_worker_alloc: End (dual=%u)", instance->dual);
 
     return instance;
+}
+
+bool spectrum_analyzer_worker_is_dual(SpectrumAnalyzerWorker* instance) {
+    furi_assert(instance);
+    return instance->dual;
 }
 
 void spectrum_analyzer_worker_free(SpectrumAnalyzerWorker* instance) {
@@ -281,7 +341,11 @@ void spectrum_analyzer_worker_free(SpectrumAnalyzerWorker* instance) {
     furi_thread_free(instance->thread);
 
     subghz_devices_sleep(instance->radio_device);
-    radio_device_loader_end(instance->radio_device);
+    if(instance->dual && instance->radio_device_ext) {
+        // Powers off OTG + ends the external module. The internal radio needs neither.
+        subghz_devices_sleep(instance->radio_device_ext);
+        radio_device_loader_end(instance->radio_device_ext);
+    }
 
     subghz_devices_deinit();
 

@@ -10,19 +10,19 @@
 #define PROTOPIRATE_TX_PLUGIN_PATH_MAX 160U
 #endif
 
-static const char* protopirate_get_registry_plugin_path(ProtoPirateProtocolRegistryRoute route) {
+static const char* protopirate_get_registry_plugin_name(ProtoPirateProtocolRegistryRoute route) {
     switch(route) {
     case ProtoPirateProtocolRegistryRouteAMVag:
-        return "am_vag.fal";
+        return "am_vag";
     case ProtoPirateProtocolRegistryRouteFMDefault:
-        return "fm_def.fal";
+        return "fm_def";
     case ProtoPirateProtocolRegistryRouteFMF4:
-        return "fm_f4.fal";
+        return "fm_f4";
     case ProtoPirateProtocolRegistryRouteFMHonda1:
-        return "fm_honda1.fal";
+        return "fm_honda1";
     case ProtoPirateProtocolRegistryRouteAMDefault:
     default:
-        return "am_def.fal";
+        return "am_def";
     }
 }
 
@@ -35,7 +35,7 @@ static bool protopirate_build_tx_protocol_plugin_path(
         return false;
     }
 
-    int written = snprintf(plugin_path, plugin_path_size, "tx_%s.fal", tx_key);
+    int written = snprintf(plugin_path, plugin_path_size, "tx_%s", tx_key);
     return (written > 0) && ((size_t)written < plugin_path_size);
 }
 #endif
@@ -85,7 +85,7 @@ static bool protopirate_ensure_protocol_registry_plugin(
         protopirate_unload_protocol_plugin(app);
     }
 
-    const char* plugin_path = protopirate_get_registry_plugin_path(route);
+    const char* plugin_path = protopirate_get_registry_plugin_name(route);
     if(!shared_plugin_load(
            &app->txrx->protocol_plugin_flipper_application,
            &app->txrx->running_plugin,

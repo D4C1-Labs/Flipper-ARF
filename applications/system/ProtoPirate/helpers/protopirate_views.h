@@ -4,7 +4,6 @@
 
 typedef struct ProtoPirateApp ProtoPirateApp;
 
-bool protopirate_ensure_variable_item_list(ProtoPirateApp* app);
 bool protopirate_ensure_widget(ProtoPirateApp* app);
 bool protopirate_ensure_text_input(ProtoPirateApp* app);
 void protopirate_free_text_input(ProtoPirateApp* app);

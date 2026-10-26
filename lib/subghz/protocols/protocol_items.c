@@ -160,11 +160,28 @@ const SubGhzProtocol* const subghz_protocol_registry_items[] = {
     &honda_static_protocol,
     &honda_v1_protocol,
     &honda_v2_protocol,
-    //&subghz_protocol_mercedes,
+    //&subghz_protocol_mercedes,  // [ARF_PORT] superseded by mercedes_v0 / mercedes_v1 below
     //&subghz_protocol_mazda_infinity,
     //&subghz_protocol_audi,
     //&subghz_protocol_hundai,
-    //&subghz_protocol_gm,
+    //&subghz_protocol_gm_v0,
+
+    // [ARF_PORT 2026-10-26] Imported from doctor-firmware / FoxFW. Kept commented
+    // here as the in-firmware backup copy: they ship enabled inside the external
+    // apps (applications/system/ARF-Cars and ARF-Garage) so they cost no
+    // internal flash. Uncomment only if flash budget allows (see
+    // SUBGHZ-PROTOCOLOS-REFERENCIA.md).
+    //&subghz_protocol_gm_v1,
+    //&subghz_protocol_toyota_v0,
+    //&subghz_protocol_toyota_v1,
+    //&subghz_protocol_mazda_v1,
+    //&subghz_protocol_mazda_v2,
+    //&subghz_protocol_mercedes_v0,
+    //&subghz_protocol_mercedes_v1,
+    //&subghz_protocol_opel_v1,
+    //&subghz_protocol_bmw,
+    //&subghz_protocol_urmet,
+    //&subghz_protocol_x10,
 
     // [UNLEASHED_PORT] New protocols from Unleashed firmware (disabled by default)
     //&subghz_protocol_allstar_firefly,

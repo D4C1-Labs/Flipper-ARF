@@ -3,11 +3,34 @@
 
 #include <gui/gui.h>
 #include <input/input.h>
+#include <spectrum_analyzer_icons.h>
 #include <stdlib.h>
+#include <storage/storage.h>
+#include <flipper_format/flipper_format.h>
 #include "spectrum_analyzer.h"
 
 #include <lib/drivers/cc1101_regs.h>
 #include "spectrum_analyzer_worker.h"
+
+#define SA_BAR_BASELINE   40
+#define SA_BAR_TOP        13 // bars fill from just below the header
+#define SA_MAX_PEAKS      24
+#define SA_PEAK_DEDUP_KHZ 200 // peaks within this many kHz are the same signal
+#define SA_SCALE_LABEL_Y  53
+#define SA_STATUS_Y       62
+#define SA_BADGE_X        109
+#define SA_BADGE_W        19
+#define SA_LAST_PATH      EXT_PATH("subghz/assets/last_subghz.settings")
+
+typedef struct {
+    uint32_t freq; // kHz
+    float rssi; // dBm
+} SpectrumPeak;
+
+typedef enum {
+    SA_VIEW_LIVE = 0,
+    SA_VIEW_HISTORY = 1,
+} SpectrumViewMode;
 
 typedef struct {
     uint32_t center_freq;
@@ -26,7 +49,48 @@ typedef struct {
     uint8_t max_rssi_dec;
     uint8_t max_rssi_channel;
     uint8_t channel_ss[NUM_CHANNELS];
+    uint8_t max_hold[NUM_CHANNELS]; // slowly-decaying peak-hold trace
+    bool dual; // sweep split across two radios (~2x faster)
+
+    SpectrumPeak peaks[SA_MAX_PEAKS]; // unique peaks seen this session
+    uint8_t peak_count;
+    uint8_t view_mode; // SA_VIEW_LIVE / SA_VIEW_HISTORY
+    uint8_t hist_scroll; // selected row in the peak history
 } SpectrumAnalyzerModel;
+
+// How fast the peak-hold trace decays, in raw-RSSI units per sweep.
+#define PEAK_HOLD_DECAY 2
+
+static const char* spectrum_width_name(uint8_t width) {
+    switch(width) {
+    case NARROW:
+        return "NARROW";
+    case ULTRANARROW:
+        return "U.NARROW";
+    case PRECISE:
+        return "PRECISE";
+    case ULTRAWIDE:
+        return "U.WIDE";
+    default:
+        return "WIDE";
+    }
+}
+
+// Cycle the zoom mode by span (widest..narrowest); Up narrows, Down widens.
+static uint8_t sa_cycle_width(uint8_t width, bool narrower) {
+    static const uint8_t order[] = {ULTRAWIDE, WIDE, NARROW, ULTRANARROW, PRECISE};
+    int idx = 0;
+    for(int i = 0; i < 5; i++) {
+        if(order[i] == width) {
+            idx = i;
+            break;
+        }
+    }
+    idx += narrower ? 1 : -1;
+    if(idx < 0) idx = 0;
+    if(idx > 4) idx = 4;
+    return order[idx];
+}
 
 typedef struct {
     SpectrumAnalyzerModel* model;
@@ -88,136 +152,160 @@ void spectrum_analyzer_draw_scale(Canvas* canvas, const SpectrumAnalyzerModel* m
     case PRECISE:
     case ULTRANARROW:
         snprintf(temp_str, 18, "%.1f", ((double)tag_left) / 1000);
-        canvas_draw_str_aligned(canvas, FREQ_START_X, 63, AlignCenter, AlignBottom, temp_str);
+        canvas_draw_str_aligned(
+            canvas, FREQ_START_X, SA_SCALE_LABEL_Y, AlignCenter, AlignBottom, temp_str);
         snprintf(temp_str, 18, "%.1f", ((double)tag_center) / 1000);
-        canvas_draw_str_aligned(canvas, 128 / 2, 63, AlignCenter, AlignBottom, temp_str);
+        canvas_draw_str_aligned(
+            canvas, 128 / 2, SA_SCALE_LABEL_Y, AlignCenter, AlignBottom, temp_str);
         snprintf(temp_str, 18, "%.1f", ((double)tag_right) / 1000);
         canvas_draw_str_aligned(
-            canvas, FREQ_START_X + FREQ_LENGTH_X - 1, 63, AlignCenter, AlignBottom, temp_str);
+            canvas,
+            FREQ_START_X + FREQ_LENGTH_X - 1,
+            SA_SCALE_LABEL_Y,
+            AlignCenter,
+            AlignBottom,
+            temp_str);
         break;
     default:
         snprintf(temp_str, 18, "%lu", tag_left / 1000);
-        canvas_draw_str_aligned(canvas, FREQ_START_X, 63, AlignCenter, AlignBottom, temp_str);
+        canvas_draw_str_aligned(
+            canvas, FREQ_START_X, SA_SCALE_LABEL_Y, AlignCenter, AlignBottom, temp_str);
         snprintf(temp_str, 18, "%lu", tag_center / 1000);
-        canvas_draw_str_aligned(canvas, 128 / 2, 63, AlignCenter, AlignBottom, temp_str);
+        canvas_draw_str_aligned(
+            canvas, 128 / 2, SA_SCALE_LABEL_Y, AlignCenter, AlignBottom, temp_str);
         snprintf(temp_str, 18, "%lu", tag_right / 1000);
         canvas_draw_str_aligned(
-            canvas, FREQ_START_X + FREQ_LENGTH_X - 1, 63, AlignCenter, AlignBottom, temp_str);
+            canvas,
+            FREQ_START_X + FREQ_LENGTH_X - 1,
+            SA_SCALE_LABEL_Y,
+            AlignCenter,
+            AlignBottom,
+            temp_str);
+    }
+}
+
+static void spectrum_analyzer_draw_badge(Canvas* canvas, SpectrumAnalyzerModel* m) {
+    const char* bw = (m->modulation == NARROW_MODULATION) ? "58k" : "270k";
+    const int badge_x = m->dual ? SA_BADGE_X - SA_BADGE_W - 1 : SA_BADGE_X;
+
+    if(m->dual) {
+        canvas_draw_icon(canvas, badge_x, 0, &I_Internal_ant_1_9x11);
+    }
+    canvas_draw_icon(
+        canvas, SA_BADGE_X, 0, m->dual ? &I_External_ant_1_9x11 : &I_Internal_ant_1_9x11);
+
+    canvas_set_font(canvas, FontSecondary);
+    canvas_draw_str_aligned(canvas, badge_x - 4, 8, AlignRight, AlignBottom, bw);
+}
+
+static void spectrum_analyzer_draw_live(Canvas* canvas, SpectrumAnalyzerModel* m) {
+    const int barmax = SA_BAR_BASELINE - SA_BAR_TOP;
+
+    canvas_set_font(canvas, FontPrimary);
+    char freq[16];
+    snprintf(freq, sizeof(freq), "%lu.%02lu", m->center_freq / 1000, (m->center_freq % 1000) / 10);
+    canvas_draw_str(canvas, 0, 9, freq);
+
+    spectrum_analyzer_draw_badge(canvas, m);
+
+    for(uint8_t c = 0; c < 128; c++) {
+        int s = ((int)m->channel_ss[c + 2] - (int)m->vscroll) >> 2;
+        if(s > barmax) s = barmax;
+        if(s > 0) canvas_draw_line(canvas, c, SA_BAR_BASELINE, c, SA_BAR_BASELINE - s);
+        int hs = ((int)m->max_hold[c + 2] - (int)m->vscroll) >> 2;
+        if(hs > barmax) hs = barmax;
+        if(hs > 0) canvas_draw_dot(canvas, c, SA_BAR_BASELINE - hs);
+    }
+
+    spectrum_analyzer_draw_scale(canvas, m);
+
+    canvas_set_font(canvas, FontSecondary);
+    canvas_draw_str(canvas, 0, SA_STATUS_Y, spectrum_width_name(m->width));
+    char cnt[12];
+    snprintf(cnt, sizeof(cnt), "%u pk", m->peak_count);
+    canvas_draw_str_aligned(canvas, 127, SA_STATUS_Y, AlignRight, AlignBottom, cnt);
+}
+
+// Peak-history list (OK on the live view opens it).
+static void spectrum_analyzer_draw_history(Canvas* canvas, SpectrumAnalyzerModel* m) {
+    canvas_set_font(canvas, FontSecondary);
+    char title[24];
+    snprintf(title, sizeof(title), "Peak History (%u)", m->peak_count);
+    canvas_draw_str(canvas, 2, 9, title);
+    canvas_draw_line(canvas, 0, 11, 127, 11);
+
+    if(m->peak_count == 0) {
+        canvas_draw_str_aligned(canvas, 64, 32, AlignCenter, AlignCenter, "No peaks yet");
+        canvas_draw_str_aligned(canvas, 64, 46, AlignCenter, AlignCenter, "Back = live");
+        return;
+    }
+
+    const uint8_t rows = 4;
+    uint8_t first = (m->hist_scroll >= rows) ? (m->hist_scroll - rows + 1) : 0;
+    for(uint8_t r = 0; r < rows && (first + r) < m->peak_count; r++) {
+        uint8_t idx = first + r;
+        uint8_t y = 12 + r * 11;
+        bool sel = (idx == m->hist_scroll);
+        if(sel) {
+            canvas_set_color(canvas, ColorBlack);
+            canvas_draw_box(canvas, 0, y, 128, 11);
+            canvas_set_color(canvas, ColorWhite);
+        }
+        char line[32];
+        snprintf(
+            line,
+            sizeof(line),
+            "%lu.%02lu MHz  %d dBm",
+            m->peaks[idx].freq / 1000,
+            (m->peaks[idx].freq % 1000) / 10,
+            (int)m->peaks[idx].rssi);
+        canvas_draw_str(canvas, 3, y + 9, line);
+        if(sel) canvas_set_color(canvas, ColorBlack);
     }
 }
 
 static void spectrum_analyzer_render_callback(Canvas* const canvas, void* ctx) {
     SpectrumAnalyzer* spectrum_analyzer = ctx;
-    //furi_check(furi_mutex_acquire(spectrum_analyzer->model_mutex, FuriWaitForever) == FuriStatusOk);
 
+    // The worker thread and the input loop both mutate the model under this mutex, so
+    // the draw (GUI thread) must take it too to avoid reading a half-updated model.
+    if(furi_mutex_acquire(spectrum_analyzer->model_mutex, FuriWaitForever) != FuriStatusOk) {
+        return;
+    }
     SpectrumAnalyzerModel* model = spectrum_analyzer->model;
 
-    spectrum_analyzer_draw_scale(canvas, model);
-
-    for(uint8_t column = 0; column < 128; column++) {
-        uint8_t ss = model->channel_ss[column + 2];
-        // Compress height to max of 64 values (255>>2)
-        uint8_t s = MAX((ss - model->vscroll) >> 2, 0);
-        uint8_t y = FREQ_BOTTOM_Y - s; // bar height
-
-        // Draw each bar
-        canvas_draw_line(canvas, column, FREQ_BOTTOM_Y, column, y);
+    if(model->view_mode == SA_VIEW_HISTORY) {
+        spectrum_analyzer_draw_history(canvas, model);
+    } else {
+        spectrum_analyzer_draw_live(canvas, model);
     }
 
-    if(model->mode_change) {
-        char temp_mode_str[12];
-        switch(model->width) {
-        case NARROW:
-            strncpy(temp_mode_str, "NARROW", 12);
-            break;
-        case ULTRANARROW:
-            strncpy(temp_mode_str, "ULTRANARROW", 12);
-            break;
-        case PRECISE:
-            strncpy(temp_mode_str, "PRECISE", 12);
-            break;
-        case ULTRAWIDE:
-            strncpy(temp_mode_str, "ULTRAWIDE", 12);
-            break;
-        default:
-            strncpy(temp_mode_str, "WIDE", 12);
-            break;
-        }
-
-        // Current mode label
-        char tmp_str[21];
-        snprintf(tmp_str, 21, "Mode: %s", temp_mode_str);
-        canvas_draw_str_aligned(canvas, 127, 4, AlignRight, AlignTop, tmp_str);
-    }
-
-    if(model->modulation_change) {
-        char temp_mod_str[12];
-        switch(model->modulation) {
-        case NARROW_MODULATION:
-            strncpy(temp_mod_str, "NARROW", 12);
-            break;
-        default:
-            strncpy(temp_mod_str, "DEFAULT", 12);
-            break;
-        }
-
-        // Current modulation label
-        char tmp_str[27];
-        snprintf(tmp_str, 27, "Modulation: %s", temp_mod_str);
-        canvas_draw_str_aligned(canvas, 127, 4, AlignRight, AlignTop, tmp_str);
-    }
-
-    // Draw cross and label
-    if(model->max_rssi > PEAK_THRESHOLD) {
-        // Compress height to max of 64 values (255>>2)
-        uint8_t max_y = MAX((model->max_rssi_dec - model->vscroll) >> 2, 0);
-        max_y = (FREQ_BOTTOM_Y - max_y);
-
-        // Cross
-        int16_t x1, x2, y1, y2;
-        x1 = model->max_rssi_channel - 2 - 2;
-        if(x1 < 0) x1 = 0;
-        y1 = max_y - 2;
-        if(y1 < 0) y1 = 0;
-        x2 = model->max_rssi_channel - 2 + 2;
-        if(x2 > 127) x2 = 127;
-        y2 = max_y + 2;
-        if(y2 > 63) y2 = 63; // SHOULD NOT HAPPEN CHECK!
-        canvas_draw_line(canvas, x1, y1, x2, y2);
-
-        x1 = model->max_rssi_channel - 2 + 2;
-        if(x1 > 127) x1 = 127;
-        y1 = max_y - 2;
-        if(y1 < 0) y1 = 0;
-        x2 = model->max_rssi_channel - 2 - 2;
-        if(x2 < 0) x2 = 0;
-        y2 = max_y + 2;
-        if(y2 > 63) y2 = 63; // SHOULD NOT HAPPEN CHECK!
-        canvas_draw_line(canvas, (uint8_t)x1, (uint8_t)y1, (uint8_t)x2, (uint8_t)y2);
-
-        // Label
-        char temp_str[36];
-        snprintf(
-            temp_str,
-            36,
-            "Peak: %3.2f Mhz %3.1f dbm",
-            ((double)(model->channel0_frequency + (model->max_rssi_channel * model->spacing)) /
-             1000000),
-            (double)model->max_rssi);
-        canvas_draw_str_aligned(canvas, 127, 0, AlignRight, AlignTop, temp_str);
-    }
-
-    //furi_mutex_release(spectrum_analyzer->model_mutex);
-
-    // FURI_LOG_D("Spectrum", "model->vscroll %u", model->vscroll);
+    furi_mutex_release(spectrum_analyzer->model_mutex);
 }
 
 static void spectrum_analyzer_input_callback(InputEvent* input_event, void* ctx) {
     SpectrumAnalyzer* spectrum_analyzer = ctx;
-    // Handle short and long presses
-    if(input_event->type == InputTypeShort || input_event->type == InputTypeLong) {
+    if(input_event->type == InputTypeShort || input_event->type == InputTypeLong ||
+       input_event->type == InputTypeRepeat) {
         furi_message_queue_put(spectrum_analyzer->event_queue, input_event, FuriWaitForever);
     }
+}
+
+static uint32_t spectrum_analyzer_load_center_khz(void) {
+    uint32_t center_khz = DEFAULT_FREQ;
+    Storage* storage = furi_record_open(RECORD_STORAGE);
+    FlipperFormat* file = flipper_format_file_alloc(storage);
+
+    if(flipper_format_file_open_existing(file, SA_LAST_PATH)) {
+        uint32_t freq_hz = 0;
+        if(flipper_format_read_uint32(file, "Frequency", &freq_hz, 1) && freq_hz >= 1000000u) {
+            center_khz = freq_hz / 1000u;
+        }
+    }
+
+    flipper_format_free(file);
+    furi_record_close(RECORD_STORAGE);
+    return center_khz;
 }
 
 static void spectrum_analyzer_worker_callback(
@@ -235,6 +323,64 @@ static void spectrum_analyzer_worker_callback(
     model->max_rssi = max_rssi;
     model->max_rssi_dec = max_rssi_dec;
     model->max_rssi_channel = max_rssi_channel;
+
+    // Update the peak-hold trace: rise instantly to new peaks, decay slowly otherwise.
+    for(uint16_t i = 0; i < NUM_CHANNELS; i++) {
+        uint8_t cur = model->channel_ss[i];
+        if(cur >= model->max_hold[i]) {
+            model->max_hold[i] = cur;
+        } else if(model->max_hold[i] > PEAK_HOLD_DECAY) {
+            model->max_hold[i] -= PEAK_HOLD_DECAY;
+        } else {
+            model->max_hold[i] = 0;
+        }
+    }
+
+    // Auto-track the noise floor so the display baseline stays sensible without a
+    // manual vscroll control (Up/Down are the width selector now).
+    uint8_t floor = 255;
+    for(uint8_t c = 0; c < 128; c++) {
+        if(model->channel_ss[c + 2] < floor) floor = model->channel_ss[c + 2];
+    }
+    if(floor > model->vscroll) {
+        model->vscroll++;
+    } else if(floor < model->vscroll && model->vscroll > 0) {
+        model->vscroll--;
+    }
+
+    // Track unique frequency peaks (dedup within SA_PEAK_DEDUP_KHZ).
+    if(model->max_rssi > PEAK_THRESHOLD) {
+        uint32_t pf =
+            (model->channel0_frequency + (model->max_rssi_channel * model->spacing)) / 1000;
+        int16_t found = -1;
+        for(uint8_t i = 0; i < model->peak_count; i++) {
+            uint32_t d = (pf > model->peaks[i].freq) ? (pf - model->peaks[i].freq) :
+                                                       (model->peaks[i].freq - pf);
+            if(d <= SA_PEAK_DEDUP_KHZ) {
+                found = i;
+                break;
+            }
+        }
+        if(found >= 0) {
+            if(model->max_rssi > model->peaks[found].rssi) {
+                model->peaks[found].rssi = model->max_rssi;
+                model->peaks[found].freq = pf;
+            }
+        } else if(model->peak_count < SA_MAX_PEAKS) {
+            model->peaks[model->peak_count].freq = pf;
+            model->peaks[model->peak_count].rssi = model->max_rssi;
+            model->peak_count++;
+        } else {
+            uint8_t weakest = 0;
+            for(uint8_t i = 1; i < SA_MAX_PEAKS; i++) {
+                if(model->peaks[i].rssi < model->peaks[weakest].rssi) weakest = i;
+            }
+            if(model->max_rssi > model->peaks[weakest].rssi) {
+                model->peaks[weakest].freq = pf;
+                model->peaks[weakest].rssi = model->max_rssi;
+            }
+        }
+    }
 
     furi_mutex_release(spectrum_analyzer->model_mutex);
     view_port_update(spectrum_analyzer->view_port);
@@ -387,19 +533,24 @@ SpectrumAnalyzer* spectrum_analyzer_alloc() {
 
     SpectrumAnalyzerModel* model = instance->model;
 
-    for(uint8_t ch = 0; ch < NUM_CHANNELS - 1; ch++) {
+    for(uint8_t ch = 0; ch < NUM_CHANNELS; ch++) {
         model->channel_ss[ch] = 0;
+        model->max_hold[ch] = 0;
     }
     model->max_rssi_dec = 0;
     model->max_rssi_channel = 0;
     model->max_rssi = PEAK_THRESHOLD - 1; // Should initializar to < PEAK_THRESHOLD
 
-    model->center_freq = DEFAULT_FREQ;
+    model->center_freq = spectrum_analyzer_load_center_khz();
     model->width = WIDE;
     model->modulation = DEFAULT_MODULATION;
     model->band = BAND_400;
 
     model->vscroll = DEFAULT_VSCROLL;
+    model->dual = false;
+    model->peak_count = 0;
+    model->view_mode = SA_VIEW_LIVE;
+    model->hist_scroll = 0;
 
     instance->model_mutex = furi_mutex_alloc(FuriMutexTypeNormal);
     instance->event_queue = furi_message_queue_alloc(8, sizeof(InputEvent));
@@ -444,19 +595,19 @@ int32_t spectrum_analyzer_app(void* p) {
     InputEvent input;
 
     furi_hal_power_suppress_charge_enter();
-
-    FURI_LOG_D("Spectrum", "Main Loop - Starting worker");
     furi_delay_ms(50);
 
-    spectrum_analyzer_worker_start(spectrum_analyzer->worker);
+    spectrum_analyzer->model->dual = spectrum_analyzer_worker_is_dual(spectrum_analyzer->worker);
     spectrum_analyzer_calculate_frequencies(spectrum_analyzer->model);
     spectrum_analyzer_worker_set_frequencies(
         spectrum_analyzer->worker,
         spectrum_analyzer->model->channel0_frequency,
         spectrum_analyzer->model->spacing,
         spectrum_analyzer->model->width);
+    spectrum_analyzer_worker_set_modulation(
+        spectrum_analyzer->worker, spectrum_analyzer->model->modulation);
 
-    FURI_LOG_D("Spectrum", "Main Loop - Wait on queue");
+    spectrum_analyzer_worker_start(spectrum_analyzer->worker);
     furi_delay_ms(50);
 
     while(furi_message_queue_get(spectrum_analyzer->event_queue, &input, FuriWaitForever) ==
@@ -464,11 +615,8 @@ int32_t spectrum_analyzer_app(void* p) {
         furi_check(
             furi_mutex_acquire(spectrum_analyzer->model_mutex, FuriWaitForever) == FuriStatusOk);
 
-        FURI_LOG_D("Spectrum", "Main Loop - Input: %u", input.key);
-
         SpectrumAnalyzerModel* model = spectrum_analyzer->model;
 
-        uint8_t vstep = VERTICAL_SHORT_STEP;
         uint32_t hstep;
 
         bool exit_loop = false;
@@ -491,20 +639,51 @@ int32_t spectrum_analyzer_app(void* p) {
             break;
         }
 
-        switch(input.type) {
-        case InputTypeShort:
+        if(model->view_mode == SA_VIEW_HISTORY) {
+            if(input.type == InputTypeShort || input.type == InputTypeRepeat) {
+                switch(input.key) {
+                case InputKeyUp:
+                    if(model->hist_scroll > 0) model->hist_scroll--;
+                    break;
+                case InputKeyDown:
+                    if(model->peak_count && model->hist_scroll < model->peak_count - 1)
+                        model->hist_scroll++;
+                    break;
+                case InputKeyOk:
+                    if(input.type == InputTypeShort && model->peak_count) {
+                        model->center_freq = model->peaks[model->hist_scroll].freq;
+                        spectrum_analyzer_calculate_frequencies(model);
+                        spectrum_analyzer_worker_set_frequencies(
+                            spectrum_analyzer->worker,
+                            model->channel0_frequency,
+                            model->spacing,
+                            model->width);
+                        model->view_mode = SA_VIEW_LIVE;
+                    }
+                    break;
+                case InputKeyBack:
+                    if(input.type == InputTypeShort) model->view_mode = SA_VIEW_LIVE;
+                    break;
+                default:
+                    break;
+                }
+            }
+        } else if(input.type == InputTypeShort || input.type == InputTypeRepeat) {
             switch(input.key) {
             case InputKeyUp:
-                model->vscroll = MAX(model->vscroll - vstep, MIN_VSCROLL);
-                FURI_LOG_D("Spectrum", "Vscroll: %u", model->vscroll);
-                break;
             case InputKeyDown:
-                model->vscroll = MIN(model->vscroll + vstep, MAX_VSCROLL);
-                FURI_LOG_D("Spectrum", "Vscroll: %u", model->vscroll);
+                if(input.type == InputTypeShort) {
+                    model->width = sa_cycle_width(model->width, input.key == InputKeyUp);
+                    spectrum_analyzer_calculate_frequencies(model);
+                    spectrum_analyzer_worker_set_frequencies(
+                        spectrum_analyzer->worker,
+                        model->channel0_frequency,
+                        model->spacing,
+                        model->width);
+                }
                 break;
             case InputKeyRight:
                 model->center_freq += hstep;
-                FURI_LOG_D("Spectrum", "center_freq: %lu", model->center_freq);
                 spectrum_analyzer_calculate_frequencies(model);
                 spectrum_analyzer_worker_set_frequencies(
                     spectrum_analyzer->worker,
@@ -520,80 +699,26 @@ int32_t spectrum_analyzer_app(void* p) {
                     model->channel0_frequency,
                     model->spacing,
                     model->width);
-                FURI_LOG_D("Spectrum", "center_freq: %lu", model->center_freq);
                 break;
-            case InputKeyOk: {
-                switch(model->width) {
-                case WIDE:
-                    model->width = NARROW;
-                    break;
-                case NARROW:
-                    model->width = ULTRANARROW;
-                    break;
-                case ULTRANARROW:
-                    model->width = PRECISE;
-                    break;
-                case PRECISE:
-                    model->width = ULTRAWIDE;
-                    break;
-                case ULTRAWIDE:
-                    model->width = WIDE;
-                    break;
-                default:
-                    model->width = WIDE;
-                    break;
+            case InputKeyOk:
+                if(input.type == InputTypeShort) {
+                    model->view_mode = SA_VIEW_HISTORY;
+                    model->hist_scroll = 0;
                 }
-            }
-                model->mode_change = true;
-                view_port_update(spectrum_analyzer->view_port);
-
-                furi_delay_ms(1000);
-
-                model->mode_change = false;
-                spectrum_analyzer_calculate_frequencies(model);
-                spectrum_analyzer_worker_set_frequencies(
-                    spectrum_analyzer->worker,
-                    model->channel0_frequency,
-                    model->spacing,
-                    model->width);
-                FURI_LOG_D("Spectrum", "Width: %u", model->width);
                 break;
             case InputKeyBack:
-                exit_loop = true;
+                if(input.type == InputTypeShort) exit_loop = true;
                 break;
             default:
                 break;
             }
-            break;
-        case InputTypeLong:
-            switch(input.key) {
-            case InputKeyOk:
-                FURI_LOG_D("Spectrum", "InputTypeLong");
-                switch(model->modulation) {
-                case NARROW_MODULATION:
-                    model->modulation = DEFAULT_MODULATION;
-                    break;
-                case DEFAULT_MODULATION:
-                default:
-                    model->modulation = NARROW_MODULATION;
-                    break;
-                }
-
-                model->modulation_change = true;
-                view_port_update(spectrum_analyzer->view_port);
-
-                furi_delay_ms(1000);
-
-                model->modulation_change = false;
+        } else if(input.type == InputTypeLong) {
+            if(input.key == InputKeyOk) {
+                model->modulation = (model->modulation == NARROW_MODULATION) ? DEFAULT_MODULATION :
+                                                                               NARROW_MODULATION;
                 spectrum_analyzer_worker_set_modulation(
-                    spectrum_analyzer->worker, spectrum_analyzer->model->modulation);
-                break;
-            default:
-                break;
+                    spectrum_analyzer->worker, model->modulation);
             }
-            break;
-        default:
-            break;
         }
 
         furi_mutex_release(spectrum_analyzer->model_mutex);

@@ -93,6 +93,7 @@ static void subghz_load_custom_presets(SubGhzSetting* setting) {
 SubGhz* subghz_alloc(bool alloc_for_tx_only) {
     SubGhz* subghz = malloc(sizeof(SubGhz));
 
+    subghz->blank_transition_viewport = NULL;
     subghz->keeloq_keys_manager = NULL;
 
     subghz->keeloq_bf2.sig1_loaded = false;
@@ -359,6 +360,13 @@ void subghz_free(SubGhz* subghz, bool alloc_for_tx_only) {
 
     // View Dispatcher
     view_dispatcher_free(subghz->view_dispatcher);
+
+    // Blank hand-off viewport (only allocated when launching an external app)
+    if(subghz->blank_transition_viewport) {
+        gui_remove_view_port(subghz->gui, subghz->blank_transition_viewport);
+        view_port_free(subghz->blank_transition_viewport);
+        subghz->blank_transition_viewport = NULL;
+    }
 
     // GUI
     furi_record_close(RECORD_GUI);

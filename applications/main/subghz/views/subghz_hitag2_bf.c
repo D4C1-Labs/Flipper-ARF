@@ -1,9 +1,19 @@
 // [HITAG2_BF] Hitag2 Bruteforce view - mirrors PSA Decrypt layout with level info
+//
+// [ARF_PORT 2026-10-26] Added the waiting-dolphin artwork (I_DolphinWait_59x54,
+// the same sprite doctor-firmware shows during BF) on the right side, with all
+// of ARF's live stats (level, keys/s, ETA, elapsed, captures) kept in a compact
+// column on the left. Purely cosmetic: the view only draws; the brute-force
+// engine and the BLE offload (both live in the scene) are untouched.
 
 #include "subghz_hitag2_bf.h"
 
 #include <gui/elements.h>
 #include <furi.h>
+#include <assets_icons.h>
+
+// Dolphin sprite footprint (right-hand side). Stats column uses x < DOLPHIN_X.
+#define HITAG2_BF_DOLPHIN_X 69
 
 struct SubGhzViewHitag2Bf {
     View* view;
@@ -55,127 +65,96 @@ static void subghz_view_hitag2_bf_draw(Canvas* canvas, void* _model) {
     canvas_clear(canvas);
 
     if(!model->done) {
+        // [ARF_PORT] Waiting dolphin on the right while cracking.
+        canvas_draw_icon(canvas, HITAG2_BF_DOLPHIN_X, 8, &I_DolphinWait_59x54);
+
+        // Stats column on the left half (x < HITAG2_BF_DOLPHIN_X).
         // Title with level
         canvas_set_font(canvas, FontPrimary);
-        char title[40];
+        char title[24];
         if(model->status_line[0]) {
-            canvas_draw_str_aligned(
-                canvas, 64, 2, AlignCenter, AlignTop, model->status_line);
+            canvas_draw_str(canvas, 0, 8, model->status_line);
         } else {
             snprintf(
                 title,
                 sizeof(title),
-                "L%u: %s",
+                "L%u %s",
                 model->level,
-                model->level_name[0] ? model->level_name : "Cracking...");
-            canvas_draw_str_aligned(canvas, 64, 2, AlignCenter, AlignTop, title);
-        }
-
-        // Progress bar
-        canvas_draw_rframe(canvas, 3, 15, 122, 12, 2);
-        uint8_t fill = (uint8_t)((uint16_t)model->progress * 116U / 100U);
-        if(fill > 2) {
-            canvas_draw_rbox(canvas, 5, 17, fill, 8, 1);
-        } else if(fill > 0) {
-            canvas_draw_box(canvas, 5, 17, fill, 8);
+                model->level_name[0] ? model->level_name : "Crack");
+            canvas_draw_str(canvas, 0, 8, title);
         }
 
         canvas_set_font(canvas, FontSecondary);
 
-        // Keys line: "42% - 13.4M keys | 2 caps"
-        char keys_str[40];
+        // Progress bar (left column width: 0..66)
+        canvas_draw_rframe(canvas, 0, 12, 66, 9, 2);
+        uint8_t fill = (uint8_t)((uint16_t)model->progress * 62U / 100U);
+        if(fill > 2) {
+            canvas_draw_rbox(canvas, 2, 14, fill, 5, 1);
+        } else if(fill > 0) {
+            canvas_draw_box(canvas, 2, 14, fill, 5);
+        }
+
+        // Percent + captures
+        char line[24];
+        snprintf(
+            line,
+            sizeof(line),
+            "%u%% %uc",
+            model->progress,
+            model->captures);
+        canvas_draw_str(canvas, 0, 30, line);
+
+        // Keys tested
         char tested_buf[16];
         subghz_view_hitag2_bf_format_count(tested_buf, sizeof(tested_buf), model->keys_tested);
-        snprintf(
-            keys_str,
-            sizeof(keys_str),
-            "%u%% - %s keys | %u cap%s",
-            model->progress,
-            tested_buf,
-            model->captures,
-            model->captures == 1 ? "" : "s");
-        canvas_draw_str(canvas, 2, 38, keys_str);
+        snprintf(line, sizeof(line), "%s keys", tested_buf);
+        canvas_draw_str(canvas, 0, 39, line);
 
-        // Speed + ETA
-        char speed_str[40];
+        // Speed
         char speed_buf[12];
         subghz_view_hitag2_bf_format_count(
             speed_buf, sizeof(speed_buf), model->keys_per_sec);
-        uint32_t eta_m = model->eta_sec / 60U;
-        uint32_t eta_s = model->eta_sec % 60U;
-        if(model->eta_sec >= 3600U) {
-            uint32_t eta_h = model->eta_sec / 3600U;
-            snprintf(
-                speed_str,
-                sizeof(speed_str),
-                "%s/s  ETA %luh %lum",
-                speed_buf,
-                (unsigned long)eta_h,
-                (unsigned long)((model->eta_sec % 3600U) / 60U));
-        } else if(eta_m > 0) {
-            snprintf(
-                speed_str,
-                sizeof(speed_str),
-                "%s/s  ETA %lum %lus",
-                speed_buf,
-                (unsigned long)eta_m,
-                (unsigned long)eta_s);
-        } else {
-            snprintf(
-                speed_str,
-                sizeof(speed_str),
-                "%s/s  ETA %lus",
-                speed_buf,
-                (unsigned long)eta_s);
-        }
-        canvas_draw_str(canvas, 2, 48, speed_str);
+        snprintf(line, sizeof(line), "%s/s", speed_buf);
+        canvas_draw_str(canvas, 0, 48, line);
 
-        // Elapsed
-        char elapsed_str[24];
-        uint32_t el_m = model->elapsed_sec / 60U;
-        uint32_t el_s = model->elapsed_sec % 60U;
-        if(model->elapsed_sec >= 3600U) {
+        // ETA (compact)
+        if(model->eta_sec >= 3600U) {
             snprintf(
-                elapsed_str,
-                sizeof(elapsed_str),
-                "Elapsed: %luh %lum",
-                (unsigned long)(model->elapsed_sec / 3600U),
-                (unsigned long)((model->elapsed_sec % 3600U) / 60U));
-        } else if(el_m > 0) {
+                line,
+                sizeof(line),
+                "ETA %luh%lum",
+                (unsigned long)(model->eta_sec / 3600U),
+                (unsigned long)((model->eta_sec % 3600U) / 60U));
+        } else if(model->eta_sec >= 60U) {
             snprintf(
-                elapsed_str,
-                sizeof(elapsed_str),
-                "Elapsed: %lum %lus",
-                (unsigned long)el_m,
-                (unsigned long)el_s);
-        } else if(model->elapsed_sec == 0) {
-            // [BUGFIX] Show "<1s" instead of the misleading "0s" when the
-            // level completes in less than a second (typical for L1/L2/L3).
-            snprintf(elapsed_str, sizeof(elapsed_str), "Elapsed: <1s");
+                line,
+                sizeof(line),
+                "ETA %lum%lus",
+                (unsigned long)(model->eta_sec / 60U),
+                (unsigned long)(model->eta_sec % 60U));
         } else {
-            snprintf(
-                elapsed_str,
-                sizeof(elapsed_str),
-                "Elapsed: %lus",
-                (unsigned long)el_s);
+            snprintf(line, sizeof(line), "ETA %lus", (unsigned long)model->eta_sec);
         }
-        canvas_draw_str(canvas, 2, 58, elapsed_str);
+        canvas_draw_str(canvas, 0, 57, line);
 
         // Cancel hint
-        canvas_draw_str_aligned(canvas, 126, 64, AlignRight, AlignBottom, "Hold BACK");
+        canvas_draw_str(canvas, 0, 64, "Hold BACK");
     } else {
+        // [ARF_PORT] Result screen: dolphin on the right, verdict + details left.
+        canvas_draw_icon(canvas, HITAG2_BF_DOLPHIN_X, 8, &I_DolphinWait_59x54);
+
         canvas_set_font(canvas, FontPrimary);
-        canvas_draw_str_aligned(
-            canvas, 64, 4, AlignCenter, AlignTop,
-            model->success ? "Key Found!" : "Not Cracked");
+        canvas_draw_str(
+            canvas, 0, 10, model->success ? "Key Found!" : "Not Cracked");
 
         if(model->result_str) {
             canvas_set_font(canvas, FontSecondary);
             elements_multiline_text_aligned(
                 canvas,
-                64,
-                20,
-                AlignCenter,
+                0,
+                18,
+                AlignLeft,
                 AlignTop,
                 furi_string_get_cstr(model->result_str));
         }

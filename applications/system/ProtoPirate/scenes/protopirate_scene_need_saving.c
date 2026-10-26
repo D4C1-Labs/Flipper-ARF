@@ -68,5 +68,5 @@ bool protopirate_scene_need_saving_on_event(void* context, SceneManagerEvent eve
 
 void protopirate_scene_need_saving_on_exit(void* context) {
     ProtoPirateApp* app = context;
-    widget_reset(app->widget);
+    protopirate_widget_free(app);
 }

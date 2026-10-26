@@ -1,0 +1,370 @@
+#include "subghz_last_settings.h"
+#include "subghz_i.h"
+
+#define TAG "SubGhzLastSettings"
+
+#define SUBGHZ_LAST_SETTING_FILE_TYPE    "Flipper SubGhz Last Setting File"
+#define SUBGHZ_LAST_SETTING_FILE_VERSION 3
+#define SUBGHZ_LAST_SETTINGS_PATH        EXT_PATH("subghz/assets/last_subghz.settings")
+
+#define SUBGHZ_LAST_SETTING_FIELD_FREQUENCY                         "Frequency"
+#define SUBGHZ_LAST_SETTING_FIELD_PRESET                            "Preset" // AKA Modulation
+#define SUBGHZ_LAST_SETTING_FIELD_FREQUENCY_ANALYZER_FEEDBACK_LEVEL "FeedbackLevel"
+#define SUBGHZ_LAST_SETTING_FIELD_FREQUENCY_ANALYZER_TRIGGER        "FATrigger"
+#define SUBGHZ_LAST_SETTING_FIELD_PROTOCOL_FILE_NAMES               "ProtocolNames"
+#define SUBGHZ_LAST_SETTING_FIELD_HOPPING_ENABLE                    "Hopping"
+#define SUBGHZ_LAST_SETTING_FIELD_PRESET_HOPPING                     "PresetHopping"
+#define SUBGHZ_LAST_SETTING_FIELD_PRESET_HOPPING_THRESHOLD          "PresetHoppingThreshold"
+#define SUBGHZ_LAST_SETTING_FIELD_IGNORE_FILTER                     "IgnoreFilter"
+#define SUBGHZ_LAST_SETTING_FIELD_FILTER                            "Filter"
+#define SUBGHZ_LAST_SETTING_FIELD_RSSI_THRESHOLD                    "RSSI"
+#define SUBGHZ_LAST_SETTING_FIELD_DELETE_OLD                        "DelOldSignals"
+#define SUBGHZ_LAST_SETTING_FIELD_HOPPING_THRESHOLD                 "HoppingThreshold"
+#define SUBGHZ_LAST_SETTING_FIELD_LED_AND_POWER_AMP                 "LedAndPowerAmp"
+#define SUBGHZ_LAST_SETTING_FIELD_TX_POWER                          "TXPower"
+#define SUBGHZ_LAST_SETTING_FIELD_CUSTOM_CAR_EMULATE                "CustomCarEmulate"
+#define SUBGHZ_LAST_SETTING_FIELD_PROTOCOL_FILTER                   "ProtocolFilterOff"
+// SubGHz autosave/duplicate/history features adapted from Momentum Firmware (GPLv3)
+#define SUBGHZ_LAST_SETTING_FIELD_AUTOSAVE                          "Autosave"
+#define SUBGHZ_LAST_SETTING_FIELD_REMOVE_DUPLICATES                 "RemoveDuplicates"
+
+SubGhzLastSettings* subghz_last_settings_alloc(void) {
+    SubGhzLastSettings* instance = malloc(sizeof(SubGhzLastSettings));
+    return instance;
+}
+
+void subghz_last_settings_free(SubGhzLastSettings* instance) {
+    furi_assert(instance);
+    free(instance);
+}
+
+void subghz_last_settings_load(SubGhzLastSettings* instance, size_t preset_count) {
+    UNUSED(preset_count);
+    furi_assert(instance);
+
+    // Default values (all others set to 0, if read from file fails these are used)
+    instance->frequency = SUBGHZ_LAST_SETTING_DEFAULT_FREQUENCY;
+    instance->preset_index = SUBGHZ_LAST_SETTING_DEFAULT_PRESET;
+    instance->frequency_analyzer_feedback_level =
+        SUBGHZ_LAST_SETTING_FREQUENCY_ANALYZER_FEEDBACK_LEVEL;
+    instance->frequency_analyzer_trigger = SUBGHZ_LAST_SETTING_FREQUENCY_ANALYZER_TRIGGER;
+    // See bin_raw_value in scenes/subghz_scene_receiver_config.c
+    instance->filter = SubGhzProtocolFlag_Decodable;
+    instance->rssi = SUBGHZ_RAW_THRESHOLD_MIN;
+    instance->hopping_threshold = -90.0f;
+    instance->enable_preset_hopping = false;
+    instance->preset_hopping_threshold = SUBGHZ_LAST_SETTING_DEFAULT_PRESET_HOPPING_THRESHOLD;
+    instance->leds_and_amp = true;
+    instance->protocol_filter[0] = '\0';
+    // SubGHz autosave/duplicate/history features adapted from Momentum Firmware (GPLv3)
+    instance->autosave = false;
+    instance->remove_duplicates = false;
+
+    Storage* storage = furi_record_open(RECORD_STORAGE);
+    FlipperFormat* fff_data_file = flipper_format_file_alloc(storage);
+
+    FuriString* temp_str = furi_string_alloc();
+    uint32_t config_version = 0;
+
+    if(FSE_OK == storage_sd_status(storage) &&
+       flipper_format_file_open_existing(fff_data_file, SUBGHZ_LAST_SETTINGS_PATH)) {
+        do {
+            if(!flipper_format_read_header(fff_data_file, temp_str, &config_version)) break;
+            if((strcmp(furi_string_get_cstr(temp_str), SUBGHZ_LAST_SETTING_FILE_TYPE) != 0) ||
+               (config_version != SUBGHZ_LAST_SETTING_FILE_VERSION)) {
+                break;
+            }
+
+            if(!flipper_format_read_uint32(
+                   fff_data_file, SUBGHZ_LAST_SETTING_FIELD_FREQUENCY, &instance->frequency, 1)) {
+                flipper_format_rewind(fff_data_file);
+            }
+            if(!flipper_format_read_uint32(
+                   fff_data_file, SUBGHZ_LAST_SETTING_FIELD_PRESET, &instance->preset_index, 1)) {
+                flipper_format_rewind(fff_data_file);
+            }
+            if(!flipper_format_read_uint32(
+                   fff_data_file,
+                   SUBGHZ_LAST_SETTING_FIELD_FREQUENCY_ANALYZER_FEEDBACK_LEVEL,
+                   &instance->frequency_analyzer_feedback_level,
+                   1)) {
+                flipper_format_rewind(fff_data_file);
+            }
+            if(!flipper_format_read_float(
+                   fff_data_file,
+                   SUBGHZ_LAST_SETTING_FIELD_FREQUENCY_ANALYZER_TRIGGER,
+                   &instance->frequency_analyzer_trigger,
+                   1)) {
+                flipper_format_rewind(fff_data_file);
+            }
+            if(!flipper_format_read_bool(
+                   fff_data_file,
+                   SUBGHZ_LAST_SETTING_FIELD_PROTOCOL_FILE_NAMES,
+                   &instance->protocol_file_names,
+                   1)) {
+                flipper_format_rewind(fff_data_file);
+            }
+            if(!flipper_format_read_bool(
+                   fff_data_file,
+                   SUBGHZ_LAST_SETTING_FIELD_HOPPING_ENABLE,
+                   &instance->enable_hopping,
+                   1)) {
+                flipper_format_rewind(fff_data_file);
+            }
+            if(!flipper_format_read_bool(
+                   fff_data_file,
+                   SUBGHZ_LAST_SETTING_FIELD_PRESET_HOPPING,
+                   &instance->enable_preset_hopping,
+                   1)) {
+                instance->enable_preset_hopping = false;
+                flipper_format_rewind(fff_data_file);
+            }
+            float temp_preset_threshold = 0;
+            if(!flipper_format_read_float(
+                   fff_data_file,
+                   SUBGHZ_LAST_SETTING_FIELD_PRESET_HOPPING_THRESHOLD,
+                   &temp_preset_threshold,
+                   1)) {
+                instance->preset_hopping_threshold = SUBGHZ_LAST_SETTING_DEFAULT_PRESET_HOPPING_THRESHOLD;
+                flipper_format_rewind(fff_data_file);
+            } else {
+                instance->preset_hopping_threshold = temp_preset_threshold;
+            }
+            if(!flipper_format_read_uint32(
+                   fff_data_file,
+                   SUBGHZ_LAST_SETTING_FIELD_IGNORE_FILTER,
+                   &instance->ignore_filter,
+                   1)) {
+                flipper_format_rewind(fff_data_file);
+            }
+            if(!flipper_format_read_uint32(
+                   fff_data_file, SUBGHZ_LAST_SETTING_FIELD_FILTER, &instance->filter, 1)) {
+                flipper_format_rewind(fff_data_file);
+            }
+            if(!flipper_format_read_float(
+                   fff_data_file, SUBGHZ_LAST_SETTING_FIELD_RSSI_THRESHOLD, &instance->rssi, 1)) {
+                flipper_format_rewind(fff_data_file);
+            }
+            if(!flipper_format_read_bool(
+                   fff_data_file,
+                   SUBGHZ_LAST_SETTING_FIELD_DELETE_OLD,
+                   &instance->delete_old_signals,
+                   1)) {
+                flipper_format_rewind(fff_data_file);
+            }
+            uint32_t tx_power = 0;
+            if(!flipper_format_read_uint32(
+                   fff_data_file, SUBGHZ_LAST_SETTING_FIELD_TX_POWER, &tx_power, 1)) {
+                flipper_format_rewind(fff_data_file);
+            }
+            instance->tx_power = (uint8_t)(tx_power & 0xFF);
+            if(!flipper_format_read_float(
+                   fff_data_file,
+                   SUBGHZ_LAST_SETTING_FIELD_HOPPING_THRESHOLD,
+                   &instance->hopping_threshold,
+                   1)) {
+                flipper_format_rewind(fff_data_file);
+            }
+            if(!flipper_format_read_bool(
+                   fff_data_file,
+                   SUBGHZ_LAST_SETTING_FIELD_LED_AND_POWER_AMP,
+                   &instance->leds_and_amp,
+                   1)) {
+                flipper_format_rewind(fff_data_file);
+            }
+             if(!flipper_format_read_bool(
+                    fff_data_file,
+                    SUBGHZ_LAST_SETTING_FIELD_CUSTOM_CAR_EMULATE,
+                    &instance->custom_car_emulate,
+                    1)) {
+                instance->custom_car_emulate = false;
+                flipper_format_rewind(fff_data_file);
+            }
+            // SubGHz autosave/duplicate/history features adapted from Momentum Firmware (GPLv3)
+            if(!flipper_format_read_bool(
+                   fff_data_file,
+                   SUBGHZ_LAST_SETTING_FIELD_AUTOSAVE,
+                   &instance->autosave,
+                   1)) {
+                instance->autosave = false;
+                flipper_format_rewind(fff_data_file);
+            }
+            if(!flipper_format_read_bool(
+                   fff_data_file,
+                   SUBGHZ_LAST_SETTING_FIELD_REMOVE_DUPLICATES,
+                   &instance->remove_duplicates,
+                   1)) {
+                instance->remove_duplicates = false;
+                flipper_format_rewind(fff_data_file);
+            }
+            FuriString* filter_str = furi_string_alloc();
+            if(flipper_format_read_string(
+                   fff_data_file, SUBGHZ_LAST_SETTING_FIELD_PROTOCOL_FILTER, filter_str)) {
+                strncpy(
+                    instance->protocol_filter,
+                    furi_string_get_cstr(filter_str),
+                    sizeof(instance->protocol_filter) - 1);
+                instance->protocol_filter[sizeof(instance->protocol_filter) - 1] = '\0';
+            } else {
+                instance->protocol_filter[0] = '\0';
+                flipper_format_rewind(fff_data_file);
+            }
+            furi_string_free(filter_str);
+            subghz_last_settings_protocol_filter_normalize(instance);
+
+        } while(0);
+    } else {
+        FURI_LOG_E(TAG, "Error open file %s", SUBGHZ_LAST_SETTINGS_PATH);
+    }
+
+    furi_string_free(temp_str);
+
+    flipper_format_file_close(fff_data_file);
+    flipper_format_free(fff_data_file);
+    furi_record_close(RECORD_STORAGE);
+
+    if(instance->frequency == 0 || !furi_hal_subghz_is_tx_allowed(instance->frequency)) {
+        instance->frequency = SUBGHZ_LAST_SETTING_DEFAULT_FREQUENCY;
+    }
+
+    if(instance->preset_index > 4) {
+        instance->preset_index = SUBGHZ_LAST_SETTING_DEFAULT_PRESET;
+    }
+}
+
+bool subghz_last_settings_save(SubGhzLastSettings* instance) {
+    furi_assert(instance);
+
+    bool saved = false;
+    Storage* storage = furi_record_open(RECORD_STORAGE);
+    FlipperFormat* file = flipper_format_file_alloc(storage);
+
+    do {
+        if(FSE_OK != storage_sd_status(storage)) {
+            break;
+        }
+
+        // Open file
+        if(!flipper_format_file_open_always(file, SUBGHZ_LAST_SETTINGS_PATH)) break;
+
+        // Write header
+        if(!flipper_format_write_header_cstr(
+               file, SUBGHZ_LAST_SETTING_FILE_TYPE, SUBGHZ_LAST_SETTING_FILE_VERSION))
+            break;
+        if(!flipper_format_write_uint32(
+               file, SUBGHZ_LAST_SETTING_FIELD_FREQUENCY, &instance->frequency, 1)) {
+            break;
+        }
+        if(!flipper_format_write_uint32(
+               file, SUBGHZ_LAST_SETTING_FIELD_PRESET, &instance->preset_index, 1)) {
+            break;
+        }
+        if(!flipper_format_write_uint32(
+               file,
+               SUBGHZ_LAST_SETTING_FIELD_FREQUENCY_ANALYZER_FEEDBACK_LEVEL,
+               &instance->frequency_analyzer_feedback_level,
+               1)) {
+            break;
+        }
+        if(!flipper_format_write_float(
+               file,
+               SUBGHZ_LAST_SETTING_FIELD_FREQUENCY_ANALYZER_TRIGGER,
+               &instance->frequency_analyzer_trigger,
+               1)) {
+            break;
+        }
+        if(!flipper_format_write_bool(
+               file,
+               SUBGHZ_LAST_SETTING_FIELD_PROTOCOL_FILE_NAMES,
+               &instance->protocol_file_names,
+               1)) {
+            break;
+        }
+        if(!flipper_format_write_bool(
+               file, SUBGHZ_LAST_SETTING_FIELD_HOPPING_ENABLE, &instance->enable_hopping, 1)) {
+            break;
+        }
+        if(!flipper_format_write_bool(
+               file,
+               SUBGHZ_LAST_SETTING_FIELD_PRESET_HOPPING,
+               &instance->enable_preset_hopping,
+               1)) {
+            break;
+        }
+        if(!flipper_format_write_float(
+               file,
+               SUBGHZ_LAST_SETTING_FIELD_PRESET_HOPPING_THRESHOLD,
+               &instance->preset_hopping_threshold,
+               1)) {
+            break;
+        }
+        if(!flipper_format_write_uint32(
+               file, SUBGHZ_LAST_SETTING_FIELD_IGNORE_FILTER, &instance->ignore_filter, 1)) {
+            break;
+        }
+        if(!flipper_format_write_uint32(
+               file, SUBGHZ_LAST_SETTING_FIELD_FILTER, &instance->filter, 1)) {
+            break;
+        }
+        if(!flipper_format_write_float(
+               file, SUBGHZ_LAST_SETTING_FIELD_RSSI_THRESHOLD, &instance->rssi, 1)) {
+            break;
+        }
+        if(!flipper_format_write_bool(
+               file, SUBGHZ_LAST_SETTING_FIELD_DELETE_OLD, &instance->delete_old_signals, 1)) {
+            break;
+        }
+        uint32_t tx_power = instance->tx_power;
+        if(!flipper_format_write_uint32(file, SUBGHZ_LAST_SETTING_FIELD_TX_POWER, &tx_power, 1)) {
+            break;
+        }
+        if(!flipper_format_write_float(
+               file,
+               SUBGHZ_LAST_SETTING_FIELD_HOPPING_THRESHOLD,
+               &instance->hopping_threshold,
+               1)) {
+            break;
+        }
+        if(!flipper_format_write_bool(
+               file, SUBGHZ_LAST_SETTING_FIELD_LED_AND_POWER_AMP, &instance->leds_and_amp, 1)) {
+            break;
+        }
+        if(!flipper_format_write_bool(
+               file,
+               SUBGHZ_LAST_SETTING_FIELD_CUSTOM_CAR_EMULATE,
+               &instance->custom_car_emulate,
+               1)) {
+            break;
+        }
+        // SubGHz autosave/duplicate/history features adapted from Momentum Firmware (GPLv3)
+        if(!flipper_format_write_bool(
+               file, SUBGHZ_LAST_SETTING_FIELD_AUTOSAVE, &instance->autosave, 1)) {
+            break;
+        }
+        if(!flipper_format_write_bool(
+               file,
+               SUBGHZ_LAST_SETTING_FIELD_REMOVE_DUPLICATES,
+               &instance->remove_duplicates,
+               1)) {
+            break;
+        }
+        if(!flipper_format_write_string_cstr(
+               file,
+               SUBGHZ_LAST_SETTING_FIELD_PROTOCOL_FILTER,
+               instance->protocol_filter)) {
+            break;
+        }
+
+        saved = true;
+    } while(0);
+
+    if(!saved) {
+        FURI_LOG_E(TAG, "Error save file %s", SUBGHZ_LAST_SETTINGS_PATH);
+    }
+
+    flipper_format_file_close(file);
+    flipper_format_free(file);
+    furi_record_close(RECORD_STORAGE);
+
+    return saved;
+}

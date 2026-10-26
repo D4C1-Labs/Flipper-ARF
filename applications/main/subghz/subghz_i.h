@@ -55,6 +55,10 @@ struct SubGhz {
     Gui* gui;
     NotificationApp* notifications;
 
+    /* Full-screen blank viewport used to hide the hand-off while an external
+     * app (ARF Cars / ARF Garage) is being launched and this app exits. */
+    ViewPort* blank_transition_viewport;
+
     SubGhzTxRx* txrx;
 
     SceneManager* scene_manager;

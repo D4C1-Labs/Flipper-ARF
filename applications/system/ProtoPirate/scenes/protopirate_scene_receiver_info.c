@@ -445,7 +445,7 @@ bool protopirate_scene_receiver_info_on_event(void* context, SceneManagerEvent e
 void protopirate_scene_receiver_info_on_exit(void* context) {
     ProtoPirateApp* app = context;
     protopirate_bruteforce_context_release(app);
-    widget_reset(app->widget);
+    protopirate_widget_free(app);
     protopirate_free_text_input(app);
     if(app->txrx && app->txrx->history) {
         protopirate_history_release_scratch(app->txrx->history);

@@ -12,9 +12,7 @@ void subbrute_scene_start_callback(SubBruteCustomEvent event, void* context) {
 
 void subbrute_scene_start_on_enter(void* context) {
     furi_assert(context);
-#ifdef FURI_DEBUG
-    FURI_LOG_I(TAG, "subbrute_scene_start_on_enter");
-#endif
+    FURI_LOG_I(TAG, "on_enter");
     SubBruteState* instance = (SubBruteState*)context;
     SubBruteMainView* view = instance->view_main;
 
@@ -36,6 +34,20 @@ void subbrute_scene_start_on_enter(void* context) {
 
 void subbrute_scene_start_on_exit(void* context) {
     furi_assert(context);
+    FURI_LOG_I(TAG, "on_exit");
+}
+
+static void subbrute_scene_start_exit_app(SubBruteState* instance) {
+    FURI_LOG_I(TAG, "exit_app: capture settings");
+    instance->settings->last_index = subbrute_main_view_get_index(instance->view_main);
+    subbrute_settings_set_repeats(
+        instance->settings, subbrute_main_view_get_repeats(instance->view_main));
+
+    FURI_LOG_I(TAG, "exit_app: scene_manager_stop");
+    scene_manager_stop(instance->scene_manager);
+    FURI_LOG_I(TAG, "exit_app: view_dispatcher_stop");
+    view_dispatcher_stop(instance->view_dispatcher);
+    FURI_LOG_I(TAG, "exit_app: dispatcher stopped");
 }
 
 bool subbrute_scene_start_on_event(void* context, SceneManagerEvent event) {
@@ -43,14 +55,6 @@ bool subbrute_scene_start_on_event(void* context, SceneManagerEvent event) {
     bool consumed = false;
 
     if(event.type == SceneManagerEventTypeCustom) {
-#ifdef FURI_DEBUG
-        FURI_LOG_D(
-            TAG,
-            "Event: %ld, SubBruteCustomEventTypeMenuSelected: %s, SubBruteCustomEventTypeLoadFile: %s",
-            event.event,
-            event.event == SubBruteCustomEventTypeMenuSelected ? "true" : "false",
-            event.event == SubBruteCustomEventTypeLoadFile ? "true" : "false");
-#endif
         if(event.event == SubBruteCustomEventTypeMenuSelected) {
             instance->settings->last_index = subbrute_main_view_get_index(instance->view_main);
             subbrute_settings_set_repeats(
@@ -73,21 +77,16 @@ bool subbrute_scene_start_on_event(void* context, SceneManagerEvent event) {
 
             consumed = true;
         } else if(event.event == SubBruteCustomEventTypeLoadFile) {
-            //uint8_t extra_repeats = subbrute_main_view_get_extra_repeats(instance->view_main);
-
-            //instance->device->extra_repeats = extra_repeats;
             scene_manager_next_scene(instance->scene_manager, SubBruteSceneLoadFile);
+            consumed = true;
+        } else if(event.event == SubBruteCustomEventTypeBackPressed) {
+            FURI_LOG_I(TAG, "event: BackPressed");
+            subbrute_scene_start_exit_app(instance);
             consumed = true;
         }
     } else if(event.type == SceneManagerEventTypeBack) {
-        //exit app
-        instance->settings->last_index = subbrute_main_view_get_index(instance->view_main);
-        subbrute_settings_set_repeats(
-            instance->settings, subbrute_main_view_get_repeats(instance->view_main));
-        subbrute_settings_save(instance->settings);
-
-        scene_manager_stop(instance->scene_manager);
-        view_dispatcher_stop(instance->view_dispatcher);
+        FURI_LOG_I(TAG, "event: SceneManager Back");
+        subbrute_scene_start_exit_app(instance);
         consumed = true;
     }
 

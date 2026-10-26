@@ -22,6 +22,21 @@ typedef struct {
 } SubGhzProtocolButtonLabels;
 
 static const SubGhzProtocolButtonLabels protocol_button_labels[] = {
+    /* [ARF_PORT 2026-10-26] Protocols imported from doctor-firmware / FoxFW.
+     * Upstream builds these maps at runtime via subghz_custom_btn_configure_map();
+     * ARF keeps them static here. Label index == custom button id
+     * (0=OK, 1=UP, 2=DOWN, 3=LEFT, 4=RIGHT) and max_custom_btn MUST match the
+     * subghz_custom_btn_set_max() call inside the protocol. */
+    {"Toyota V0", 4, {"Original", "BTN1", "BTN2", "BTN3", "BTN4"}},
+    {"Mazda V1", 4, {"Unlock", "Lock", "Trunk", "-", "Remote"}},
+    {"Mazda V2", 3, {"Unlock", "Lock", "Trunk", "-"}},
+    {"Mercedes V0", 2, {"Unlock", "Lock", "Aux"}},
+    {"Mercedes V1", 1, {"Unlock", "Lock"}},
+    {"BMW", 2, {"Unlock", "Lock", "Trunk"}},
+    /* GM V0/V1 call subghz_custom_btn_set_max(0): the rolling code cannot be
+     * re-encoded, so only OK (byte-identical replay) is offered. Toyota V1,
+     * Opel V1, Urmet and X10 do not use custom buttons at all. */
+
     {"VAG GROUP", 4, {"Original", "Lock", "Unlock", "Trunk", "Panic"}},
     {"Porsche AG", 4, {"Original", "Lock", "Unlock", "Trunk", "Open"}},
     {"FORD V0", 3, {"Original", "Lock", "Unlock", "Trunk"}},

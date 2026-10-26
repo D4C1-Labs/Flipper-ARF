@@ -38,7 +38,7 @@ bool protopirate_scene_saved_info_on_event(void* context, SceneManagerEvent even
 
 void protopirate_scene_saved_info_on_exit(void* context) {
     ProtoPirateApp* app = context;
-    widget_reset(app->widget);
+    protopirate_widget_free(app);
     shared_plugin_unload(&app->running_plugin_flipper_application, &app->running_plugin);
     FURI_LOG_D(TAG, "Saved Info Exit Done.");
 }

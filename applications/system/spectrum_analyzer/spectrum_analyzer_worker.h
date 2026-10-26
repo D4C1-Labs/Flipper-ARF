@@ -1,6 +1,7 @@
 #pragma once
 
 #include <stdint.h>
+#include <stdbool.h>
 
 typedef void (*SpectrumAnalyzerWorkerCallback)(
     void* chan_table,
@@ -20,8 +21,6 @@ void spectrum_analyzer_worker_set_callback(
     SpectrumAnalyzerWorkerCallback callback,
     void* context);
 
-void spectrum_analyzer_worker_set_filter(SpectrumAnalyzerWorker* instance);
-
 void spectrum_analyzer_worker_set_frequencies(
     SpectrumAnalyzerWorker* instance,
     uint32_t channel0_frequency,
@@ -33,3 +32,6 @@ void spectrum_analyzer_worker_set_modulation(SpectrumAnalyzerWorker* instance, u
 void spectrum_analyzer_worker_start(SpectrumAnalyzerWorker* instance);
 
 void spectrum_analyzer_worker_stop(SpectrumAnalyzerWorker* instance);
+
+// True when both radios are present and the sweep is split across them (~2x faster).
+bool spectrum_analyzer_worker_is_dual(SpectrumAnalyzerWorker* instance);

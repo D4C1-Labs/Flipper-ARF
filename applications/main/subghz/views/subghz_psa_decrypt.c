@@ -2,6 +2,12 @@
 
 #include <gui/elements.h>
 #include <furi.h>
+#include <assets_icons.h>
+
+// [ARF_PORT 2026-10-26] Waiting dolphin on the right, matching Hitag2 BF / Seed
+// BF. Cosmetic only: the decrypt engine and the BLE offload (both in the scene)
+// are untouched. Stats live in the left column (x < PSA_DOLPHIN_X).
+#define PSA_DOLPHIN_X 69
 
 #define PSA_TOTAL_KEYS 0x2000000UL // 32M
 
@@ -39,66 +45,79 @@ static void subghz_view_psa_decrypt_draw(Canvas* canvas, void* _model) {
     canvas_clear(canvas);
 
     if(!model->done) {
-        // Title / status
+        // [ARF_PORT] Waiting dolphin on the right while decrypting.
+        canvas_draw_icon(canvas, PSA_DOLPHIN_X, 8, &I_DolphinWait_59x54);
+
+        // Title / status (left column)
         canvas_set_font(canvas, FontPrimary);
         if(model->status_line[0]) {
-            canvas_draw_str_aligned(canvas, 64, 2, AlignCenter, AlignTop, model->status_line);
+            canvas_draw_str(canvas, 0, 8, model->status_line);
         } else {
-            canvas_draw_str_aligned(canvas, 64, 2, AlignCenter, AlignTop, "PSA Decrypt");
-        }
-
-        // Progress bar outline + fill
-        canvas_draw_rframe(canvas, 3, 15, 122, 12, 2);
-        uint8_t fill = (uint8_t)((uint16_t)model->progress * 116 / 100);
-        if(fill > 2) {
-            canvas_draw_rbox(canvas, 5, 17, fill, 8, 1);
-        } else if(fill > 0) {
-            canvas_draw_box(canvas, 5, 17, fill, 8);
+            canvas_draw_str(canvas, 0, 8, "PSA");
         }
 
         canvas_set_font(canvas, FontSecondary);
 
-        // Keys line: "42% - 13.4M / 32M keys"
-        char keys_str[32];
+        // Progress bar (left column width: 0..66)
+        canvas_draw_rframe(canvas, 0, 12, 66, 9, 2);
+        uint8_t fill = (uint8_t)((uint16_t)model->progress * 62 / 100);
+        if(fill > 2) {
+            canvas_draw_rbox(canvas, 2, 14, fill, 5, 1);
+        } else if(fill > 0) {
+            canvas_draw_box(canvas, 2, 14, fill, 5);
+        }
+
+        char line[24];
+
+        // Percent
+        snprintf(line, sizeof(line), "%d%%", model->progress);
+        canvas_draw_str(canvas, 0, 30, line);
+
+        // Keys tested
         char tested_buf[12];
         subghz_view_psa_decrypt_format_count(tested_buf, sizeof(tested_buf), model->keys_tested);
-        snprintf(keys_str, sizeof(keys_str), "%d%% - %s / 32M keys", model->progress, tested_buf);
-        canvas_draw_str(canvas, 2, 38, keys_str);
+        snprintf(line, sizeof(line), "%s keys", tested_buf);
+        canvas_draw_str(canvas, 0, 39, line);
 
-        // Speed + ETA line: "438K keys/sec  ETA 1m 42s"
-        char speed_str[40];
+        // Speed
         char speed_buf[12];
         subghz_view_psa_decrypt_format_count(speed_buf, sizeof(speed_buf), model->keys_per_sec);
-        uint32_t eta_m = model->eta_sec / 60;
-        uint32_t eta_s = model->eta_sec % 60;
-        if(eta_m > 0) {
-            snprintf(speed_str, sizeof(speed_str), "%s keys/sec  ETA %lum %lus", speed_buf, eta_m, eta_s);
-        } else {
-            snprintf(speed_str, sizeof(speed_str), "%s keys/sec  ETA %lus", speed_buf, eta_s);
-        }
-        canvas_draw_str(canvas, 2, 48, speed_str);
+        snprintf(line, sizeof(line), "%s/s", speed_buf);
+        canvas_draw_str(canvas, 0, 48, line);
 
-        // Elapsed line: "Elapsed: 1m 30s"
-        char elapsed_str[24];
-        uint32_t el_m = model->elapsed_sec / 60;
-        uint32_t el_s = model->elapsed_sec % 60;
-        if(el_m > 0) {
-            snprintf(elapsed_str, sizeof(elapsed_str), "Elapsed: %lum %lus", el_m, el_s);
+        // ETA (compact)
+        if(model->eta_sec >= 3600U) {
+            snprintf(
+                line,
+                sizeof(line),
+                "ETA %luh%lum",
+                (unsigned long)(model->eta_sec / 3600U),
+                (unsigned long)((model->eta_sec % 3600U) / 60U));
+        } else if(model->eta_sec >= 60U) {
+            snprintf(
+                line,
+                sizeof(line),
+                "ETA %lum%lus",
+                (unsigned long)(model->eta_sec / 60U),
+                (unsigned long)(model->eta_sec % 60U));
         } else {
-            snprintf(elapsed_str, sizeof(elapsed_str), "Elapsed: %lus", el_s);
+            snprintf(line, sizeof(line), "ETA %lus", (unsigned long)model->eta_sec);
         }
-        canvas_draw_str(canvas, 2, 58, elapsed_str);
+        canvas_draw_str(canvas, 0, 57, line);
 
-        // Cancel hint - bottom right
-        canvas_draw_str_aligned(canvas, 126, 64, AlignRight, AlignBottom, "Hold BACK");
+        // Cancel hint
+        canvas_draw_str(canvas, 0, 64, "Hold BACK");
     } else {
-        canvas_set_font(canvas, FontPrimary);
-        canvas_draw_str_aligned(canvas, 64, 4, AlignCenter, AlignTop, "Decrypted!");
+        // [ARF_PORT] Result screen: dolphin on the right, verdict + details left.
+        canvas_draw_icon(canvas, PSA_DOLPHIN_X, 8, &I_DolphinWait_59x54);
 
-	if(model->result_str) {
+        canvas_set_font(canvas, FontPrimary);
+        canvas_draw_str(canvas, 0, 10, "Decrypted!");
+
+        if(model->result_str) {
             canvas_set_font(canvas, FontSecondary);
-            elements_multiline_text_aligned(canvas, 64, 20, AlignCenter, AlignTop,
-                furi_string_get_cstr(model->result_str));
+            elements_multiline_text_aligned(
+                canvas, 0, 18, AlignLeft, AlignTop, furi_string_get_cstr(model->result_str));
         }
 
         elements_button_center(canvas, "Ok");

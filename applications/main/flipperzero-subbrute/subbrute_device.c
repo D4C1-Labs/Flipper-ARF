@@ -29,12 +29,7 @@ SubBruteDevice* subbrute_device_alloc(const SubGhzDevice* radio_device) {
 void subbrute_device_free(SubBruteDevice* instance) {
     furi_assert(instance);
 
-    // I don't know how to free this
-    // instance->decoder_result = NULL;
-    if(instance->decoder_result != NULL) {
-        free(instance->decoder_result);
-        instance->decoder_result = NULL;
-    }
+    instance->decoder_result = NULL;
 
     if(instance->receiver != NULL) {
         subghz_receiver_free(instance->receiver);
@@ -151,7 +146,12 @@ SubBruteFileResult subbrute_device_attack_set(
 
     instance->extra_repeats = extra_repeats;
 
-    // For non-file types we didn't set SubGhzProtocolDecoderBase
+    instance->decoder_result = NULL;
+    if(instance->receiver != NULL) {
+        subghz_receiver_free(instance->receiver);
+        instance->receiver = NULL;
+    }
+
     instance->receiver = subghz_receiver_alloc_init(instance->environment);
     subghz_receiver_set_filter(instance->receiver, SubGhzProtocolFlag_Decodable);
     // furi_hal_subghz_reset(); // TODO Is this necessary?

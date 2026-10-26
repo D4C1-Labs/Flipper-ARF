@@ -55,16 +55,16 @@ jobs:
 
     steps:
       - name: Checkout Firmware Files
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
         with:
-          repository: "${{ vars.REPO_UNLEASHED }}"
+          repository: "${{ vars.REPO_FIRMWARE }}"
           clean: "true"
           submodules: "true"
           ref: "dev"
           fetch-depth: "0"
 
       - name: Checkout Repo Files
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
         with:
           repository: "${{ vars.REPO_SELF }}"
           clean: "true"

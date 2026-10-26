@@ -1,8 +1,41 @@
 #include "../subghz_i.h"
 #include "subghz_scene_start.h"
 #include <dolphin/dolphin.h>
+#include <loader/loader.h>
+#include <storage/storage.h>
 
 #include <lib/subghz/protocols/raw.h>
+
+/* External decoder apps. Both are built from applications/system/ and carry
+ * their own protocol catalog, so those protocols cost no internal flash.
+ * They reuse this app's scenes/views, so the UI is identical. */
+#define SUBGHZ_ARF_CARS_FAP_PATH   EXT_PATH("apps/Sub-GHz/arf_cars.fap")
+#define SUBGHZ_ARF_GARAGE_FAP_PATH EXT_PATH("apps/Sub-GHz/arf_garage.fap")
+
+static void subghz_scene_start_blank_draw_cb(Canvas* canvas, void* ctx) {
+    UNUSED(ctx);
+    canvas_clear(canvas);
+}
+
+/* Queue an external app and shut this one down. The blank full-screen viewport
+ * covers the hand-off so the transition does not flash the desktop. */
+static void
+    subghz_scene_start_launch_and_exit(SubGhz* subghz, const char* fap_path, const char* args) {
+    Loader* loader = furi_record_open(RECORD_LOADER);
+    loader_enqueue_launch(loader, fap_path, args, LoaderDeferredLaunchFlagNone);
+    furi_record_close(RECORD_LOADER);
+
+    if(!subghz->blank_transition_viewport) {
+        subghz->blank_transition_viewport = view_port_alloc();
+        view_port_draw_callback_set(
+            subghz->blank_transition_viewport, subghz_scene_start_blank_draw_cb, NULL);
+        gui_add_view_port(subghz->gui, subghz->blank_transition_viewport, GuiLayerFullscreen);
+        view_port_update(subghz->blank_transition_viewport);
+    }
+
+    scene_manager_stop(subghz->scene_manager);
+    view_dispatcher_stop(subghz->view_dispatcher);
+}
 
 void subghz_scene_start_submenu_callback(void* context, uint32_t index) {
     SubGhz* subghz = context;
@@ -15,16 +48,34 @@ void subghz_scene_start_on_enter(void* context) {
         subghz->state_notifications = SubGhzNotificationStateIDLE;
     }
 
-    submenu_add_item(
-        subghz->submenu, "Read", SubmenuIndexRead, subghz_scene_start_submenu_callback, subghz);
+    /* Only offer an external decoder if its .fap is actually installed. */
+    Storage* storage = furi_record_open(RECORD_STORAGE);
+    bool has_cars = storage_file_exists(storage, SUBGHZ_ARF_CARS_FAP_PATH);
+    bool has_garage = storage_file_exists(storage, SUBGHZ_ARF_GARAGE_FAP_PATH);
+    furi_record_close(RECORD_STORAGE);
+
+    if(has_cars) {
+        submenu_add_item(
+            subghz->submenu,
+            "Read Cars",
+            SubmenuIndexReadCars,
+            subghz_scene_start_submenu_callback,
+            subghz);
+    }
+    if(has_garage) {
+        submenu_add_item(
+            subghz->submenu,
+            "Read Garage Door",
+            SubmenuIndexReadGarage,
+            subghz_scene_start_submenu_callback,
+            subghz);
+    }
     submenu_add_item(
         subghz->submenu,
         "Read RAW",
         SubmenuIndexReadRAW,
         subghz_scene_start_submenu_callback,
         subghz);
-    submenu_add_item(
-        subghz->submenu, "Saved", SubmenuIndexSaved, subghz_scene_start_submenu_callback, subghz);
     submenu_add_item(
         subghz->submenu,
         "Add Manually",
@@ -75,22 +126,21 @@ bool subghz_scene_start_on_event(void* context, SceneManagerEvent event) {
         view_dispatcher_stop(subghz->view_dispatcher);
         return true;
     } else if(event.type == SceneManagerEventTypeCustom) {
-        if(event.event == SubmenuIndexReadRAW) {
+        if(event.event == SubmenuIndexReadCars) {
+            scene_manager_set_scene_state(
+                subghz->scene_manager, SubGhzSceneStart, SubmenuIndexReadCars);
+            subghz_scene_start_launch_and_exit(subghz, SUBGHZ_ARF_CARS_FAP_PATH, "read");
+            return true;
+        } else if(event.event == SubmenuIndexReadGarage) {
+            scene_manager_set_scene_state(
+                subghz->scene_manager, SubGhzSceneStart, SubmenuIndexReadGarage);
+            subghz_scene_start_launch_and_exit(subghz, SUBGHZ_ARF_GARAGE_FAP_PATH, "read");
+            return true;
+        } else if(event.event == SubmenuIndexReadRAW) {
             scene_manager_set_scene_state(
                 subghz->scene_manager, SubGhzSceneStart, SubmenuIndexReadRAW);
             subghz_rx_key_state_set(subghz, SubGhzRxKeyStateIDLE);
             scene_manager_next_scene(subghz->scene_manager, SubGhzSceneReadRAW);
-            return true;
-        } else if(event.event == SubmenuIndexRead) {
-            subghz_rx_key_state_set(subghz, SubGhzRxKeyStateIDLE);
-            scene_manager_set_scene_state(
-                subghz->scene_manager, SubGhzSceneStart, SubmenuIndexRead);
-            scene_manager_next_scene(subghz->scene_manager, SubGhzSceneReceiver);
-            return true;
-        } else if(event.event == SubmenuIndexSaved) {
-            scene_manager_set_scene_state(
-                subghz->scene_manager, SubGhzSceneStart, SubmenuIndexSaved);
-            scene_manager_next_scene(subghz->scene_manager, SubGhzSceneSaved);
             return true;
         } else if(event.event == SubmenuIndexAddManuallyAdvanced) {
             scene_manager_set_scene_state(

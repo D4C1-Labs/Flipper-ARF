@@ -103,47 +103,47 @@ bool shared_plugin_load(
     case ProtoPirateSharedPluginsConfig: {
         application_id = PROTOPIRATE_CONFIG_PLUGIN_APP_ID;
         api_version = PROTOPIRATE_CONFIG_PLUGIN_API_VERSION;
-        plugin_path = PROTOPIRATE_CONFIG_PLUGIN_PATH;
+        plugin_path = PROTOPIRATE_CONFIG_PLUGIN_APP_ID;
         break;
     }
     case ProtoPirateSharedPluginsSavedInfo: {
         application_id = PROTOPIRATE_SAVED_INFO_PLUGIN_APP_ID;
         api_version = PROTOPIRATE_SAVED_INFO_PLUGIN_API_VERSION;
-        plugin_path = PROTOPIRATE_SAVED_INFO_PLUGIN_PATH;
+        plugin_path = PROTOPIRATE_SAVED_INFO_PLUGIN_APP_ID;
         break;
     }
     case ProtoPirateSharedPluginsAbout: {
         application_id = PROTOPIRATE_ABOUT_PLUGIN_APP_ID;
         api_version = PROTOPIRATE_ABOUT_PLUGIN_API_VERSION;
-        plugin_path = PROTOPIRATE_ABOUT_PLUGIN_PATH;
+        plugin_path = PROTOPIRATE_ABOUT_PLUGIN_APP_ID;
         break;
     }
 #ifdef ENABLE_EMULATE_FEATURE
     case ProtoPirateSharedPluginsEmulate: {
         application_id = PROTOPIRATE_EMULATE_PLUGIN_APP_ID;
         api_version = PROTOPIRATE_EMULATE_PLUGIN_API_VERSION;
-        plugin_path = PROTOPIRATE_EMULATE_PLUGIN_PATH;
+        plugin_path = PROTOPIRATE_EMULATE_PLUGIN_APP_ID;
         break;
     }
 #endif
     case ProtoPirateSharedPluginsSubDecode: {
         application_id = PROTOPIRATE_SUB_DECODE_PLUGIN_APP_ID;
         api_version = PROTOPIRATE_SUB_DECODE_PLUGIN_API_VERSION;
-        plugin_path = PROTOPIRATE_SUB_DECODE_PLUGIN_PATH;
+        plugin_path = PROTOPIRATE_SUB_DECODE_PLUGIN_APP_ID;
         break;
     }
 #ifdef ENABLE_TIMING_TUNER_SCENE
     case ProtoPirateSharedPluginsTimingTuner: {
         application_id = PROTOPIRATE_TIMING_TUNER_PLUGIN_APP_ID;
         api_version = PROTOPIRATE_TIMING_TUNER_PLUGIN_API_VERSION;
-        plugin_path = PROTOPIRATE_TIMING_TUNER_PLUGIN_PATH;
+        plugin_path = PROTOPIRATE_TIMING_TUNER_PLUGIN_APP_ID;
         break;
     }
 #endif
     case ProtoPirateSharedPluginsPSABruteforce: {
         application_id = PROTOPIRATE_BRUTEFORCE_PLUGIN_APP_ID;
         api_version = PROTOPIRATE_BRUTEFORCE_PLUGIN_API_VERSION;
-        plugin_path = PROTOPIRATE_BRUTEFORCE_PLUGIN_PATH;
+        plugin_path = PROTOPIRATE_BRUTEFORCE_PLUGIN_APP_ID;
         break;
     }
     case ProtoPirateSharedPluginsTXRX: {
@@ -156,7 +156,7 @@ bool shared_plugin_load(
     case ProtoPirateSharedPluginsWelcome: {
         application_id = PROTOPIRATE_WELCOME_PLUGIN_APP_ID;
         api_version = PROTOPIRATE_WELCOME_PLUGIN_API_VERSION;
-        plugin_path = PROTOPIRATE_WELCOME_PLUGIN_PATH;
+        plugin_path = PROTOPIRATE_WELCOME_PLUGIN_APP_ID;
         break;
     }
 #endif
@@ -164,7 +164,7 @@ bool shared_plugin_load(
     case ProtoPirateSharedPluginsRemoteAnalyzer: {
         application_id = PROTOPIRATE_REMOTE_ANALYZER_PLUGIN_APP_ID;
         api_version = PROTOPIRATE_REMOTE_ANALYZER_PLUGIN_API_VERSION;
-        plugin_path = PROTOPIRATE_REMOTE_ANALYZER_PLUGIN_PATH;
+        plugin_path = PROTOPIRATE_REMOTE_ANALYZER_PLUGIN_APP_ID;
         break;
     }
 #endif
@@ -182,9 +182,21 @@ bool shared_plugin_load(
 #define FILE_NAME_BUFFER_SIZE 128
     char buffer[FILE_NAME_BUFFER_SIZE] = {0};
 #ifdef EMBEDDED_FALS
-    snprintf(buffer, FILE_NAME_BUFFER_SIZE, "%s%s", APP_ASSETS_PATH("plugins/"), plugin_path);
+    snprintf(
+        buffer,
+        FILE_NAME_BUFFER_SIZE,
+        "%s%s%s",
+        APP_ASSETS_PATH("plugins/"),
+        plugin_path,
+        PROTOPIRATE_DOT_FAL);
 #else
-    snprintf(buffer, FILE_NAME_BUFFER_SIZE, "%s%s", APP_DATA_PATH("plugins/"), plugin_path);
+    snprintf(
+        buffer,
+        FILE_NAME_BUFFER_SIZE,
+        "%s%s%s",
+        APP_DATA_PATH("plugins/"),
+        plugin_path,
+        PROTOPIRATE_DOT_FAL);
 #endif
 
     const FlipperAppPluginDescriptor* app_descriptor =

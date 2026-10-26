@@ -1,0 +1,925 @@
+#include "kia_v5.h"
+#include <lib/subghz/blocks/const.h>
+#include <lib/subghz/blocks/decoder.h>
+#include <lib/subghz/blocks/encoder.h>
+#include <lib/subghz/blocks/generic.h>
+#include <lib/subghz/blocks/math.h>
+// [PROTOPIRATE_PORT] custom_btn support (full D-pad TX)
+#include "custom_btn_i.h"
+#include <lib/toolbox/manchester_decoder.h>
+
+// [PROTOPIRATE_PORT] Map the global D-pad custom-button selection to a KIA V5
+// 4-bit button code. KIA V5 codes: Unlock=0x01, Lock=0x02, Trunk=0x04,
+// Horn=0x08. OK / unknown falls back to the originally captured button.
+static uint8_t kia_v5_custom_to_btn(uint8_t custom_btn_id, uint8_t original_btn) {
+    switch(custom_btn_id) {
+    case SUBGHZ_CUSTOM_BTN_UP:
+        return 0x02U; // Lock
+    case SUBGHZ_CUSTOM_BTN_DOWN:
+        return 0x01U; // Unlock
+    case SUBGHZ_CUSTOM_BTN_LEFT:
+        return 0x04U; // Trunk
+    case SUBGHZ_CUSTOM_BTN_RIGHT:
+        return 0x08U; // Horn
+    case SUBGHZ_CUSTOM_BTN_OK:
+    default:
+        return original_btn; // replay captured button
+    }
+}
+
+#define TAG "SubGhzProtocolKiaV5"
+
+// [BUGFIX] min_count_bit_for_found MUST match the exact bit count that the
+// decoder writes to generic.data_count_bit (see line ~618-619, which stores
+// min(bit_count, 67)). The framework helper
+// subghz_block_generic_deserialize_check_count_bit() performs an EQUAL check
+// (`data_count_bit != count_bit`), not a "greater-or-equal" check. With the
+// old value 64, any capture that produced 65/66/67 bits would fail to
+// re-deserialize (root cause of the "Protocol not found!" error when entering
+// Full Dpad via the receiver_info scene, which calls the decoder's
+// deserialize on the fff_history data).
+static const SubGhzBlockConst subghz_protocol_kia_v5_const = {
+    .te_short = 400,
+    .te_long = 800,
+    .te_delta = 150,
+    .min_count_bit_for_found = 67,
+};
+
+static const uint8_t keystore_bytes[] = {0x53, 0x54, 0x46, 0x52, 0x4b, 0x45, 0x30, 0x30};
+
+static uint8_t kia_v5_reverse_byte(uint8_t b) {
+    uint8_t r = 0;
+    for(int i = 0; i < 8; i++) {
+        if(b & (1 << i)) r |= (1 << (7 - i));
+    }
+    return r;
+}
+
+static uint64_t kia_v5_bit_reverse_64(uint64_t input) {
+    uint64_t output = 0;
+    for(int i = 0; i < 8; i++) {
+        uint8_t byte = (input >> (i * 8)) & 0xFF;
+        uint8_t reversed = kia_v5_reverse_byte(byte);
+        output |= ((uint64_t)reversed << ((7 - i) * 8));
+    }
+    return output;
+}
+
+static uint16_t mixer_decode(uint32_t encrypted) {
+    uint8_t s0 = (encrypted & 0xFF);
+    uint8_t s1 = (encrypted >> 8) & 0xFF;
+    uint8_t s2 = (encrypted >> 16) & 0xFF;
+    uint8_t s3 = (encrypted >> 24) & 0xFF;
+
+    int round_index = 1;
+    for(size_t i = 0; i < 18; i++) {
+        uint8_t r = keystore_bytes[round_index] & 0xFF;
+        int steps = 8;
+        while(steps > 0) {
+            uint8_t base;
+            if((s3 & 0x40) == 0) {
+                base = (s3 & 0x02) == 0 ? 0x74 : 0x2E;
+            } else {
+                base = (s3 & 0x02) == 0 ? 0x3A : 0x5C;
+            }
+
+            if(s2 & 0x08) {
+                base = (((base >> 4) & 0x0F) | ((base & 0x0F) << 4)) & 0xFF;
+            }
+            if(s1 & 0x01) {
+                base = ((base & 0x3F) << 2) & 0xFF;
+            }
+            if(s0 & 0x01) {
+                base = (base << 1) & 0xFF;
+            }
+
+            uint8_t temp = (s3 ^ s1) & 0xFF;
+            s3 = ((s3 & 0x7F) << 1) & 0xFF;
+            if(s2 & 0x80) {
+                s3 |= 0x01;
+            }
+            s2 = ((s2 & 0x7F) << 1) & 0xFF;
+            if(s1 & 0x80) {
+                s2 |= 0x01;
+            }
+            s1 = ((s1 & 0x7F) << 1) & 0xFF;
+            if(s0 & 0x80) {
+                s1 |= 0x01;
+            }
+            s0 = ((s0 & 0x7F) << 1) & 0xFF;
+
+            uint8_t chk = (base ^ (r ^ temp)) & 0xFF;
+            if(chk & 0x80) {
+                s0 |= 0x01;
+            }
+            r = ((r & 0x7F) << 1) & 0xFF;
+            steps--;
+        }
+        round_index = (round_index - 1) & 0x7;
+    }
+    return (s0 + (s1 << 8)) & 0xFFFF;
+}
+
+// [PROTOPIRATE_PORT] Inverse of mixer_decode: regenerates 32-bit "encrypted"
+// word from (serial, counter, button). Ported from ProtoPirate kia_v5.c
+// (mixer_encode, lines 83-144). Uses the same keystore_bytes as mixer_decode.
+static uint32_t kia_v5_mixer_encode(uint32_t serial, uint16_t counter, uint8_t button) {
+    uint8_t state_a = (uint8_t)(((serial >> 8) & 0x0FU) | ((button & 0x0FU) << 4));
+    uint8_t state_b = (uint8_t)((counter >> 8) & 0xFFU);
+    uint8_t state_c = (uint8_t)(serial & 0xFFU);
+    uint8_t state_d = (uint8_t)(counter & 0xFFU);
+
+    int ks_idx = 0;
+    for(int round_i = 0; round_i < 18; round_i++) {
+        uint8_t r = keystore_bytes[ks_idx] & 0xFFU;
+        ks_idx = (ks_idx + 1) & 0x07;
+
+        uint8_t running_d = state_d;
+        for(int step = 0; step < 8; step++) {
+            uint8_t base;
+            if((state_a & 0x80U) == 0) {
+                base = (state_a & 0x04U) == 0 ? 0x74U : 0x2EU;
+            } else {
+                base = (state_a & 0x04U) == 0 ? 0x3AU : 0x5CU;
+            }
+
+            if(state_c & 0x10U) {
+                base = (uint8_t)(((base >> 4) & 0x0FU) | ((base & 0x0FU) << 4));
+            }
+            if(state_b & 0x02U) {
+                base = (uint8_t)((base & 0x3FU) << 2);
+            }
+
+            uint8_t base_final = base;
+            if(running_d & 0x02U) {
+                base_final = (uint8_t)((base & 0x7FU) << 1);
+            }
+
+            const bool carry_b = (state_b & 0x01U) != 0;
+            const bool carry_c = (state_c & 0x01U) != 0;
+            const bool carry_a = (state_a & 0x01U) != 0;
+
+            uint8_t new_d = (uint8_t)(running_d >> 1);
+            if(carry_b) new_d |= 0x80U;
+
+            running_d ^= state_c;
+
+            state_b = (uint8_t)(state_b >> 1);
+            if(carry_c) state_b |= 0x80U;
+
+            state_c = (uint8_t)(state_c >> 1);
+            if(carry_a) state_c |= 0x80U;
+
+            const uint8_t feedback = (uint8_t)(((running_d ^ r) << 7) ^ base_final);
+            state_a = (uint8_t)(state_a >> 1);
+            if(feedback & 0x80U) state_a |= 0x80U;
+
+            r = (uint8_t)(r >> 1);
+            running_d = new_d;
+        }
+        state_d = running_d;
+    }
+
+    return ((uint32_t)state_a << 24) | ((uint32_t)state_c << 16) | ((uint32_t)state_b << 8) |
+           (uint32_t)state_d;
+}
+
+struct SubGhzProtocolDecoderKiaV5 {
+    SubGhzProtocolDecoderBase base;
+    SubGhzBlockDecoder decoder;
+    SubGhzBlockGeneric generic;
+    uint16_t header_count;
+
+    ManchesterState manchester_state;
+    uint64_t decoded_data;
+    uint64_t saved_key;
+    uint8_t bit_count;
+    uint64_t yek;
+    uint8_t crc;
+};
+
+struct SubGhzProtocolEncoderKiaV5 {
+    SubGhzProtocolEncoderBase base;
+    SubGhzProtocolBlockEncoder encoder;
+    SubGhzBlockGeneric generic;
+
+    uint64_t replay_data;
+    uint8_t replay_crc;
+    // [PROTOPIRATE_PORT] true when Serial/Btn/Cnt were explicitly provided by
+    // the .sub and replay_data was re-encrypted via kia_v5_mixer_encode().
+    // In that case UI helpers (set_button/set_counter/increment_counter)
+    // can safely regenerate the bitstream from live serial/btn/cnt.
+    bool reencrypt_mode;
+};
+
+#define KIA_V5_PREAMBLE_PAIRS 200U
+#define KIA_V5_SYNC_ENTRIES   4U
+#define KIA_V5_DATA_BITS      64U
+#define KIA_V5_CRC_BITS       3U
+#define KIA_V5_END_ENTRIES    2U
+#define KIA_V5_UPLOAD_CAPACITY                          \
+    (KIA_V5_PREAMBLE_PAIRS * 2U + KIA_V5_SYNC_ENTRIES + \
+     (KIA_V5_DATA_BITS + KIA_V5_CRC_BITS) * 2U + KIA_V5_END_ENTRIES)
+
+typedef enum {
+    KiaV5DecoderStepReset = 0,
+    KiaV5DecoderStepCheckPreamble,
+    KiaV5DecoderStepData,
+} KiaV5DecoderStep;
+
+static uint8_t kia_v5_calculate_crc(uint64_t data) {
+    uint8_t crc = 0;
+    for(int i = 63; i >= 0; i--) {
+        const uint8_t bit = (data >> i) & 1U;
+        const uint8_t shifted_out = (crc >> 1U) & 1U;
+        crc = (uint8_t)(((crc & 1U) << 1U) | bit);
+        if(shifted_out) {
+            crc ^= 3U;
+        }
+    }
+    return (uint8_t)(crc & 3U);
+}
+
+const SubGhzProtocolDecoder subghz_protocol_kia_v5_decoder = {
+    .alloc = subghz_protocol_decoder_kia_v5_alloc,
+    .free = subghz_protocol_decoder_kia_v5_free,
+    .feed = subghz_protocol_decoder_kia_v5_feed,
+    .reset = subghz_protocol_decoder_kia_v5_reset,
+    .get_hash_data = subghz_protocol_decoder_kia_v5_get_hash_data,
+    .serialize = subghz_protocol_decoder_kia_v5_serialize,
+    .deserialize = subghz_protocol_decoder_kia_v5_deserialize,
+    .get_string = subghz_protocol_decoder_kia_v5_get_string,
+};
+
+const SubGhzProtocolEncoder subghz_protocol_kia_v5_encoder = {
+    .alloc = subghz_protocol_encoder_kia_v5_alloc,
+    .free = subghz_protocol_encoder_kia_v5_free,
+    .deserialize = subghz_protocol_encoder_kia_v5_deserialize,
+    .stop = subghz_protocol_encoder_kia_v5_stop,
+    .yield = subghz_protocol_encoder_kia_v5_yield,
+};
+
+const SubGhzProtocol subghz_protocol_kia_v5 = {
+    .name = SUBGHZ_PROTOCOL_KIA_V5_NAME,
+    .type = SubGhzProtocolTypeDynamic,
+    .flag = SubGhzProtocolFlag_315 | SubGhzProtocolFlag_433 | SubGhzProtocolFlag_FM |
+            SubGhzProtocolFlag_Decodable |
+            SubGhzProtocolFlag_Load | SubGhzProtocolFlag_Save | SubGhzProtocolFlag_Send,
+    .decoder = &subghz_protocol_kia_v5_decoder,
+    .encoder = &subghz_protocol_kia_v5_encoder,
+};
+
+void* subghz_protocol_encoder_kia_v5_alloc(SubGhzEnvironment* environment) {
+    UNUSED(environment);
+
+    SubGhzProtocolEncoderKiaV5* instance = calloc(1, sizeof(SubGhzProtocolEncoderKiaV5));
+    furi_check(instance);
+
+    instance->base.protocol = &subghz_protocol_kia_v5;
+    instance->generic.protocol_name = instance->base.protocol->name;
+    instance->encoder.size_upload = 400;
+    instance->encoder.upload = malloc(instance->encoder.size_upload * sizeof(LevelDuration));
+    furi_check(instance->encoder.upload);
+    instance->encoder.repeat = 6;
+    instance->encoder.front = 0;
+    instance->encoder.is_running = false;
+    return instance;
+}
+
+void subghz_protocol_encoder_kia_v5_free(void* context) {
+    furi_assert(context);
+    SubGhzProtocolEncoderKiaV5* instance = context;
+    if(instance->encoder.upload) {
+        free(instance->encoder.upload);
+    }
+    free(instance);
+}
+
+static bool subghz_protocol_encoder_kia_v5_get_upload(SubGhzProtocolEncoderKiaV5* instance) {
+    furi_assert(instance);
+
+    const uint32_t te_short = (uint32_t)subghz_protocol_kia_v5_const.te_short;
+    const uint32_t te_long = (uint32_t)subghz_protocol_kia_v5_const.te_long;
+    size_t index = 0;
+
+    for(size_t i = 0; i < KIA_V5_PREAMBLE_PAIRS; i++) {
+        instance->encoder.upload[index++] = level_duration_make(true, (int32_t)te_short);
+        instance->encoder.upload[index++] = level_duration_make(false, (int32_t)te_short);
+    }
+
+    instance->encoder.upload[index++] = level_duration_make(false, (int32_t)te_short);
+    instance->encoder.upload[index++] = level_duration_make(true, (int32_t)te_long);
+    instance->encoder.upload[index++] = level_duration_make(false, (int32_t)te_short);
+    instance->encoder.upload[index++] = level_duration_make(true, (int32_t)te_short);
+
+    for(int b = 63; b >= 0; b--) {
+        const bool bv = ((instance->replay_data >> b) & 1ULL) != 0ULL;
+        if(bv) {
+            instance->encoder.upload[index++] = level_duration_make(false, (int32_t)te_short);
+            instance->encoder.upload[index++] = level_duration_make(true, (int32_t)te_short);
+        } else {
+            instance->encoder.upload[index++] = level_duration_make(true, (int32_t)te_short);
+            instance->encoder.upload[index++] = level_duration_make(false, (int32_t)te_short);
+        }
+    }
+
+    instance->encoder.upload[index++] = level_duration_make(true, (int32_t)te_short);
+    instance->encoder.upload[index++] = level_duration_make(false, (int32_t)te_short);
+
+    const bool crc_b1 = ((instance->replay_crc >> 1U) & 1U) != 0U;
+    if(crc_b1) {
+        instance->encoder.upload[index++] = level_duration_make(false, (int32_t)te_short);
+        instance->encoder.upload[index++] = level_duration_make(true, (int32_t)te_short);
+    } else {
+        instance->encoder.upload[index++] = level_duration_make(true, (int32_t)te_short);
+        instance->encoder.upload[index++] = level_duration_make(false, (int32_t)te_short);
+    }
+
+    const bool crc_b0 = (instance->replay_crc & 1U) != 0U;
+    if(crc_b0) {
+        instance->encoder.upload[index++] = level_duration_make(false, (int32_t)te_short);
+        instance->encoder.upload[index++] = level_duration_make(true, (int32_t)te_short);
+    } else {
+        instance->encoder.upload[index++] = level_duration_make(true, (int32_t)te_short);
+        instance->encoder.upload[index++] = level_duration_make(false, (int32_t)te_short);
+    }
+
+    instance->encoder.upload[index++] = level_duration_make(false, (int32_t)te_short);
+    instance->encoder.upload[index++] = level_duration_make(true, (int32_t)te_short);
+
+    instance->encoder.size_upload = index;
+    instance->encoder.front = 0;
+    return true;
+}
+
+// [PROTOPIRATE_PORT] Rebuild replay_data (and CRC) from live serial/btn/cnt
+// using the ported mixer_encode + per-byte bit reversal. Also refreshes
+// generic.data to keep display/serializer consistent. Returns the new 64-bit
+// "data" word (already bit-reversed per-byte, as expected by get_upload()).
+static uint64_t kia_v5_rebuild_data(uint32_t serial, uint8_t btn, uint16_t cnt) {
+    const uint32_t s = serial & 0x0FFFFFFFU;
+    const uint8_t b = (uint8_t)(btn & 0x0FU);
+    const uint32_t mixer = kia_v5_mixer_encode(s, cnt, b);
+    const uint64_t yek_new = ((uint64_t)b << 60) | ((uint64_t)s << 32) | (uint64_t)mixer;
+
+    uint64_t data_new = 0;
+    for(int i = 0; i < 8; i++) {
+        const uint8_t byte = (uint8_t)((yek_new >> (i * 8)) & 0xFFU);
+        data_new |= ((uint64_t)kia_v5_reverse_byte(byte) << ((7 - i) * 8));
+    }
+    return data_new;
+}
+
+// [PROTOPIRATE_PORT] Re-encrypt path used by both deserialize (when the .sub
+// carries Serial/Btn/Cnt) and the UI helpers when reencrypt_mode is active.
+// Regenerates replay_data, replay_crc and the RF upload buffer.
+static bool kia_v5_reencrypt_and_upload(SubGhzProtocolEncoderKiaV5* instance) {
+    const uint64_t data_new = kia_v5_rebuild_data(
+        instance->generic.serial, instance->generic.btn, instance->generic.cnt);
+
+    instance->replay_data = data_new;
+    instance->generic.data = data_new;
+    instance->replay_crc = kia_v5_calculate_crc(instance->replay_data);
+
+    return subghz_protocol_encoder_kia_v5_get_upload(instance);
+}
+
+SubGhzProtocolStatus
+    subghz_protocol_encoder_kia_v5_deserialize(void* context, FlipperFormat* flipper_format) {
+    furi_assert(context);
+    SubGhzProtocolEncoderKiaV5* instance = context;
+    SubGhzProtocolStatus ret = SubGhzProtocolStatusError;
+
+    do {
+        ret = subghz_block_generic_deserialize(&instance->generic, flipper_format);
+        if(ret != SubGhzProtocolStatusOk) break;
+
+        if(instance->generic.data_count_bit < subghz_protocol_kia_v5_const.min_count_bit_for_found) {
+            ret = SubGhzProtocolStatusErrorParserBitCount;
+            break;
+        }
+
+        uint32_t yek_high = 0, yek_low = 0;
+        uint64_t yek = 0;
+        flipper_format_rewind(flipper_format);
+        if(flipper_format_read_uint32(flipper_format, "YekHi", &yek_high, 1) &&
+           flipper_format_read_uint32(flipper_format, "YekLo", &yek_low, 1)) {
+            yek = ((uint64_t)yek_high << 32) | yek_low;
+        } else {
+            yek = kia_v5_bit_reverse_64(instance->generic.data);
+        }
+
+        instance->generic.serial = (uint32_t)((yek >> 32) & 0x0FFFFFFF);
+        instance->generic.btn = (uint8_t)((yek >> 60) & 0x0F);
+
+        uint32_t encrypted = (uint32_t)(yek & 0xFFFFFFFF);
+        instance->generic.cnt = mixer_decode(encrypted);
+
+        // [PROTOPIRATE_PORT] Optional re-encrypt path: if the .sub carries
+        // explicit Serial + Btn + Cnt fields, regenerate the RF bitstream
+        // from them using kia_v5_mixer_encode() instead of pure replay.
+        // Guard: all three must be present, otherwise fall back to replay.
+        instance->reencrypt_mode = false;
+        uint32_t sub_serial = UINT32_MAX;
+        uint32_t sub_btn = UINT32_MAX;
+        uint32_t sub_cnt = UINT32_MAX;
+        flipper_format_rewind(flipper_format);
+        const bool have_serial =
+            flipper_format_read_uint32(flipper_format, "Serial", &sub_serial, 1);
+        flipper_format_rewind(flipper_format);
+        const bool have_btn = flipper_format_read_uint32(flipper_format, "Btn", &sub_btn, 1);
+        flipper_format_rewind(flipper_format);
+        const bool have_cnt = flipper_format_read_uint32(flipper_format, "Cnt", &sub_cnt, 1);
+
+        // [PROTOPIRATE_PORT] custom_btn support: read the D-pad selection and
+        // remap the button. If the user picked a button other than the captured
+        // one, force the re-encrypt path so the new button reaches the air.
+        const uint8_t kia_v5_original_btn = (uint8_t)(instance->generic.btn & 0x0FU);
+        if(subghz_custom_btn_get_original() == 0) {
+            subghz_custom_btn_set_original(kia_v5_original_btn);
+        }
+        subghz_custom_btn_set_max(4);
+        const uint8_t kia_v5_selected_btn =
+            kia_v5_custom_to_btn(subghz_custom_btn_get(), kia_v5_original_btn);
+        const bool kia_v5_custom_active = (kia_v5_selected_btn != kia_v5_original_btn);
+
+        // [ROLLING_CNT] Rolling multiplier used below to forward-encode the NEXT
+        // counter (like VAG/PSA) so the transmitter UI shows an incrementing
+        // counter on each OK/D-pad press.
+        uint32_t kia_v5_mult = furi_hal_subghz_get_rolling_counter_mult();
+        if(kia_v5_mult == 0U) kia_v5_mult = 1U;
+        bool kia_v5_reencrypted = false;
+
+        if(have_serial && have_btn && have_cnt && sub_serial != UINT32_MAX &&
+           sub_btn != UINT32_MAX && sub_cnt != UINT32_MAX) {
+            // Adopt user-provided values (masked to their protocol widths).
+            instance->generic.serial = sub_serial & 0x0FFFFFFFU;
+            instance->generic.btn = (uint8_t)(sub_btn & 0x0FU);
+            instance->generic.cnt = (uint16_t)(sub_cnt & 0xFFFFU);
+            // A D-pad selection overrides the file's Btn field.
+            if(kia_v5_custom_active) instance->generic.btn = kia_v5_selected_btn;
+            instance->reencrypt_mode = true;
+
+            // [ROLLING_CNT] Advance the counter before re-encrypting.
+            instance->generic.cnt = (uint16_t)((instance->generic.cnt + kia_v5_mult) & 0xFFFFU);
+
+            if(!kia_v5_reencrypt_and_upload(instance)) {
+                ret = SubGhzProtocolStatusErrorEncoderGetUpload;
+                break;
+            }
+            kia_v5_reencrypted = true;
+        } else {
+            // No explicit re-encrypt fields OR captured button: re-encrypt from the
+            // decoded serial/cnt so the transmitted frame carries the (possibly
+            // remapped) button AND an advanced counter. This replaces the old pure
+            // replay path so the UI counter advances on every press.
+            if(kia_v5_custom_active) instance->generic.btn = kia_v5_selected_btn;
+            instance->reencrypt_mode = true;
+
+            // [ROLLING_CNT] Advance the counter before re-encrypting.
+            instance->generic.cnt = (uint16_t)((instance->generic.cnt + kia_v5_mult) & 0xFFFFU);
+
+            if(!kia_v5_reencrypt_and_upload(instance)) {
+                ret = SubGhzProtocolStatusErrorEncoderGetUpload;
+                break;
+            }
+            kia_v5_reencrypted = true;
+        }
+
+        // [ROLLING_CNT] Persist the advanced frame so the UI refresh (decoder
+        // re-derives serial/btn/cnt from Yek/Key) shows the incremented counter and
+        // the next TX continues from here. YekHi/YekLo take priority in the decoder,
+        // so rewrite them plus the Key and Cnt consistently.
+        if(kia_v5_reencrypted) {
+            uint64_t yek = kia_v5_bit_reverse_64(instance->generic.data);
+            uint32_t yek_hi = (uint32_t)(yek >> 32);
+            uint32_t yek_lo = (uint32_t)(yek & 0xFFFFFFFF);
+            flipper_format_rewind(flipper_format);
+            flipper_format_insert_or_update_uint32(flipper_format, "YekHi", &yek_hi, 1);
+            flipper_format_rewind(flipper_format);
+            flipper_format_insert_or_update_uint32(flipper_format, "YekLo", &yek_lo, 1);
+
+            uint8_t key_data[8];
+            for(int i = 0; i < 8; i++) {
+                key_data[i] = (uint8_t)((instance->generic.data >> (56 - 8 * i)) & 0xFF);
+            }
+            flipper_format_rewind(flipper_format);
+            flipper_format_update_hex(flipper_format, "Key", key_data, 8);
+
+            flipper_format_rewind(flipper_format);
+            uint32_t cnt_store = instance->generic.cnt;
+            flipper_format_insert_or_update_uint32(flipper_format, "Cnt", &cnt_store, 1);
+        }
+
+        instance->encoder.is_running = true;
+        ret = SubGhzProtocolStatusOk;
+    } while(false);
+
+    return ret;
+}
+
+void subghz_protocol_encoder_kia_v5_stop(void* context) {
+    furi_assert(context);
+    SubGhzProtocolEncoderKiaV5* instance = context;
+    instance->encoder.is_running = false;
+    instance->encoder.front = 0;
+}
+
+LevelDuration subghz_protocol_encoder_kia_v5_yield(void* context) {
+    furi_assert(context);
+    SubGhzProtocolEncoderKiaV5* instance = context;
+
+    if(!instance->encoder.is_running || instance->encoder.repeat == 0 ||
+       instance->encoder.size_upload == 0) {
+        instance->encoder.is_running = false;
+        return level_duration_reset();
+    }
+
+    LevelDuration ret = instance->encoder.upload[instance->encoder.front];
+
+    if(++instance->encoder.front == instance->encoder.size_upload) {
+        // Endless/breakless TX: while OK is held (endless_tx set by the transmit
+        // scene) do not consume repeats, so the signal loops until release.
+        if(!subghz_block_generic_global.endless_tx) instance->encoder.repeat--;
+        instance->encoder.front = 0;
+    }
+
+    return ret;
+}
+
+void subghz_protocol_encoder_kia_v5_set_button(void* context, uint8_t button) {
+    furi_assert(context);
+    SubGhzProtocolEncoderKiaV5* instance = context;
+    instance->generic.btn = button;
+    // [PROTOPIRATE_PORT] In re-encrypt mode, regenerate RF bitstream so the
+    // UI change actually reaches the air. In pure replay mode this is a no-op
+    // (RF still emits the recorded frame).
+    if(instance->reencrypt_mode) {
+        (void)kia_v5_reencrypt_and_upload(instance);
+    }
+}
+
+void subghz_protocol_encoder_kia_v5_set_counter(void* context, uint16_t counter) {
+    furi_assert(context);
+    SubGhzProtocolEncoderKiaV5* instance = context;
+    instance->generic.cnt = counter;
+    // [PROTOPIRATE_PORT] see set_button rationale.
+    if(instance->reencrypt_mode) {
+        (void)kia_v5_reencrypt_and_upload(instance);
+    }
+}
+
+void subghz_protocol_encoder_kia_v5_increment_counter(void* context) {
+    furi_assert(context);
+    SubGhzProtocolEncoderKiaV5* instance = context;
+    if(instance->generic.cnt < 0xFFFF) {
+        instance->generic.cnt++;
+    } else {
+        instance->generic.cnt = 0;
+    }
+    // [PROTOPIRATE_PORT] see set_button rationale.
+    if(instance->reencrypt_mode) {
+        (void)kia_v5_reencrypt_and_upload(instance);
+    }
+}
+
+uint16_t subghz_protocol_encoder_kia_v5_get_counter(void* context) {
+    furi_assert(context);
+    SubGhzProtocolEncoderKiaV5* instance = context;
+    return instance->generic.cnt;
+}
+
+uint8_t subghz_protocol_encoder_kia_v5_get_button(void* context) {
+    furi_assert(context);
+    SubGhzProtocolEncoderKiaV5* instance = context;
+    return instance->generic.btn;
+}
+
+static void kia_v5_add_bit(SubGhzProtocolDecoderKiaV5* instance, bool bit) {
+    instance->decoded_data = (instance->decoded_data << 1) | (bit ? 1 : 0);
+    instance->bit_count++;
+}
+
+void* subghz_protocol_decoder_kia_v5_alloc(SubGhzEnvironment* environment) {
+    UNUSED(environment);
+    SubGhzProtocolDecoderKiaV5* instance = malloc(sizeof(SubGhzProtocolDecoderKiaV5));
+    furi_assert(instance);
+    instance->base.protocol = &subghz_protocol_kia_v5;
+    instance->generic.protocol_name = instance->base.protocol->name;
+    return instance;
+}
+
+void subghz_protocol_decoder_kia_v5_free(void* context) {
+    furi_assert(context);
+    SubGhzProtocolDecoderKiaV5* instance = context;
+    free(instance);
+}
+
+void subghz_protocol_decoder_kia_v5_reset(void* context) {
+    furi_assert(context);
+    SubGhzProtocolDecoderKiaV5* instance = context;
+    instance->decoder.parser_step = KiaV5DecoderStepReset;
+    instance->header_count = 0;
+    instance->bit_count = 0;
+    instance->decoded_data = 0;
+    instance->saved_key = 0;
+    instance->yek = 0;
+    instance->crc = 0;
+    instance->manchester_state = ManchesterStateMid1;
+}
+
+void subghz_protocol_decoder_kia_v5_feed(void* context, bool level, uint32_t duration) {
+    furi_assert(context);
+    SubGhzProtocolDecoderKiaV5* instance = context;
+
+    switch(instance->decoder.parser_step) {
+    case KiaV5DecoderStepReset:
+        if((level) && (DURATION_DIFF(duration, subghz_protocol_kia_v5_const.te_short) <
+                       subghz_protocol_kia_v5_const.te_delta)) {
+            instance->decoder.parser_step = KiaV5DecoderStepCheckPreamble;
+            instance->decoder.te_last = duration;
+            instance->header_count = 1;
+            instance->bit_count = 0;
+            instance->decoded_data = 0;
+            manchester_advance(
+                instance->manchester_state,
+                ManchesterEventReset,
+                &instance->manchester_state,
+                NULL);
+        }
+        break;
+
+    case KiaV5DecoderStepCheckPreamble:
+        if(level) {
+            if(DURATION_DIFF(duration, subghz_protocol_kia_v5_const.te_long) <
+               subghz_protocol_kia_v5_const.te_delta) {
+                if(instance->header_count > 40) {
+                    instance->decoder.parser_step = KiaV5DecoderStepData;
+                    instance->bit_count = 0;
+                    instance->decoded_data = 0;
+                    instance->saved_key = 0;
+                    instance->header_count = 0;
+                } else {
+                    instance->decoder.te_last = duration;
+                }
+            } else if(
+                DURATION_DIFF(duration, subghz_protocol_kia_v5_const.te_short) <
+                subghz_protocol_kia_v5_const.te_delta) {
+                instance->decoder.te_last = duration;
+            } else {
+                instance->decoder.parser_step = KiaV5DecoderStepReset;
+            }
+        } else {
+            if((DURATION_DIFF(duration, subghz_protocol_kia_v5_const.te_short) <
+                subghz_protocol_kia_v5_const.te_delta) &&
+               (DURATION_DIFF(instance->decoder.te_last, subghz_protocol_kia_v5_const.te_short) <
+                subghz_protocol_kia_v5_const.te_delta)) {
+                instance->header_count++;
+            } else if(
+                (DURATION_DIFF(duration, subghz_protocol_kia_v5_const.te_long) <
+                 subghz_protocol_kia_v5_const.te_delta) &&
+                (DURATION_DIFF(instance->decoder.te_last, subghz_protocol_kia_v5_const.te_short) <
+                 subghz_protocol_kia_v5_const.te_delta)) {
+                instance->header_count++;
+            } else if(
+                DURATION_DIFF(instance->decoder.te_last, subghz_protocol_kia_v5_const.te_long) <
+                subghz_protocol_kia_v5_const.te_delta) {
+                instance->header_count++;
+            } else {
+                instance->decoder.parser_step = KiaV5DecoderStepReset;
+            }
+            instance->decoder.te_last = duration;
+        }
+        break;
+
+    case KiaV5DecoderStepData: {
+        ManchesterEvent event;
+
+        if(DURATION_DIFF(duration, subghz_protocol_kia_v5_const.te_short) <
+           subghz_protocol_kia_v5_const.te_delta) {
+            event = level ? ManchesterEventShortHigh : ManchesterEventShortLow;
+        } else if(
+            DURATION_DIFF(duration, subghz_protocol_kia_v5_const.te_long) <
+            subghz_protocol_kia_v5_const.te_delta) {
+            event = level ? ManchesterEventLongHigh : ManchesterEventLongLow;
+        } else {
+            // [BUGFIX] Trigger only on exact 67-bit frames. The framework's
+            // deserialize helper requires data_count_bit == min_count_bit_for_found,
+            // so we must never store any other value here.
+            if(instance->bit_count >= subghz_protocol_kia_v5_const.min_count_bit_for_found) {
+                instance->generic.data = instance->saved_key;
+                instance->generic.data_count_bit =
+                    subghz_protocol_kia_v5_const.min_count_bit_for_found;
+
+                instance->crc = (uint8_t)(instance->decoded_data & 0x07);
+
+                instance->yek = 0;
+                for(int i = 0; i < 8; i++) {
+                    uint8_t byte = (instance->generic.data >> (i * 8)) & 0xFF;
+                    uint8_t reversed = 0;
+                    for(int b = 0; b < 8; b++) {
+                        if(byte & (1 << b)) reversed |= (1 << (7 - b));
+                    }
+                    instance->yek |= ((uint64_t)reversed << ((7 - i) * 8));
+                }
+
+                instance->generic.serial = (uint32_t)((instance->yek >> 32) & 0x0FFFFFFF);
+                instance->generic.btn = (uint8_t)((instance->yek >> 60) & 0x0F);
+
+                uint32_t encrypted = (uint32_t)(instance->yek & 0xFFFFFFFF);
+                instance->generic.cnt = mixer_decode(encrypted);
+
+                instance->decoder.decode_data = instance->generic.data;
+                instance->decoder.decode_count_bit = instance->generic.data_count_bit;
+
+                if(instance->base.callback)
+                    instance->base.callback(&instance->base, instance->base.context);
+            }
+
+            instance->decoder.parser_step = KiaV5DecoderStepReset;
+            break;
+        }
+
+        bool data_bit;
+        if(instance->bit_count <= 66 &&
+           manchester_advance(
+               instance->manchester_state, event, &instance->manchester_state, &data_bit)) {
+            kia_v5_add_bit(instance, data_bit);
+            if(instance->bit_count == 64) {
+                instance->saved_key = instance->decoded_data;
+                instance->decoded_data = 0;
+            }
+        }
+
+        instance->decoder.te_last = duration;
+        break;
+    }
+    }
+}
+
+uint8_t subghz_protocol_decoder_kia_v5_get_hash_data(void* context) {
+    furi_assert(context);
+    SubGhzProtocolDecoderKiaV5* instance = context;
+    return subghz_protocol_blocks_get_hash_data(
+        &instance->decoder, (instance->decoder.decode_count_bit / 8) + 1);
+}
+
+SubGhzProtocolStatus subghz_protocol_decoder_kia_v5_serialize(
+    void* context,
+    FlipperFormat* flipper_format,
+    SubGhzRadioPreset* preset) {
+    furi_assert(context);
+    SubGhzProtocolDecoderKiaV5* instance = context;
+
+    SubGhzProtocolStatus ret =
+        subghz_block_generic_serialize(&instance->generic, flipper_format, preset);
+
+    if(ret == SubGhzProtocolStatusOk) {
+        uint32_t serial_tmp = instance->generic.serial;
+        if(!flipper_format_write_uint32(flipper_format, "Serial", &serial_tmp, 1)) {
+            ret = SubGhzProtocolStatusErrorParserOthers;
+        }
+    }
+    if(ret == SubGhzProtocolStatusOk) {
+        uint32_t btn_tmp = instance->generic.btn;
+        if(!flipper_format_write_uint32(flipper_format, "Btn", &btn_tmp, 1)) {
+            ret = SubGhzProtocolStatusErrorParserOthers;
+        }
+    }
+    if(ret == SubGhzProtocolStatusOk) {
+        uint32_t cnt_tmp = instance->generic.cnt;
+        if(!flipper_format_write_uint32(flipper_format, "Cnt", &cnt_tmp, 1)) {
+            ret = SubGhzProtocolStatusErrorParserOthers;
+        }
+    }
+    if(ret == SubGhzProtocolStatusOk) {
+        uint32_t crc_temp = instance->crc;
+        if(!flipper_format_write_uint32(flipper_format, "CRC", &crc_temp, 1)) {
+            ret = SubGhzProtocolStatusErrorParserOthers;
+        }
+    }
+    if(ret == SubGhzProtocolStatusOk) {
+        uint32_t yek_high = (uint32_t)(instance->yek >> 32);
+        uint32_t yek_low = (uint32_t)(instance->yek & 0xFFFFFFFF);
+        if(!flipper_format_write_uint32(flipper_format, "YekHi", &yek_high, 1)) {
+            ret = SubGhzProtocolStatusErrorParserOthers;
+        }
+        if(ret == SubGhzProtocolStatusOk) {
+            if(!flipper_format_write_uint32(flipper_format, "YekLo", &yek_low, 1)) {
+                ret = SubGhzProtocolStatusErrorParserOthers;
+            }
+        }
+    }
+
+    return ret;
+}
+
+SubGhzProtocolStatus
+    subghz_protocol_decoder_kia_v5_deserialize(void* context, FlipperFormat* flipper_format) {
+    furi_assert(context);
+    SubGhzProtocolDecoderKiaV5* instance = context;
+
+    // Tolerant bit-count check: accept both the current 67-bit captures and
+    // legacy .sub files saved when min_count_bit_for_found was 64, so old
+    // captures still emulate instead of failing with "Error history parse.".
+    // Deserialize without the framework's strict equality, then accept a range
+    // and normalize to the canonical bit count.
+    SubGhzProtocolStatus ret =
+        subghz_block_generic_deserialize(&instance->generic, flipper_format);
+    if(ret == SubGhzProtocolStatusOk) {
+        const uint16_t want = subghz_protocol_kia_v5_const.min_count_bit_for_found; // 67
+        if(instance->generic.data_count_bit == 64 ||
+           instance->generic.data_count_bit == want) {
+            instance->generic.data_count_bit = want; // normalize legacy 64 -> 67
+        } else {
+            ret = SubGhzProtocolStatusErrorValueBitCount;
+        }
+    }
+
+    if(ret == SubGhzProtocolStatusOk) {
+        flipper_format_rewind(flipper_format);
+        uint32_t temp_crc = 0;
+        if(flipper_format_read_uint32(flipper_format, "CRC", &temp_crc, 1)) {
+            instance->crc = (uint8_t)temp_crc;
+        } else {
+            instance->crc = 0;
+        }
+
+        flipper_format_rewind(flipper_format);
+        uint32_t yek_high = 0, yek_low = 0;
+        if(flipper_format_read_uint32(flipper_format, "YekHi", &yek_high, 1) &&
+           flipper_format_read_uint32(flipper_format, "YekLo", &yek_low, 1)) {
+            instance->yek = ((uint64_t)yek_high << 32) | yek_low;
+        } else {
+            instance->yek = 0;
+            for(int i = 0; i < 8; i++) {
+                uint8_t byte = (instance->generic.data >> (i * 8)) & 0xFF;
+                uint8_t reversed = 0;
+                for(int j = 0; j < 8; j++) {
+                    if(byte & (1 << j)) {
+                        reversed |= (1 << (7 - j));
+                    }
+                }
+                instance->yek |= ((uint64_t)reversed << ((7 - i) * 8));
+            }
+        }
+
+        instance->generic.serial = (uint32_t)((instance->yek >> 32) & 0x0FFFFFFF);
+        instance->generic.btn = (uint8_t)((instance->yek >> 60) & 0x0F);
+
+        uint32_t encrypted = (uint32_t)(instance->yek & 0xFFFFFFFF);
+        instance->generic.cnt = mixer_decode(encrypted);
+    }
+
+    return ret;
+}
+
+static const char* subghz_protocol_kia_v5_get_name_button(uint8_t btn) {
+    switch(btn) {
+    case 0x01:
+        return "Unlock";
+    case 0x02:
+        return "Lock";
+    case 0x04:
+        return "Trunk";
+    case 0x08:
+        return "Horn";
+    default:
+        return "Unknown";
+    }
+}
+
+void subghz_protocol_decoder_kia_v5_get_string(void* context, FuriString* output) {
+    furi_assert(context);
+    SubGhzProtocolDecoderKiaV5* instance = context;
+
+    uint8_t calculated_crc = kia_v5_calculate_crc(instance->yek);
+    bool crc_valid = (instance->crc == calculated_crc);
+
+    // [BUGFIX UI] Re-derive the displayed button from the current D-pad
+    // selection so the transmitter UI reflects subghz_custom_btn_get() (like
+    // psa.c/star_line.c), reusing the encoder mapping (kia_v5_custom_to_btn).
+    // The CRC/key shown reflect the captured (still-valid) frame; the encoder
+    // re-encrypts and recomputes CRC for the transmitted button.
+    subghz_custom_btn_set_max(4);
+    uint8_t display_btn = (uint8_t)instance->generic.btn;
+    uint8_t custom_btn_id = subghz_custom_btn_get();
+    if(custom_btn_id != SUBGHZ_CUSTOM_BTN_OK) {
+        display_btn = kia_v5_custom_to_btn(custom_btn_id, (uint8_t)(instance->generic.btn & 0x0FU));
+    }
+
+    furi_string_cat_printf(
+        output,
+        "%s %dbit\r\n"
+        "Key:0x%llX\r\n"
+        "SN:0x%07lX Btn:[%s]\r\n"
+        "CRC:%u Cnt:%04lX %s",
+        instance->generic.protocol_name,
+        instance->generic.data_count_bit,
+        (unsigned long long)instance->generic.data,
+        (unsigned long)instance->generic.serial,
+        subghz_protocol_kia_v5_get_name_button(display_btn),
+        (unsigned)instance->crc,
+        (unsigned long)instance->generic.cnt,
+        crc_valid ? "(OK)" : "(FAIL)");
+}

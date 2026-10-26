@@ -1,6 +1,8 @@
 #include "subbrute_i.h"
 #include "scenes/subbrute_scene.h"
 
+#include <string.h>
+
 #define TAG "SubBruteApp"
 
 static bool subbrute_custom_event_callback(void* context, uint32_t event) {
@@ -22,9 +24,10 @@ static void subbrute_tick_event_callback(void* context) {
 }
 
 SubBruteState* subbrute_alloc() {
+    FURI_LOG_I(TAG, "alloc");
     SubBruteState* instance = malloc(sizeof(SubBruteState));
+    memset(instance, 0, sizeof(SubBruteState));
 
-    memset(instance->text_store, 0, sizeof(instance->text_store));
     instance->file_path = furi_string_alloc();
 
     instance->scene_manager = scene_manager_alloc(&subbrute_scene_handlers, instance);
@@ -40,64 +43,55 @@ SubBruteState* subbrute_alloc() {
     view_dispatcher_set_tick_event_callback(
         instance->view_dispatcher, subbrute_tick_event_callback, 100);
 
-    //Dialog
     instance->dialogs = furi_record_open(RECORD_DIALOGS);
-
-    // Notifications
     instance->notifications = furi_record_open(RECORD_NOTIFICATION);
 
     subghz_devices_init();
 
-    // init radio device
-    instance->radio_device = subbrute_radio_device_loader_set(
-        instance->radio_device, SubGhzRadioDeviceTypeExternalCC1101);
+    instance->radio_device =
+        subbrute_radio_device_loader_set(NULL, SubGhzRadioDeviceTypeExternalCC1101);
+    FURI_LOG_I(
+        TAG,
+        "radio=%s external=%d",
+        instance->radio_device ? instance->radio_device->name : "NULL",
+        instance->radio_device ? radio_device_loader_is_external(instance->radio_device) : -1);
 
     subghz_devices_reset(instance->radio_device);
     subghz_devices_idle(instance->radio_device);
 
-    // Devices
     instance->device = subbrute_device_alloc(instance->radio_device);
-
-    // SubBruteWorker
     instance->worker = subbrute_worker_alloc(instance->radio_device);
 
-    // TextInput
     instance->text_input = text_input_alloc();
     view_dispatcher_add_view(
         instance->view_dispatcher,
         SubBruteViewTextInput,
         text_input_get_view(instance->text_input));
 
-    // Custom Widget
     instance->widget = widget_alloc();
     view_dispatcher_add_view(
         instance->view_dispatcher, SubBruteViewWidget, widget_get_view(instance->widget));
 
-    // VarList
     instance->var_list = variable_item_list_alloc();
     view_dispatcher_add_view(
         instance->view_dispatcher,
         SubBruteViewVarList,
         variable_item_list_get_view(instance->var_list));
 
-    // Popup
     instance->popup = popup_alloc();
     view_dispatcher_add_view(
         instance->view_dispatcher, SubBruteViewPopup, popup_get_view(instance->popup));
 
-    // ViewStack
     instance->view_stack = view_stack_alloc();
     view_dispatcher_add_view(
         instance->view_dispatcher, SubBruteViewStack, view_stack_get_view(instance->view_stack));
 
-    // SubBruteMainView
     instance->view_main = subbrute_main_view_alloc();
     view_dispatcher_add_view(
         instance->view_dispatcher,
         SubBruteViewMain,
         subbrute_main_view_get_view(instance->view_main));
 
-    // SubBruteAttackView
     instance->view_attack = subbrute_attack_view_alloc();
     view_dispatcher_add_view(
         instance->view_dispatcher,
@@ -107,80 +101,56 @@ SubBruteState* subbrute_alloc() {
     instance->settings = subbrute_settings_alloc();
     subbrute_settings_load(instance->settings);
 
-    // Uncomment to enable Debug pin output on PIN 17(1W)
-    // subghz_devices_set_async_mirror_pin(instance->radio_device, &gpio_ibutton);
-
     return instance;
 }
 
 void subbrute_free(SubBruteState* instance) {
     furi_assert(instance);
+    FURI_LOG_I(TAG, "free: begin");
 
-    // Uncomment to enable Debug pin output on PIN 17(1W)
-    // subghz_devices_set_async_mirror_pin(instance->radio_device, NULL);
-
-    // SubBruteWorker
-    subbrute_worker_stop(instance->worker);
     subbrute_worker_free(instance->worker);
-
-    // SubBruteDevice
     subbrute_device_free(instance->device);
     subghz_devices_deinit();
-
-    //subbrute_settings_save(instance->settings);
     subbrute_settings_free(instance->settings);
 
-    // Notifications
     notification_message(instance->notifications, &sequence_blink_stop);
     furi_record_close(RECORD_NOTIFICATION);
     instance->notifications = NULL;
 
-    // View Main
     view_dispatcher_remove_view(instance->view_dispatcher, SubBruteViewMain);
     subbrute_main_view_free(instance->view_main);
 
-    // View Attack
     view_dispatcher_remove_view(instance->view_dispatcher, SubBruteViewAttack);
     subbrute_attack_view_free(instance->view_attack);
 
-    // TextInput
     view_dispatcher_remove_view(instance->view_dispatcher, SubBruteViewTextInput);
     text_input_free(instance->text_input);
 
-    // Custom Widget
     view_dispatcher_remove_view(instance->view_dispatcher, SubBruteViewWidget);
     widget_free(instance->widget);
 
-    // VarList
     view_dispatcher_remove_view(instance->view_dispatcher, SubBruteViewVarList);
     variable_item_list_free(instance->var_list);
 
-    // Popup
     view_dispatcher_remove_view(instance->view_dispatcher, SubBruteViewPopup);
     popup_free(instance->popup);
 
-    // ViewStack
     view_dispatcher_remove_view(instance->view_dispatcher, SubBruteViewStack);
     view_stack_free(instance->view_stack);
 
-    // Dialog
     furi_record_close(RECORD_DIALOGS);
     instance->dialogs = NULL;
 
-    // Scene manager
     scene_manager_free(instance->scene_manager);
-
-    // View Dispatcher
     view_dispatcher_free(instance->view_dispatcher);
 
-    // GUI
     furi_record_close(RECORD_GUI);
     instance->gui = NULL;
 
     furi_string_free(instance->file_path);
 
-    // The rest
     free(instance);
+    FURI_LOG_I(TAG, "free: done");
 }
 
 void subbrute_text_input_callback(void* context) {
@@ -197,9 +167,9 @@ void subbrute_popup_closed_callback(void* context) {
         instance->view_dispatcher, SubBruteCustomEventTypePopupClosed);
 }
 
-// ENTRYPOINT
 int32_t subbrute_app(void* p) {
     UNUSED(p);
+    FURI_LOG_I(TAG, "app start");
     furi_hal_power_suppress_charge_enter();
 
     SubBruteState* instance = subbrute_alloc();
@@ -209,10 +179,13 @@ int32_t subbrute_app(void* p) {
 
     notification_message(instance->notifications, &sequence_display_backlight_on);
     view_dispatcher_run(instance->view_dispatcher);
+    FURI_LOG_I(TAG, "dispatcher exited");
 
+    subbrute_settings_save(instance->settings);
     subbrute_free(instance);
 
     furi_hal_power_suppress_charge_exit();
+    FURI_LOG_I(TAG, "app exit");
 
     return 0;
 }

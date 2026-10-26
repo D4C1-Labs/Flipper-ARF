@@ -21,6 +21,8 @@ void protopirate_scene_welcome_on_enter(void* context) {
            &app->running_plugin,
            ProtoPirateSharedPluginsWelcome,
            NULL)) {
+        FURI_LOG_E(TAG, "Failed to Load Plugin");
+
         notification_message(app->notifications, &sequence_error);
         scene_manager_previous_scene(app->scene_manager);
         return;
@@ -45,6 +47,6 @@ bool protopirate_scene_welcome_on_event(void* context, SceneManagerEvent event) 
 void protopirate_scene_welcome_on_exit(void* context) {
     ProtoPirateApp* app = context;
     shared_plugin_unload(&app->running_plugin_flipper_application, &app->running_plugin);
-    widget_reset(app->widget);
+    protopirate_widget_free(app);
 }
 #endif

@@ -1,11 +1,11 @@
 #pragma once
 
 enum SubmenuIndex {
-    SubmenuIndexRead = 10,
-    SubmenuIndexSaved,
+    SubmenuIndexReadCars = 10,
+    SubmenuIndexReadGarage,
+    SubmenuIndexReadRAW,
     SubmenuIndexAddManuallyAdvanced,
     SubmenuIndexFrequencyAnalyzer,
-    SubmenuIndexReadRAW,
     SubmenuIndexExtSettings,
     SubmenuIndexProtocolList,
     SubmenuIndexRadioSetting,

@@ -72,6 +72,10 @@ static inline Widget* host_get_widget(ProtoPirateApp* app) {
     return app ? app->widget : NULL;
 }
 
+static inline void host_widget_free(ProtoPirateApp* app) {
+    protopirate_widget_free(app);
+}
+
 static inline FlipperFormat* host_get_history_flipper_format(ProtoPirateApp* app) {
     if(!app || !app->txrx || !app->txrx->history) return NULL;
     return protopirate_history_get_raw_data(app->txrx->history, app->txrx->idx_menu_chosen);
@@ -142,6 +146,7 @@ const ProtoPirateSharedPluginHostApi protopirate_shared_plugin_host_api = {
     .ensure_receiver_view = host_ensure_receiver_view,
     .ensure_widget = host_ensure_widget,
     .get_widget = host_get_widget,
+    .widget_free = host_widget_free,
     .ensure_view_about = host_ensure_view_about,
     .ensure_text_input = protopirate_ensure_text_input,
     .free_text_input = protopirate_free_text_input,
