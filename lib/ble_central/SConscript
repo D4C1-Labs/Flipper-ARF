@@ -1,0 +1,25 @@
+Import("env")
+
+env.Append(
+    CPPPATH=[
+        "#/lib/ble_central",
+    ],
+    SDK_HEADERS=[
+        File("ble_central.h"),
+    ],
+)
+
+libenv = env.Clone(FW_LIB_NAME="ble_central")
+libenv.AppendUnique(
+    CCFLAGS=[
+        "-mword-relocations",
+        "-mlong-calls",
+    ],
+)
+libenv.ApplyLibFlags()
+
+sources = libenv.GlobRecursive("*.c")
+
+lib = libenv.StaticLibrary("${FW_LIB_NAME}", sources)
+libenv.Install("${LIB_DIST_DIR}", lib)
+Return("lib")
