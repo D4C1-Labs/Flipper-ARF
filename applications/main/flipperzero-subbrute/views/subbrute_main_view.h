@@ -6,12 +6,6 @@
 #include <input/input.h>
 #include <gui/elements.h>
 
-typedef enum {
-    SubBruteMenuLevelBrand,
-    SubBruteMenuLevelType,
-    SubBruteMenuLevelFreq,
-} SubBruteMenuLevel;
-
 typedef void (*SubBruteMainViewCallback)(SubBruteCustomEvent event, void* context);
 typedef struct SubBruteMainView SubBruteMainView;
 

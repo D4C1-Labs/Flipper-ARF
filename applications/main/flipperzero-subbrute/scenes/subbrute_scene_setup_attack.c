@@ -55,13 +55,12 @@ void subbrute_scene_setup_attack_on_enter(void* context) {
 
 void subbrute_scene_setup_attack_on_exit(void* context) {
     furi_assert(context);
-#ifdef FURI_DEBUG
-    FURI_LOG_D(TAG, "subbrute_scene_setup_attack_on_exit");
-#endif
     SubBruteState* instance = (SubBruteState*)context;
+    FURI_LOG_I(TAG, "on_exit: stop worker");
     subbrute_worker_stop(instance->worker);
     notification_message(instance->notifications, &sequence_blink_stop);
     notification_message(instance->notifications, &sequence_reset_vibro);
+    FURI_LOG_I(TAG, "on_exit: done");
 }
 
 bool subbrute_scene_setup_attack_on_event(void* context, SceneManagerEvent event) {
@@ -84,6 +83,7 @@ bool subbrute_scene_setup_attack_on_event(void* context, SceneManagerEvent event
         } else if(event.event == SubBruteCustomEventTypeExtraSettings) {
             scene_manager_next_scene(instance->scene_manager, SubBruteSceneSetupExtra);
         } else if(event.event == SubBruteCustomEventTypeBackPressed) {
+            FURI_LOG_I(TAG, "BackPressed → Start");
             subbrute_attack_view_init_values(
                 view,
                 instance->device->attack,
@@ -91,7 +91,11 @@ bool subbrute_scene_setup_attack_on_event(void* context, SceneManagerEvent event
                 instance->device->current_step,
                 false,
                 instance->device->extra_repeats);
-            scene_manager_next_scene(instance->scene_manager, SubBruteSceneStart);
+            if(!scene_manager_search_and_switch_to_previous_scene(
+                   instance->scene_manager, SubBruteSceneStart)) {
+                FURI_LOG_W(TAG, "Start not in stack, next_scene(Start)");
+                scene_manager_next_scene(instance->scene_manager, SubBruteSceneStart);
+            }
         } else if(event.event == SubBruteCustomEventTypeError) {
             notification_message(instance->notifications, &sequence_error);
         } else if(event.event == SubBruteCustomEventTypeTransmitCustom) {

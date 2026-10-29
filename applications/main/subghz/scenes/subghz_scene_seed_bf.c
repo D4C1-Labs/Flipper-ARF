@@ -35,6 +35,13 @@
 #include <lib/subghz/protocols/renault_v1.h>
 #include <furi.h>
 #include <storage/storage.h>
+#include <assets_icons.h>
+
+// [ARF_PORT 2026-10-26] Waiting dolphin on the Popup during the seed brute
+// force, matching the Hitag2 BF view. Cosmetic only: the worker, cancel path and
+// result handling are unchanged. With the 59px dolphin on the left, text is
+// right-aligned around x=95.
+#define SEED_BF_TEXT_X 95
 
 #define TAG "SubGhzSceneSeedBf"
 
@@ -271,8 +278,9 @@ void subghz_scene_seed_bf_on_enter(void* context) {
     strncpy(ctx->body, "Running... 0%", sizeof(ctx->body) - 1);
 
     popup_set_callback(popup, NULL);
-    popup_set_header(popup, "Seed BF", 64, 12, AlignCenter, AlignTop);
-    popup_set_text(popup, ctx->body, 64, 34, AlignCenter, AlignTop);
+    popup_set_icon(popup, 0, 10, &I_DolphinWait_59x54);
+    popup_set_header(popup, "Seed BF", SEED_BF_TEXT_X, 12, AlignCenter, AlignTop);
+    popup_set_text(popup, ctx->body, SEED_BF_TEXT_X, 34, AlignCenter, AlignTop);
     popup_disable_timeout(popup);
     view_dispatcher_switch_to_view(subghz->view_dispatcher, SubGhzViewIdPopup);
 
@@ -299,7 +307,8 @@ bool subghz_scene_seed_bf_on_event(void* context, SceneManagerEvent event) {
             if(ctx->running && !ctx->done_handled) {
                 uint8_t p = SEED_BF_EVENT_PROGRESS_PCT(event.event);
                 snprintf(ctx->body, sizeof(ctx->body), "Running... %u%%", (unsigned)p);
-                popup_set_text(subghz->popup, ctx->body, 64, 34, AlignCenter, AlignTop);
+                popup_set_text(
+                    subghz->popup, ctx->body, SEED_BF_TEXT_X, 34, AlignCenter, AlignTop);
             }
             return true;
         } else if(event.event == SEED_BF_EVENT_DONE) {
@@ -313,6 +322,8 @@ bool subghz_scene_seed_bf_on_event(void* context, SceneManagerEvent event) {
             popup_reset(popup);
             popup_set_context(popup, subghz);
             popup_set_callback(popup, seed_bf_popup_callback);
+            // [ARF_PORT] Keep the dolphin on the result screen too.
+            popup_set_icon(popup, 0, 10, &I_DolphinWait_59x54);
 
             if(ctx->success) {
                 seed_bf_write_seed_and_save(ctx);
@@ -322,12 +333,13 @@ bool subghz_scene_seed_bf_on_event(void* context, SceneManagerEvent event) {
                 // until BACK — a stack buffer would dangle and render garbage.
                 snprintf(
                     ctx->body, sizeof(ctx->body), "Seed: %08lX", (unsigned long)ctx->seed);
-                popup_set_header(popup, "Seed found", 64, 6, AlignCenter, AlignTop);
-                popup_set_text(popup, ctx->body, 64, 30, AlignCenter, AlignTop);
+                popup_set_header(popup, "Seed found", SEED_BF_TEXT_X, 6, AlignCenter, AlignTop);
+                popup_set_text(popup, ctx->body, SEED_BF_TEXT_X, 30, AlignCenter, AlignTop);
                 FURI_LOG_I(TAG, "SEED recovered: %08lX", (unsigned long)ctx->seed);
             } else {
-                popup_set_header(popup, "Seed BF", 64, 6, AlignCenter, AlignTop);
-                popup_set_text(popup, "Seed not found", 64, 30, AlignCenter, AlignTop);
+                popup_set_header(popup, "Seed BF", SEED_BF_TEXT_X, 6, AlignCenter, AlignTop);
+                popup_set_text(
+                    popup, "Seed not found", SEED_BF_TEXT_X, 30, AlignCenter, AlignTop);
             }
             popup_disable_timeout(popup);
             view_dispatcher_switch_to_view(subghz->view_dispatcher, SubGhzViewIdPopup);

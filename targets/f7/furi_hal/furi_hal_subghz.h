@@ -154,6 +154,21 @@ float furi_hal_subghz_get_rssi(void);
  */
 uint8_t furi_hal_subghz_get_lqi(void);
 
+/** [ARF_PORT] Get frequency-error estimate from the demodulator
+ *
+ * @return     signed FREQEST register value
+ */
+int8_t furi_hal_subghz_get_freq_est(void);
+
+/** [ARF_PORT] Sample a burst of raw RSSI values
+ *
+ * @param[out] out        buffer receiving `count` raw RSSI bytes
+ * @param      count      number of samples
+ * @param      period_us  spacing between samples, in microseconds
+ * @return     total elapsed time in microseconds
+ */
+uint32_t furi_hal_subghz_rssi_burst(uint8_t* out, size_t count, uint32_t period_us);
+
 /** Check if frequency is in valid range
  *
  * @param      value  frequency in Hz

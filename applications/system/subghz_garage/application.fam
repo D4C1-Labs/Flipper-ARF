@@ -1,0 +1,999 @@
+App(
+    appid="subghz_garage",
+    name="Garage/Gate/Other",
+    apptype=FlipperAppType.EXTERNAL,
+    targets=["f7"],
+    entry_point="subghz_app",
+    requires=[
+        "gui",
+        "dialogs",
+    ],
+    # 3KB (inherited from the Automotive fork, which never exercises the
+    # PluginManager/ELF loader since it's compiled directly into firmware)
+    # was marginal here: this app loads external .fal plugins at runtime
+    # (external CC1101 device, protocol group plugins), and that machinery
+    # has deeper/more stack-hungry call chains than a normal statically-
+    # linked app ever hits. General heap has 130KB+ free at idle, so this
+    # is cheap - raised to give real headroom against a stack overflow.
+    stack_size=6 * 1024,
+    resources="resources",
+    # cdefines ajustados para Flipper-ARF. Cada SUBGHZ_GARAGE_HAS_* activa
+    # el uso directo de una API de la lib/firmware; si se omite, el shim
+    # helpers/*_compat.h usa un fallback. Verificado contra ARF:
+    #   DEVICES_LAZY_INIT  -> OFF: ARF no tiene subghz_devices_init_internal_only()/
+    #                         load_external(); el shim usa subghz_devices_init().
+    #   CLI_VCP_LOCK       -> OFF: ARF no expone cli_vcp_session_lock(); ademas
+    #                         subghz_cli.c esta excluido de esta app.
+    #   MEMMGR_POOL_STATS  -> OFF: ARF declara pero no implementa memmgr_pool_*;
+    #                         solo se usaba para logging de heap (fallback = 0).
+    #   LIB_EXTENSIONS, CUSTOM_BTN, GENERIC_GLOBAL, BINRAW_TYPE, RECEIVER_ICONS,
+    #   FONT_BATTERY_PERCENT, NAME_GEN_DATETIME, ITEM_LOCK, TX_ALLOWED_CHECK
+    #                      -> ON: todas verificadas presentes en ARF.
+    # GENERIC_DATA2_SEED no va aqui (ningun source del app principal lo usa);
+    # se setea en los App() de grupo/TX de abajo que compilan Jarolift, Nice
+    # FlorS, FAAC SLH, Alutech AT-4N, Beninca ARC, Came Atomo, KingGates y
+    # Somfy Keytis.
+    cdefines=[
+        "SUBGHZ_GARAGE_HAS_LIB_EXTENSIONS=1",
+        "SUBGHZ_GARAGE_HAS_CUSTOM_BTN=1",
+        "SUBGHZ_GARAGE_HAS_GENERIC_GLOBAL=1",
+        "SUBGHZ_GARAGE_HAS_BINRAW_TYPE=1",
+        "SUBGHZ_GARAGE_HAS_RECEIVER_ICONS=1",
+        "SUBGHZ_GARAGE_HAS_FONT_BATTERY_PERCENT=1",
+        "SUBGHZ_GARAGE_HAS_NAME_GEN_DATETIME=1",
+        "SUBGHZ_GARAGE_HAS_ITEM_LOCK=1",
+        "SUBGHZ_GARAGE_HAS_TX_ALLOWED_CHECK=1",
+    ],
+    sources=[
+        "*.c*",
+        "!subghz_cli.c",
+        "!subghz_dangerous_freq.c",
+        "!subghz_chat.c",
+        # subghz_scene_start.c reescrito para ARF (submenu propio Read/Read RAW/
+        # Saved, estilo Sub-GHz principal) -> ahora SI se compila.
+        # El grid de inicio de FoxFW (fox_theme) y Protocol List/Groups siguen
+        # fuera: ARF no tiene fox_theme y esta app entra directo por argumento.
+        "!subghz_view_start_grid.c",
+        "!subghz_scene_protocol_list.c",
+        "!subghz_view_protocol_groups.c",
+        "!protocols",
+        "protocols/protocol_groups.c",
+        # Automotive-only KeeLoq manufacturer-key bruteforce/decrypt toolchain
+        # and PSA Decrypt - not needed for garage/gate use. Source still on
+        # disk (not deletable from here) but excluded from compilation; a
+        # copy is staged in D:\_to_delete for reference.
+        "!subghz_scene_psa_decrypt.c",
+        "!subghz_scene_keeloq_bf2.c",
+        "!subghz_scene_keeloq_decrypt.c",
+        "!subghz_scene_kl_bf_cleanup.c",
+        "!subghz_scene_keeloq_keys.c",
+        "!subghz_scene_keeloq_key_edit.c",
+        "!subghz_keeloq_keys.c",
+        "!subghz_psa_decrypt.c",
+        "!subghz_keeloq_decrypt.c",
+        # "Add Manually" removed entirely - manual key/serial/counter/seed
+        # entry across ~50 protocol variants wasn't worth its own code size
+        # in a stripped-down garage/gate tool. Source still on disk (not
+        # deletable from here) but excluded from compilation, same as the
+        # Automotive-only files above.
+        "!subghz_scene_set_type.c",
+        "!subghz_scene_set_key.c",
+        "!subghz_scene_set_serial.c",
+        "!subghz_scene_set_seed.c",
+        "!subghz_scene_set_counter.c",
+        "!subghz_scene_set_button.c",
+        # Also dead: nothing ever navigated to this scene even before Add
+        # Manually was removed (no scene_manager_next_scene call anywhere
+        # targeted it).
+        "!subghz_scene_custom_freq.c",
+        "!subghz_gen_info.c",
+        "!subghz_txrx_create_protocol_key.c",
+        # Radio Settings scene removal (shared with Automotive via the Mode
+        # Picker) left this empty stray file behind - can't be deleted from
+        # here, excluded so it's never compiled either way.
+        "!subghz_scene_radio_settings.c.bak",
+        # "Modulations" screen removed from the Start page - manual per-
+        # preset enable/disable was redundant with Protocol Group selection
+        # once decoders were confirmed not to be modulation-gated. Its
+        # ADD_SCENE entry is gone from scenes/subghz_scene_config.h, so this
+        # file no longer compiles (references the now-undefined
+        # SubGhzSceneModulationList) - can't be deleted from here, excluded.
+        # Please delete this file, along with two now-superseded settings
+        # resources - resources/subghz/assets/setting_garage (replaced by
+        # setting_garage_full) and resources/subghz/assets/setting_garage_boot
+        # (a boot/full settings split was tried and reverted - see the
+        # comment in helpers/subghz_txrx.c's subghz_txrx_alloc() - so this
+        # one was never actually shipped in a release, just leftover from
+        # mid-session) - next time you're in here.
+        "!subghz_scene_modulation_list.c",
+    ],
+    fap_libs=["assets", "hwdrivers"],
+    fap_icon="icon.png",
+    fap_category="Sub-GHz",
+    fap_description="Sub-GHz - garage, gate, and other non-automotive protocols. Opened from the main Sub-GHz app's \"Garage / Gate\" entry.",
+    fap_version="1.0",
+)
+
+# The 40 non-automotive protocols (plus Read RAW's raw/bin_raw, duplicated
+# in every group) are split into 11 plugins instead of one. Flipper maps an
+# external app's whole binary into RAM to run it, and one combined plugin
+# couldn't be resident in RAM1 alongside the main .fap ("Not enough memory
+# to load section data"). Groups are organized by manufacturer/region/
+# device-type, capped at 4 protocols each - see
+# subghz_garage_protocol_group_names in protocol_groups.c for what's in
+# each one. Only one group is ever loaded at a time - see
+# subghz_txrx_ensure_protocol_group in helpers/subghz_txrx.c.
+App(
+    appid="grp_g1",
+    apptype=FlipperAppType.PLUGIN,
+    entry_point="subghz_garage_protocol_plugin_g1_ep",
+    requires=["subghz_garage"],
+    cdefines=["SUBGHZ_GARAGE_RX_ONLY=1", "SUBGHZ_GARAGE_HAS_GENERIC_GLOBAL=1", "SUBGHZ_GARAGE_HAS_BINRAW_TYPE=1"],
+    sources=[
+        "protocols/plugins/subghz_garage_protocol_plugin_g1.c",
+        "protocols/protocols_common.c",
+        "protocols/raw.c",
+        "protocols/bin_raw.c",
+        "protocols/smc5326.c",
+        "protocols/holtek.c",
+        "protocols/holtek_ht12x.c",
+        "protocols/princeton.c",
+    ],
+    fal_embedded=True,
+)
+
+App(
+    appid="grp_g2",
+    apptype=FlipperAppType.PLUGIN,
+    entry_point="subghz_garage_protocol_plugin_g2_ep",
+    requires=["subghz_garage"],
+    cdefines=["SUBGHZ_GARAGE_RX_ONLY=1", "SUBGHZ_GARAGE_HAS_GENERIC_GLOBAL=1", "SUBGHZ_GARAGE_HAS_BINRAW_TYPE=1"],
+    sources=[
+        "protocols/plugins/subghz_garage_protocol_plugin_g2.c",
+        "protocols/protocols_common.c",
+        "protocols/raw.c",
+        "protocols/bin_raw.c",
+        "protocols/x10.c",
+        "protocols/keyfinder.c",
+        "protocols/keyfinder2.c",
+        "protocols/keeloq.c",
+    ],
+    fal_embedded=True,
+)
+
+App(
+    appid="grp_g3",
+    apptype=FlipperAppType.PLUGIN,
+    entry_point="subghz_garage_protocol_plugin_g3_ep",
+    requires=["subghz_garage"],
+    cdefines=["SUBGHZ_GARAGE_RX_ONLY=1", "SUBGHZ_GARAGE_HAS_GENERIC_GLOBAL=1", "SUBGHZ_GARAGE_HAS_BINRAW_TYPE=1"],
+    sources=[
+        "protocols/plugins/subghz_garage_protocol_plugin_g3.c",
+        "protocols/protocols_common.c",
+        "protocols/raw.c",
+        "protocols/bin_raw.c",
+        "protocols/chamberlain_code.c",
+        "protocols/secplus_v1.c",
+        "protocols/secplus_v2.c",
+    ],
+    fal_embedded=True,
+)
+
+App(
+    appid="grp_g4",
+    apptype=FlipperAppType.PLUGIN,
+    entry_point="subghz_garage_protocol_plugin_g4_ep",
+    requires=["subghz_garage"],
+    cdefines=["SUBGHZ_GARAGE_RX_ONLY=1", "SUBGHZ_GARAGE_HAS_GENERIC_GLOBAL=1", "SUBGHZ_GARAGE_HAS_BINRAW_TYPE=1"],
+    sources=[
+        "protocols/plugins/subghz_garage_protocol_plugin_g4.c",
+        "protocols/protocols_common.c",
+        "protocols/raw.c",
+        "protocols/bin_raw.c",
+        "protocols/linear.c",
+        "protocols/linear_delta3.c",
+        "protocols/megacode.c",
+    ],
+    fal_embedded=True,
+)
+
+App(
+    appid="grp_g5",
+    apptype=FlipperAppType.PLUGIN,
+    entry_point="subghz_garage_protocol_plugin_g5_ep",
+    requires=["subghz_garage"],
+    cdefines=["SUBGHZ_GARAGE_RX_ONLY=1", "SUBGHZ_GARAGE_HAS_GENERIC_GLOBAL=1", "SUBGHZ_GARAGE_HAS_BINRAW_TYPE=1", "SUBGHZ_GARAGE_HAS_GENERIC_DATA2_SEED=1"],
+    sources=[
+        "protocols/plugins/subghz_garage_protocol_plugin_g5.c",
+        "protocols/protocols_common.c",
+        "protocols/raw.c",
+        "protocols/bin_raw.c",
+        "protocols/beninca_arc.c",
+        "protocols/came.c",
+        "protocols/came_atomo.c",
+        "protocols/came_twee.c",
+    ],
+    fal_embedded=True,
+)
+
+App(
+    appid="grp_g6",
+    apptype=FlipperAppType.PLUGIN,
+    entry_point="subghz_garage_protocol_plugin_g6_ep",
+    requires=["subghz_garage"],
+    cdefines=["SUBGHZ_GARAGE_RX_ONLY=1", "SUBGHZ_GARAGE_HAS_GENERIC_GLOBAL=1", "SUBGHZ_GARAGE_HAS_BINRAW_TYPE=1", "SUBGHZ_GARAGE_HAS_GENERIC_DATA2_SEED=1"],
+    sources=[
+        "protocols/plugins/subghz_garage_protocol_plugin_g6.c",
+        "protocols/protocols_common.c",
+        "protocols/raw.c",
+        "protocols/bin_raw.c",
+        "protocols/kinggates_stylo_4k.c",
+        "protocols/nice_flo.c",
+        "protocols/nice_flor_s.c",
+        "protocols/phoenix_v2.c",
+    ],
+    fal_embedded=True,
+)
+
+App(
+    appid="grp_g7",
+    apptype=FlipperAppType.PLUGIN,
+    entry_point="subghz_garage_protocol_plugin_g7_ep",
+    requires=["subghz_garage"],
+    cdefines=["SUBGHZ_GARAGE_RX_ONLY=1", "SUBGHZ_GARAGE_HAS_GENERIC_GLOBAL=1", "SUBGHZ_GARAGE_HAS_BINRAW_TYPE=1", "SUBGHZ_GARAGE_HAS_GENERIC_DATA2_SEED=1"],
+    sources=[
+        "protocols/plugins/subghz_garage_protocol_plugin_g7.c",
+        "protocols/protocols_common.c",
+        "protocols/raw.c",
+        "protocols/bin_raw.c",
+        "protocols/faac_slh.c",
+        "protocols/roger.c",
+        "protocols/doitrand.c",
+        "protocols/telcoma_edge.c",
+    ],
+    fal_embedded=True,
+)
+
+App(
+    appid="grp_g8",
+    apptype=FlipperAppType.PLUGIN,
+    entry_point="subghz_garage_protocol_plugin_g8_ep",
+    requires=["subghz_garage"],
+    cdefines=["SUBGHZ_GARAGE_RX_ONLY=1", "SUBGHZ_GARAGE_HAS_GENERIC_GLOBAL=1", "SUBGHZ_GARAGE_HAS_BINRAW_TYPE=1", "SUBGHZ_GARAGE_HAS_GENERIC_DATA2_SEED=1"],
+    sources=[
+        "protocols/plugins/subghz_garage_protocol_plugin_g8.c",
+        "protocols/protocols_common.c",
+        "protocols/raw.c",
+        "protocols/bin_raw.c",
+        "protocols/alutech_at_4n.c",
+        "protocols/ansonic.c",
+        "protocols/clemsa.c",
+        "protocols/mastercode.c",
+    ],
+    fal_embedded=True,
+)
+
+App(
+    appid="grp_g9",
+    apptype=FlipperAppType.PLUGIN,
+    entry_point="subghz_garage_protocol_plugin_g9_ep",
+    requires=["subghz_garage"],
+    cdefines=["SUBGHZ_GARAGE_RX_ONLY=1", "SUBGHZ_GARAGE_HAS_GENERIC_GLOBAL=1", "SUBGHZ_GARAGE_HAS_BINRAW_TYPE=1"],
+    sources=[
+        "protocols/plugins/subghz_garage_protocol_plugin_g9.c",
+        "protocols/protocols_common.c",
+        "protocols/raw.c",
+        "protocols/bin_raw.c",
+        "protocols/dickert_mahs.c",
+        "protocols/hormann.c",
+        "protocols/marantec.c",
+        "protocols/marantec24.c",
+    ],
+    fal_embedded=True,
+)
+
+App(
+    appid="grp_g10",
+    apptype=FlipperAppType.PLUGIN,
+    entry_point="subghz_garage_protocol_plugin_g10_ep",
+    requires=["subghz_garage"],
+    cdefines=["SUBGHZ_GARAGE_RX_ONLY=1", "SUBGHZ_GARAGE_HAS_GENERIC_GLOBAL=1", "SUBGHZ_GARAGE_HAS_BINRAW_TYPE=1"],
+    sources=[
+        "protocols/plugins/subghz_garage_protocol_plugin_g10.c",
+        "protocols/protocols_common.c",
+        "protocols/raw.c",
+        "protocols/bin_raw.c",
+        "protocols/gangqi.c",
+        "protocols/gate_tx.c",
+        "protocols/hay21.c",
+        "protocols/revers_rb2.c",
+    ],
+    fal_embedded=True,
+)
+
+App(
+    appid="grp_g11",
+    apptype=FlipperAppType.PLUGIN,
+    entry_point="subghz_garage_protocol_plugin_g11_ep",
+    requires=["subghz_garage"],
+    cdefines=["SUBGHZ_GARAGE_RX_ONLY=1", "SUBGHZ_GARAGE_HAS_GENERIC_GLOBAL=1", "SUBGHZ_GARAGE_HAS_BINRAW_TYPE=1", "SUBGHZ_GARAGE_HAS_GENERIC_DATA2_SEED=1"],
+    sources=[
+        "protocols/plugins/subghz_garage_protocol_plugin_g11.c",
+        "protocols/protocols_common.c",
+        "protocols/raw.c",
+        "protocols/bin_raw.c",
+        "protocols/somfy_telis.c",
+        "protocols/somfy_keytis.c",
+        "protocols/jarolift.c",
+        "protocols/dooya.c",
+    ],
+    fal_embedded=True,
+)
+
+# Groups 12 & 13 (new 2026-10-03): the four Unleashed gate decoders, split out of
+# g7 into their own groups so no single group's .fal exceeds the ~20 KB size
+# envelope (a group load costs ~15.5 KB heap at Read time). RX-only like the rest.
+App(
+    appid="grp_g12",
+    apptype=FlipperAppType.PLUGIN,
+    entry_point="subghz_garage_protocol_plugin_g12_ep",
+    requires=["subghz_garage"],
+    cdefines=["SUBGHZ_GARAGE_RX_ONLY=1", "SUBGHZ_GARAGE_HAS_GENERIC_GLOBAL=1", "SUBGHZ_GARAGE_HAS_BINRAW_TYPE=1"],
+    sources=[
+        "protocols/plugins/subghz_garage_protocol_plugin_g12.c",
+        "protocols/protocols_common.c",
+        "protocols/raw.c",
+        "protocols/bin_raw.c",
+        "protocols/nord_ice.c",
+        "protocols/allstar_firefly.c",
+        "protocols/prastel.c",
+    ],
+    fal_embedded=True,
+)
+
+App(
+    appid="grp_g13",
+    apptype=FlipperAppType.PLUGIN,
+    entry_point="subghz_garage_protocol_plugin_g13_ep",
+    requires=["subghz_garage"],
+    cdefines=["SUBGHZ_GARAGE_RX_ONLY=1", "SUBGHZ_GARAGE_HAS_GENERIC_GLOBAL=1", "SUBGHZ_GARAGE_HAS_BINRAW_TYPE=1"],
+    sources=[
+        "protocols/plugins/subghz_garage_protocol_plugin_g13.c",
+        "protocols/protocols_common.c",
+        "protocols/raw.c",
+        "protocols/bin_raw.c",
+        "protocols/ditec_gol4.c",
+        "protocols/doorbell32.c",
+    ],
+    fal_embedded=True,
+)
+
+# Each of Group 1's protocols (plus RAW/BinRAW, shared by every group) gets
+# its own tiny single-protocol TX plugin carrying just that one encoder -
+# the RX group plugin is compiled RX_ONLY (no encoders at all) to keep it
+# small, so replaying a captured/saved signal with "Send" loads one of
+# these instead, on demand, rather than needing the whole group's encoders
+# resident just for RX - mirroring ProtoPirate's RX/TX plugin split. See
+# subghz_txrx_ensure_tx_protocol_plugin() / subghz_garage_tx_protocol_for_name()
+# in helpers/subghz_txrx.c and protocols/protocol_groups.c.
+App(
+    appid="tx_alutech_at_4n",
+    apptype=FlipperAppType.PLUGIN,
+    entry_point="subghz_garage_tx_alutech_at_4n_plugin_ep",
+    requires=["subghz_garage"],
+    cdefines=["SUBGHZ_GARAGE_HAS_GENERIC_GLOBAL=1", "SUBGHZ_GARAGE_HAS_BINRAW_TYPE=1", "SUBGHZ_GARAGE_HAS_GENERIC_DATA2_SEED=1"],
+    sources=[
+        "protocols/plugins/subghz_garage_tx_alutech_at_4n_plugin.c",
+        "protocols/protocols_common.c",
+        "protocols/alutech_at_4n.c",
+    ],
+    fal_embedded=True,
+)
+
+App(
+    appid="tx_somfy_telis",
+    apptype=FlipperAppType.PLUGIN,
+    entry_point="subghz_garage_tx_somfy_telis_plugin_ep",
+    requires=["subghz_garage"],
+    cdefines=["SUBGHZ_GARAGE_HAS_GENERIC_GLOBAL=1", "SUBGHZ_GARAGE_HAS_BINRAW_TYPE=1"],
+    sources=[
+        "protocols/plugins/subghz_garage_tx_somfy_telis_plugin.c",
+        "protocols/protocols_common.c",
+        "protocols/somfy_telis.c",
+    ],
+    fal_embedded=True,
+)
+
+App(
+    appid="tx_jarolift",
+    apptype=FlipperAppType.PLUGIN,
+    entry_point="subghz_garage_tx_jarolift_plugin_ep",
+    requires=["subghz_garage"],
+    cdefines=["SUBGHZ_GARAGE_HAS_GENERIC_GLOBAL=1", "SUBGHZ_GARAGE_HAS_BINRAW_TYPE=1", "SUBGHZ_GARAGE_HAS_GENERIC_DATA2_SEED=1"],
+    sources=[
+        "protocols/plugins/subghz_garage_tx_jarolift_plugin.c",
+        "protocols/protocols_common.c",
+        "protocols/jarolift.c",
+    ],
+    fal_embedded=True,
+)
+
+# The rest of these protocols have no "Add Manually" entry, but their
+# encoders are stripped from the RX group plugins the same as the three
+# above, so a captured/saved signal still needs somewhere to find a real
+# one to be replayed with "Send" - see subghz_garage_tx_protocol_for_name().
+App(
+    appid="tx_nice_flo",
+    apptype=FlipperAppType.PLUGIN,
+    entry_point="subghz_garage_tx_nice_flo_plugin_ep",
+    requires=["subghz_garage"],
+    cdefines=["SUBGHZ_GARAGE_HAS_GENERIC_GLOBAL=1", "SUBGHZ_GARAGE_HAS_BINRAW_TYPE=1"],
+    sources=[
+        "protocols/plugins/subghz_garage_tx_nice_flo_plugin.c",
+        "protocols/protocols_common.c",
+        "protocols/nice_flo.c",
+    ],
+    fal_embedded=True,
+)
+
+App(
+    appid="tx_came_twee",
+    apptype=FlipperAppType.PLUGIN,
+    entry_point="subghz_garage_tx_came_twee_plugin_ep",
+    requires=["subghz_garage"],
+    cdefines=["SUBGHZ_GARAGE_HAS_GENERIC_GLOBAL=1", "SUBGHZ_GARAGE_HAS_BINRAW_TYPE=1"],
+    sources=[
+        "protocols/plugins/subghz_garage_tx_came_twee_plugin.c",
+        "protocols/protocols_common.c",
+        "protocols/came_twee.c",
+    ],
+    fal_embedded=True,
+)
+
+App(
+    appid="tx_secplus_v1",
+    apptype=FlipperAppType.PLUGIN,
+    entry_point="subghz_garage_tx_secplus_v1_plugin_ep",
+    requires=["subghz_garage"],
+    cdefines=["SUBGHZ_GARAGE_HAS_GENERIC_GLOBAL=1", "SUBGHZ_GARAGE_HAS_BINRAW_TYPE=1"],
+    sources=[
+        "protocols/plugins/subghz_garage_tx_secplus_v1_plugin.c",
+        "protocols/protocols_common.c",
+        "protocols/secplus_v1.c",
+    ],
+    fal_embedded=True,
+)
+
+App(
+    appid="tx_smc5326",
+    apptype=FlipperAppType.PLUGIN,
+    entry_point="subghz_garage_tx_smc5326_plugin_ep",
+    requires=["subghz_garage"],
+    cdefines=["SUBGHZ_GARAGE_HAS_GENERIC_GLOBAL=1", "SUBGHZ_GARAGE_HAS_BINRAW_TYPE=1"],
+    sources=[
+        "protocols/plugins/subghz_garage_tx_smc5326_plugin.c",
+        "protocols/protocols_common.c",
+        "protocols/smc5326.c",
+    ],
+    fal_embedded=True,
+)
+
+App(
+    appid="tx_dickert_mahs",
+    apptype=FlipperAppType.PLUGIN,
+    entry_point="subghz_garage_tx_dickert_mahs_plugin_ep",
+    requires=["subghz_garage"],
+    cdefines=["SUBGHZ_GARAGE_HAS_GENERIC_GLOBAL=1", "SUBGHZ_GARAGE_HAS_BINRAW_TYPE=1"],
+    sources=[
+        "protocols/plugins/subghz_garage_tx_dickert_mahs_plugin.c",
+        "protocols/protocols_common.c",
+        "protocols/dickert_mahs.c",
+    ],
+    fal_embedded=True,
+)
+
+App(
+    appid="tx_roger",
+    apptype=FlipperAppType.PLUGIN,
+    entry_point="subghz_garage_tx_roger_plugin_ep",
+    requires=["subghz_garage"],
+    cdefines=["SUBGHZ_GARAGE_HAS_GENERIC_GLOBAL=1", "SUBGHZ_GARAGE_HAS_BINRAW_TYPE=1"],
+    sources=[
+        "protocols/plugins/subghz_garage_tx_roger_plugin.c",
+        "protocols/protocols_common.c",
+        "protocols/roger.c",
+    ],
+    fal_embedded=True,
+)
+
+App(
+    appid="tx_keyfinder",
+    apptype=FlipperAppType.PLUGIN,
+    entry_point="subghz_garage_tx_keyfinder_plugin_ep",
+    requires=["subghz_garage"],
+    cdefines=["SUBGHZ_GARAGE_HAS_GENERIC_GLOBAL=1", "SUBGHZ_GARAGE_HAS_BINRAW_TYPE=1"],
+    sources=[
+        "protocols/plugins/subghz_garage_tx_keyfinder_plugin.c",
+        "protocols/protocols_common.c",
+        "protocols/keyfinder.c",
+    ],
+    fal_embedded=True,
+)
+
+App(
+    appid="tx_keyfinder2",
+    apptype=FlipperAppType.PLUGIN,
+    entry_point="subghz_garage_tx_keyfinder2_plugin_ep",
+    requires=["subghz_garage"],
+    cdefines=["SUBGHZ_GARAGE_HAS_GENERIC_GLOBAL=1", "SUBGHZ_GARAGE_HAS_BINRAW_TYPE=1"],
+    sources=[
+        "protocols/plugins/subghz_garage_tx_keyfinder2_plugin.c",
+        "protocols/protocols_common.c",
+        "protocols/keyfinder2.c",
+    ],
+    fal_embedded=True,
+)
+
+App(
+    appid="tx_doorbell32",
+    apptype=FlipperAppType.PLUGIN,
+    entry_point="subghz_garage_tx_doorbell32_plugin_ep",
+    requires=["subghz_garage"],
+    cdefines=["SUBGHZ_GARAGE_HAS_GENERIC_GLOBAL=1", "SUBGHZ_GARAGE_HAS_BINRAW_TYPE=1"],
+    sources=[
+        "protocols/plugins/subghz_garage_tx_doorbell32_plugin.c",
+        "protocols/protocols_common.c",
+        "protocols/doorbell32.c",
+    ],
+    fal_embedded=True,
+)
+
+App(
+    appid="tx_secplus_v2",
+    apptype=FlipperAppType.PLUGIN,
+    entry_point="subghz_garage_tx_secplus_v2_plugin_ep",
+    requires=["subghz_garage"],
+    cdefines=["SUBGHZ_GARAGE_HAS_GENERIC_GLOBAL=1", "SUBGHZ_GARAGE_HAS_BINRAW_TYPE=1"],
+    sources=[
+        "protocols/plugins/subghz_garage_tx_secplus_v2_plugin.c",
+        "protocols/protocols_common.c",
+        "protocols/secplus_v2.c",
+    ],
+    fal_embedded=True,
+)
+
+App(
+    appid="tx_princeton",
+    apptype=FlipperAppType.PLUGIN,
+    entry_point="subghz_garage_tx_princeton_plugin_ep",
+    requires=["subghz_garage"],
+    cdefines=["SUBGHZ_GARAGE_HAS_GENERIC_GLOBAL=1", "SUBGHZ_GARAGE_HAS_BINRAW_TYPE=1"],
+    sources=[
+        "protocols/plugins/subghz_garage_tx_princeton_plugin.c",
+        "protocols/protocols_common.c",
+        "protocols/princeton.c",
+    ],
+    fal_embedded=True,
+)
+
+App(
+    appid="tx_gangqi",
+    apptype=FlipperAppType.PLUGIN,
+    entry_point="subghz_garage_tx_gangqi_plugin_ep",
+    requires=["subghz_garage"],
+    cdefines=["SUBGHZ_GARAGE_HAS_GENERIC_GLOBAL=1", "SUBGHZ_GARAGE_HAS_BINRAW_TYPE=1"],
+    sources=[
+        "protocols/plugins/subghz_garage_tx_gangqi_plugin.c",
+        "protocols/protocols_common.c",
+        "protocols/gangqi.c",
+    ],
+    fal_embedded=True,
+)
+
+App(
+    appid="tx_hay21",
+    apptype=FlipperAppType.PLUGIN,
+    entry_point="subghz_garage_tx_hay21_plugin_ep",
+    requires=["subghz_garage"],
+    cdefines=["SUBGHZ_GARAGE_HAS_GENERIC_GLOBAL=1", "SUBGHZ_GARAGE_HAS_BINRAW_TYPE=1"],
+    sources=[
+        "protocols/plugins/subghz_garage_tx_hay21_plugin.c",
+        "protocols/protocols_common.c",
+        "protocols/hay21.c",
+    ],
+    fal_embedded=True,
+)
+
+App(
+    appid="tx_dooya",
+    apptype=FlipperAppType.PLUGIN,
+    entry_point="subghz_garage_tx_dooya_plugin_ep",
+    requires=["subghz_garage"],
+    cdefines=["SUBGHZ_GARAGE_HAS_GENERIC_GLOBAL=1", "SUBGHZ_GARAGE_HAS_BINRAW_TYPE=1"],
+    sources=[
+        "protocols/plugins/subghz_garage_tx_dooya_plugin.c",
+        "protocols/protocols_common.c",
+        "protocols/dooya.c",
+    ],
+    fal_embedded=True,
+)
+
+App(
+    appid="tx_holtek",
+    apptype=FlipperAppType.PLUGIN,
+    entry_point="subghz_garage_tx_holtek_plugin_ep",
+    requires=["subghz_garage"],
+    cdefines=["SUBGHZ_GARAGE_HAS_GENERIC_GLOBAL=1", "SUBGHZ_GARAGE_HAS_BINRAW_TYPE=1"],
+    sources=[
+        "protocols/plugins/subghz_garage_tx_holtek_plugin.c",
+        "protocols/protocols_common.c",
+        "protocols/holtek.c",
+    ],
+    fal_embedded=True,
+)
+
+App(
+    appid="tx_came",
+    apptype=FlipperAppType.PLUGIN,
+    entry_point="subghz_garage_tx_came_plugin_ep",
+    requires=["subghz_garage"],
+    cdefines=["SUBGHZ_GARAGE_HAS_GENERIC_GLOBAL=1", "SUBGHZ_GARAGE_HAS_BINRAW_TYPE=1"],
+    sources=[
+        "protocols/plugins/subghz_garage_tx_came_plugin.c",
+        "protocols/protocols_common.c",
+        "protocols/came.c",
+    ],
+    fal_embedded=True,
+)
+
+App(
+    appid="tx_nice_flor_s",
+    apptype=FlipperAppType.PLUGIN,
+    entry_point="subghz_garage_tx_nice_flor_s_plugin_ep",
+    requires=["subghz_garage"],
+    cdefines=["SUBGHZ_GARAGE_HAS_GENERIC_GLOBAL=1", "SUBGHZ_GARAGE_HAS_BINRAW_TYPE=1", "SUBGHZ_GARAGE_HAS_GENERIC_DATA2_SEED=1"],
+    sources=[
+        "protocols/plugins/subghz_garage_tx_nice_flor_s_plugin.c",
+        "protocols/protocols_common.c",
+        "protocols/nice_flor_s.c",
+    ],
+    fal_embedded=True,
+)
+
+App(
+    appid="tx_beninca_arc",
+    apptype=FlipperAppType.PLUGIN,
+    entry_point="subghz_garage_tx_beninca_arc_plugin_ep",
+    requires=["subghz_garage"],
+    cdefines=["SUBGHZ_GARAGE_HAS_GENERIC_GLOBAL=1", "SUBGHZ_GARAGE_HAS_BINRAW_TYPE=1", "SUBGHZ_GARAGE_HAS_GENERIC_DATA2_SEED=1"],
+    sources=[
+        "protocols/plugins/subghz_garage_tx_beninca_arc_plugin.c",
+        "protocols/protocols_common.c",
+        "protocols/beninca_arc.c",
+    ],
+    fal_embedded=True,
+)
+
+App(
+    appid="tx_marantec",
+    apptype=FlipperAppType.PLUGIN,
+    entry_point="subghz_garage_tx_marantec_plugin_ep",
+    requires=["subghz_garage"],
+    cdefines=["SUBGHZ_GARAGE_HAS_GENERIC_GLOBAL=1", "SUBGHZ_GARAGE_HAS_BINRAW_TYPE=1"],
+    sources=[
+        "protocols/plugins/subghz_garage_tx_marantec_plugin.c",
+        "protocols/protocols_common.c",
+        "protocols/marantec.c",
+    ],
+    fal_embedded=True,
+)
+
+App(
+    appid="tx_holtek_ht12x",
+    apptype=FlipperAppType.PLUGIN,
+    entry_point="subghz_garage_tx_holtek_ht12x_plugin_ep",
+    requires=["subghz_garage"],
+    cdefines=["SUBGHZ_GARAGE_HAS_GENERIC_GLOBAL=1", "SUBGHZ_GARAGE_HAS_BINRAW_TYPE=1"],
+    sources=[
+        "protocols/plugins/subghz_garage_tx_holtek_ht12x_plugin.c",
+        "protocols/protocols_common.c",
+        "protocols/holtek_ht12x.c",
+    ],
+    fal_embedded=True,
+)
+
+App(
+    appid="tx_revers_rb2",
+    apptype=FlipperAppType.PLUGIN,
+    entry_point="subghz_garage_tx_revers_rb2_plugin_ep",
+    requires=["subghz_garage"],
+    cdefines=["SUBGHZ_GARAGE_HAS_GENERIC_GLOBAL=1", "SUBGHZ_GARAGE_HAS_BINRAW_TYPE=1"],
+    sources=[
+        "protocols/plugins/subghz_garage_tx_revers_rb2_plugin.c",
+        "protocols/protocols_common.c",
+        "protocols/revers_rb2.c",
+    ],
+    fal_embedded=True,
+)
+
+App(
+    appid="tx_megacode",
+    apptype=FlipperAppType.PLUGIN,
+    entry_point="subghz_garage_tx_megacode_plugin_ep",
+    requires=["subghz_garage"],
+    cdefines=["SUBGHZ_GARAGE_HAS_GENERIC_GLOBAL=1", "SUBGHZ_GARAGE_HAS_BINRAW_TYPE=1"],
+    sources=[
+        "protocols/plugins/subghz_garage_tx_megacode_plugin.c",
+        "protocols/protocols_common.c",
+        "protocols/megacode.c",
+    ],
+    fal_embedded=True,
+)
+
+App(
+    appid="tx_marantec24",
+    apptype=FlipperAppType.PLUGIN,
+    entry_point="subghz_garage_tx_marantec24_plugin_ep",
+    requires=["subghz_garage"],
+    cdefines=["SUBGHZ_GARAGE_HAS_GENERIC_GLOBAL=1", "SUBGHZ_GARAGE_HAS_BINRAW_TYPE=1"],
+    sources=[
+        "protocols/plugins/subghz_garage_tx_marantec24_plugin.c",
+        "protocols/protocols_common.c",
+        "protocols/marantec24.c",
+    ],
+    fal_embedded=True,
+)
+
+App(
+    appid="tx_faac_slh",
+    apptype=FlipperAppType.PLUGIN,
+    entry_point="subghz_garage_tx_faac_slh_plugin_ep",
+    requires=["subghz_garage"],
+    cdefines=["SUBGHZ_GARAGE_HAS_GENERIC_GLOBAL=1", "SUBGHZ_GARAGE_HAS_BINRAW_TYPE=1", "SUBGHZ_GARAGE_HAS_GENERIC_DATA2_SEED=1"],
+    sources=[
+        "protocols/plugins/subghz_garage_tx_faac_slh_plugin.c",
+        "protocols/protocols_common.c",
+        "protocols/faac_slh.c",
+    ],
+    fal_embedded=True,
+)
+
+App(
+    appid="tx_came_atomo",
+    apptype=FlipperAppType.PLUGIN,
+    entry_point="subghz_garage_tx_came_atomo_plugin_ep",
+    requires=["subghz_garage"],
+    cdefines=["SUBGHZ_GARAGE_HAS_GENERIC_GLOBAL=1", "SUBGHZ_GARAGE_HAS_BINRAW_TYPE=1", "SUBGHZ_GARAGE_HAS_GENERIC_DATA2_SEED=1"],
+    sources=[
+        "protocols/plugins/subghz_garage_tx_came_atomo_plugin.c",
+        "protocols/protocols_common.c",
+        "protocols/came_atomo.c",
+    ],
+    fal_embedded=True,
+)
+
+App(
+    appid="tx_chamb_code",
+    apptype=FlipperAppType.PLUGIN,
+    entry_point="subghz_garage_tx_chamb_code_plugin_ep",
+    requires=["subghz_garage"],
+    cdefines=["SUBGHZ_GARAGE_HAS_GENERIC_GLOBAL=1", "SUBGHZ_GARAGE_HAS_BINRAW_TYPE=1"],
+    sources=[
+        "protocols/plugins/subghz_garage_tx_chamb_code_plugin.c",
+        "protocols/protocols_common.c",
+        "protocols/chamberlain_code.c",
+    ],
+    fal_embedded=True,
+)
+
+App(
+    appid="tx_mastercode",
+    apptype=FlipperAppType.PLUGIN,
+    entry_point="subghz_garage_tx_mastercode_plugin_ep",
+    requires=["subghz_garage"],
+    cdefines=["SUBGHZ_GARAGE_HAS_GENERIC_GLOBAL=1", "SUBGHZ_GARAGE_HAS_BINRAW_TYPE=1"],
+    sources=[
+        "protocols/plugins/subghz_garage_tx_mastercode_plugin.c",
+        "protocols/protocols_common.c",
+        "protocols/mastercode.c",
+    ],
+    fal_embedded=True,
+)
+
+App(
+    appid="tx_linear",
+    apptype=FlipperAppType.PLUGIN,
+    entry_point="subghz_garage_tx_linear_plugin_ep",
+    requires=["subghz_garage"],
+    cdefines=["SUBGHZ_GARAGE_HAS_GENERIC_GLOBAL=1", "SUBGHZ_GARAGE_HAS_BINRAW_TYPE=1"],
+    sources=[
+        "protocols/plugins/subghz_garage_tx_linear_plugin.c",
+        "protocols/protocols_common.c",
+        "protocols/linear.c",
+    ],
+    fal_embedded=True,
+)
+
+App(
+    appid="tx_linear_delta3",
+    apptype=FlipperAppType.PLUGIN,
+    entry_point="subghz_garage_tx_linear_delta3_plugin_ep",
+    requires=["subghz_garage"],
+    cdefines=["SUBGHZ_GARAGE_HAS_GENERIC_GLOBAL=1", "SUBGHZ_GARAGE_HAS_BINRAW_TYPE=1"],
+    sources=[
+        "protocols/plugins/subghz_garage_tx_linear_delta3_plugin.c",
+        "protocols/protocols_common.c",
+        "protocols/linear_delta3.c",
+    ],
+    fal_embedded=True,
+)
+
+App(
+    appid="tx_gate_tx",
+    apptype=FlipperAppType.PLUGIN,
+    entry_point="subghz_garage_tx_gate_tx_plugin_ep",
+    requires=["subghz_garage"],
+    cdefines=["SUBGHZ_GARAGE_HAS_GENERIC_GLOBAL=1", "SUBGHZ_GARAGE_HAS_BINRAW_TYPE=1"],
+    sources=[
+        "protocols/plugins/subghz_garage_tx_gate_tx_plugin.c",
+        "protocols/protocols_common.c",
+        "protocols/gate_tx.c",
+    ],
+    fal_embedded=True,
+)
+
+App(
+    appid="tx_kinggates_stylo_4k",
+    apptype=FlipperAppType.PLUGIN,
+    entry_point="subghz_garage_tx_kinggates_stylo_4k_plugin_ep",
+    requires=["subghz_garage"],
+    cdefines=["SUBGHZ_GARAGE_HAS_GENERIC_GLOBAL=1", "SUBGHZ_GARAGE_HAS_BINRAW_TYPE=1", "SUBGHZ_GARAGE_HAS_GENERIC_DATA2_SEED=1"],
+    sources=[
+        "protocols/plugins/subghz_garage_tx_kinggates_stylo_4k_plugin.c",
+        "protocols/protocols_common.c",
+        "protocols/kinggates_stylo_4k.c",
+    ],
+    fal_embedded=True,
+)
+
+App(
+    appid="tx_somfy_keytis",
+    apptype=FlipperAppType.PLUGIN,
+    entry_point="subghz_garage_tx_somfy_keytis_plugin_ep",
+    requires=["subghz_garage"],
+    cdefines=["SUBGHZ_GARAGE_HAS_GENERIC_GLOBAL=1", "SUBGHZ_GARAGE_HAS_BINRAW_TYPE=1", "SUBGHZ_GARAGE_HAS_GENERIC_DATA2_SEED=1"],
+    sources=[
+        "protocols/plugins/subghz_garage_tx_somfy_keytis_plugin.c",
+        "protocols/protocols_common.c",
+        "protocols/somfy_keytis.c",
+    ],
+    fal_embedded=True,
+)
+
+App(
+    appid="tx_phoenix_v2",
+    apptype=FlipperAppType.PLUGIN,
+    entry_point="subghz_garage_tx_phoenix_v2_plugin_ep",
+    requires=["subghz_garage"],
+    cdefines=["SUBGHZ_GARAGE_HAS_GENERIC_GLOBAL=1", "SUBGHZ_GARAGE_HAS_BINRAW_TYPE=1"],
+    sources=[
+        "protocols/plugins/subghz_garage_tx_phoenix_v2_plugin.c",
+        "protocols/protocols_common.c",
+        "protocols/phoenix_v2.c",
+    ],
+    fal_embedded=True,
+)
+
+App(
+    appid="tx_clemsa",
+    apptype=FlipperAppType.PLUGIN,
+    entry_point="subghz_garage_tx_clemsa_plugin_ep",
+    requires=["subghz_garage"],
+    cdefines=["SUBGHZ_GARAGE_HAS_GENERIC_GLOBAL=1", "SUBGHZ_GARAGE_HAS_BINRAW_TYPE=1"],
+    sources=[
+        "protocols/plugins/subghz_garage_tx_clemsa_plugin.c",
+        "protocols/protocols_common.c",
+        "protocols/clemsa.c",
+    ],
+    fal_embedded=True,
+)
+
+App(
+    appid="tx_ansonic",
+    apptype=FlipperAppType.PLUGIN,
+    entry_point="subghz_garage_tx_ansonic_plugin_ep",
+    requires=["subghz_garage"],
+    cdefines=["SUBGHZ_GARAGE_HAS_GENERIC_GLOBAL=1", "SUBGHZ_GARAGE_HAS_BINRAW_TYPE=1"],
+    sources=[
+        "protocols/plugins/subghz_garage_tx_ansonic_plugin.c",
+        "protocols/protocols_common.c",
+        "protocols/ansonic.c",
+    ],
+    fal_embedded=True,
+)
+
+App(
+    appid="tx_doitrand",
+    apptype=FlipperAppType.PLUGIN,
+    entry_point="subghz_garage_tx_doitrand_plugin_ep",
+    requires=["subghz_garage"],
+    cdefines=["SUBGHZ_GARAGE_HAS_GENERIC_GLOBAL=1", "SUBGHZ_GARAGE_HAS_BINRAW_TYPE=1"],
+    sources=[
+        "protocols/plugins/subghz_garage_tx_doitrand_plugin.c",
+        "protocols/protocols_common.c",
+        "protocols/doitrand.c",
+    ],
+    fal_embedded=True,
+)
+
+App(
+    appid="tx_hormann",
+    apptype=FlipperAppType.PLUGIN,
+    entry_point="subghz_garage_tx_hormann_plugin_ep",
+    requires=["subghz_garage"],
+    cdefines=["SUBGHZ_GARAGE_HAS_GENERIC_GLOBAL=1", "SUBGHZ_GARAGE_HAS_BINRAW_TYPE=1"],
+    sources=[
+        "protocols/plugins/subghz_garage_tx_hormann_plugin.c",
+        "protocols/protocols_common.c",
+        "protocols/hormann.c",
+    ],
+    fal_embedded=True,
+)
+
+App(
+    appid="tx_x10",
+    apptype=FlipperAppType.PLUGIN,
+    entry_point="subghz_garage_tx_x10_plugin_ep",
+    requires=["subghz_garage"],
+    cdefines=["SUBGHZ_GARAGE_HAS_GENERIC_GLOBAL=1", "SUBGHZ_GARAGE_HAS_BINRAW_TYPE=1"],
+    sources=[
+        "protocols/plugins/subghz_garage_tx_x10_plugin.c",
+        "protocols/protocols_common.c",
+        "protocols/x10.c",
+    ],
+    fal_embedded=True,
+)
+
+App(
+    appid="tx_telcoma_edge",
+    apptype=FlipperAppType.PLUGIN,
+    entry_point="subghz_garage_tx_telcoma_edge_plugin_ep",
+    requires=["subghz_garage"],
+    cdefines=["SUBGHZ_GARAGE_HAS_GENERIC_GLOBAL=1", "SUBGHZ_GARAGE_HAS_BINRAW_TYPE=1"],
+    sources=[
+        "protocols/plugins/subghz_garage_tx_telcoma_edge_plugin.c",
+        "protocols/protocols_common.c",
+        "protocols/telcoma_edge.c",
+    ],
+    fal_embedded=True,
+)
+
+# RAW and BinRAW are compiled into every group (g1-g5), not just group 1, so
+# stripping their encoders out the same way saves space across all 5.
+App(
+    appid="tx_raw",
+    apptype=FlipperAppType.PLUGIN,
+    entry_point="subghz_garage_tx_raw_plugin_ep",
+    requires=["subghz_garage"],
+    cdefines=["SUBGHZ_GARAGE_HAS_GENERIC_GLOBAL=1", "SUBGHZ_GARAGE_HAS_BINRAW_TYPE=1"],
+    sources=[
+        "protocols/plugins/subghz_garage_tx_raw_plugin.c",
+        "protocols/protocols_common.c",
+        "protocols/raw.c",
+    ],
+    fal_embedded=True,
+)
+
+App(
+    appid="tx_bin_raw",
+    apptype=FlipperAppType.PLUGIN,
+    entry_point="subghz_garage_tx_bin_raw_plugin_ep",
+    requires=["subghz_garage"],
+    cdefines=["SUBGHZ_GARAGE_HAS_GENERIC_GLOBAL=1", "SUBGHZ_GARAGE_HAS_BINRAW_TYPE=1"],
+    sources=[
+        "protocols/plugins/subghz_garage_tx_bin_raw_plugin.c",
+        "protocols/protocols_common.c",
+        "protocols/bin_raw.c",
+    ],
+    fal_embedded=True,
+)

@@ -1,9 +1,6 @@
 # SubGHz BruteForcer Application for Flipper Zero
 
-![image](https://github.com/DarkFlippers/flipperzero-subbrute/assets/31771569/0a952559-94c0-40b7-8b9c-9ee4e37c6cd6)
-
-
-SubGhz BruteForcer from [Unleashed Firmware](https://github.com/DarkFlippers/unleashed-firmware)
+SubGhz BruteForcer bundled with [The Doctor's Firmware](https://github.com/thedoctorz/doctor-firmware)
 
 ## Disclaimer
 
@@ -14,14 +11,14 @@ We do not condone illegal activity and strongly encourage keeping transmissions 
 
 ## Installation
 
-The application is included in the standard firmware package of [Unleashed Firmware](https://github.com/DarkFlippers/unleashed-firmware).
-You just need to install the [latest firmware](https://github.com/DarkFlippers/unleashed-firmware/releases/latest).
+The application is included in the standard firmware package of [The Doctor's Firmware](https://github.com/thedoctorz/doctor-firmware).
+You just need to install the [latest firmware](https://github.com/thedoctorz/doctor-firmware/releases/latest).
 <br />
-You can also download the [release](https://github.com/derskythe/flipperzero-subbrute/releases/latest) and unzip/untar it to the `SD Card/apps/Sub-GHz` directory.
+You can also download a standalone release and unzip/untar it to the `SD Card/apps/Sub-GHz` directory.
 <br />
 > [!WARNING]
 >
-> The application has not been tested on other firmware versions other than [Unleashed Firmware](https://github.com/DarkFlippers/unleashed-firmware)
+> The application is tested with [The Doctor's Firmware](https://github.com/thedoctorz/doctor-firmware)
 > and [OFW](https://github.com/flipperdevices/flipperzero-firmware).
 
 ---
@@ -30,8 +27,6 @@ You can also download the [release](https://github.com/derskythe/flipperzero-sub
 
 ### Main Menu
 
-![image](https://github.com/DarkFlippers/flipperzero-subbrute/assets/31771569/9f428d6e-59fd-4517-895d-fb185f8d884f)
-
 <p>Here you can select the protocol and frequency that will be used for bruteforce.</p>
 <p>According to our observations, <code>CAME 12bit 433MHz</code> is the most common protocol, so it is selected by default.</p>
 <p></p>To identify other devices and protocols you should inspect the device.</p>
@@ -39,8 +34,6 @@ You can also download the [release](https://github.com/derskythe/flipperzero-sub
 For most of the devices this works but there are devices that don't work and more repetitions are needed.</p>
 <p>The number of repetitions can be increased with the right button, the left button decreases the value.</p>
 <p>But negative side of increasing the number of repetitions will be a longer key find time.</p>
-
-![image](https://github.com/DarkFlippers/flipperzero-subbrute/assets/31771569/a17695d0-833d-44ce-a0d0-ead8366cb4fe)
 
 ---
 
@@ -58,9 +51,6 @@ For most of the devices this works but there are devices that don't work and mor
 ---
 
 ## Supported Protocols
-
-![image](https://github.com/DarkFlippers/flipperzero-subbrute/assets/31771569/1f14b5eb-7e66-4b37-b816-34fab63db70c)
-
 
 ### CAME
 

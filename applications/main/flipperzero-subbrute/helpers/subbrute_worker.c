@@ -14,14 +14,11 @@
 
 SubBruteWorker* subbrute_worker_alloc(const SubGhzDevice* radio_device) {
     SubBruteWorker* instance = malloc(sizeof(SubBruteWorker));
+    memset(instance, 0, sizeof(SubBruteWorker));
 
     instance->state = SubBruteWorkerStateIDLE;
-    instance->step = 0;
-    instance->worker_running = false;
-    instance->initiated = false;
-    instance->last_time_tx_data = 0;
-    instance->load_index = 0;
-    instance->opencode = 0;
+    instance->radio_device = radio_device;
+    instance->tx_timeout_ms = SUBBRUTE_TX_TIMEOUT;
 
     instance->thread = furi_thread_alloc();
     furi_thread_set_name(instance->thread, "SubBruteAttackWorker");
@@ -29,19 +26,9 @@ SubBruteWorker* subbrute_worker_alloc(const SubGhzDevice* radio_device) {
     furi_thread_set_context(instance->thread, instance);
     furi_thread_set_callback(instance->thread, subbrute_worker_thread);
 
-    instance->context = NULL;
-    instance->callback = NULL;
-
-    instance->tx_timeout_ms = SUBBRUTE_TX_TIMEOUT;
-    instance->decoder_result = NULL;
-    instance->transmitter = NULL;
     instance->environment = subghz_environment_alloc();
     subghz_environment_set_protocol_registry(
         instance->environment, (void*)&subghz_protocol_registry);
-
-    instance->transmit_mode = false;
-
-    instance->radio_device = radio_device;
 
     return instance;
 }
@@ -49,7 +36,9 @@ SubBruteWorker* subbrute_worker_alloc(const SubGhzDevice* radio_device) {
 void subbrute_worker_free(SubBruteWorker* instance) {
     furi_assert(instance);
 
-    // I don't know how to free this
+    FURI_LOG_I(TAG, "free: begin");
+    subbrute_worker_stop(instance);
+
     instance->decoder_result = NULL;
 
     if(instance->transmitter != NULL) {
@@ -60,11 +49,15 @@ void subbrute_worker_free(SubBruteWorker* instance) {
     subghz_environment_free(instance->environment);
     instance->environment = NULL;
 
+    FURI_LOG_I(TAG, "free: thread_free");
     furi_thread_free(instance->thread);
 
-    subghz_devices_sleep(instance->radio_device);
-    subbrute_radio_device_loader_end(instance->radio_device);
+    FURI_LOG_I(TAG, "free: radio end");
+    if(instance->radio_device) {
+        subbrute_radio_device_loader_end(instance->radio_device);
+    }
 
+    FURI_LOG_I(TAG, "free: done");
     free(instance);
 }
 
@@ -238,14 +231,23 @@ bool subbrute_worker_start(SubBruteWorker* instance) {
 void subbrute_worker_stop(SubBruteWorker* instance) {
     furi_assert(instance);
 
-    if(!instance->worker_running) {
-        return;
+    FuriThreadState thr = furi_thread_get_state(instance->thread);
+    FURI_LOG_I(
+        TAG,
+        "stop: thr=%d run=%d async=%d",
+        (int)thr,
+        instance->worker_running,
+        instance->async_tx_active);
+    instance->callback = NULL;
+    instance->context = NULL;
+    instance->worker_running = false;
+
+    if(thr != FuriThreadStateStopped) {
+        furi_thread_join(instance->thread);
+        FURI_LOG_I(TAG, "stop: joined");
     }
 
-    instance->worker_running = false;
-    furi_thread_join(instance->thread);
-
-    subghz_devices_idle(instance->radio_device);
+    instance->async_tx_active = false;
 }
 
 bool subbrute_worker_transmit_current_key(SubBruteWorker* instance, uint64_t step) {
@@ -343,17 +345,22 @@ void subbrute_worker_set_callback(
 }
 
 void subbrute_worker_subghz_transmit(SubBruteWorker* instance, FlipperFormat* flipper_format) {
-    const uint8_t timeout = instance->tx_timeout_ms;
+    const uint8_t timeout = instance->tx_timeout_ms ? instance->tx_timeout_ms : 1;
+    uint32_t lock_guard = 0;
+    const uint32_t lock_guard_max = 3000 / timeout;
     while(instance->transmit_mode) {
         furi_delay_ms(timeout);
+        if(++lock_guard >= lock_guard_max) {
+            FURI_LOG_E(TAG, "transmit_mode stuck, forcing unlock");
+            instance->transmit_mode = false;
+            break;
+        }
     }
     instance->transmit_mode = true;
     if(instance->transmitter != NULL) {
         subghz_transmitter_free(instance->transmitter);
         instance->transmitter = NULL;
     }
-
-    // instance->protocol_name = subbrute_protocol_file(instance->file);
 
     instance->transmitter =
         subghz_transmitter_alloc_init(instance->environment, instance->protocol_name);
@@ -366,12 +373,18 @@ void subbrute_worker_subghz_transmit(SubBruteWorker* instance, FlipperFormat* fl
         instance->radio_device, instance->frequency); // TODO is freq valid check
 
     if(subghz_devices_set_tx(instance->radio_device)) {
-        subghz_devices_start_async_tx(
-            instance->radio_device, subghz_transmitter_yield, instance->transmitter);
-        while(!subghz_devices_is_async_complete_tx(instance->radio_device)) {
-            furi_delay_ms(timeout);
+        if(subghz_devices_start_async_tx(
+               instance->radio_device, subghz_transmitter_yield, instance->transmitter)) {
+            instance->async_tx_active = true;
+            uint32_t tx_guard = 0;
+            const uint32_t tx_guard_max = 3000 / timeout;
+            while(!subghz_devices_is_async_complete_tx(instance->radio_device)) {
+                furi_delay_ms(timeout);
+                if(++tx_guard >= tx_guard_max) break;
+            }
+            subghz_devices_stop_async_tx(instance->radio_device);
+            instance->async_tx_active = false;
         }
-        subghz_devices_stop_async_tx(instance->radio_device);
     }
 
     subghz_devices_idle(instance->radio_device);
@@ -384,7 +397,6 @@ void subbrute_worker_subghz_transmit(SubBruteWorker* instance, FlipperFormat* fl
 
     Stream* stream = flipper_format_get_raw_stream(flipper_format);
     stream_rewind(stream);
-    //test_read_full_stream(stream, "Transmit data");
 
     subghz_custom_btns_reset();
 }

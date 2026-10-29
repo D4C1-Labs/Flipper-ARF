@@ -25,15 +25,15 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        firmware: [unlshd, official]
+        firmware: [doctors, official]
         include:
-          - firmware: unlshd
-            url: ${{ vars.REPO_UNLEASHED }}
+          - firmware: doctors
+            url: ${{ vars.REPO_FIRMWARE }}
           - firmware: official
             url: ${{ vars.REPO_OFFICIAL }}
     steps:
       - name: Copy Firmware Files
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
         with:
           repository: ${{ matrix.url }}
           clean: true
@@ -41,7 +41,7 @@ jobs:
           ref: dev
 
       - name: Copy Repo Files
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
         with:
           repository: ${{ vars.REPO_SELF }}
           clean: true

@@ -1,0 +1,53 @@
+# to use manual settings and prevent them from being deleted on upgrade, rename *_user.example files to *_user
+Filetype: Flipper SubGhz Setting File
+Version: 1
+# Add Standard frequencies included with firmware and place user frequencies after them
+Add_standard_frequencies: true
+
+# Default Frequency: used as default for "Read" and "Read Raw"
+#Default_frequency: 433920000
+
+# Extra 433/434MHz-band frequencies not already in the firmware's standard
+# list above (Add_standard_frequencies covers the other 62 for free - see
+# lib/subghz/subghz_setting.c's subghz_frequency_list - no need to repeat
+# them here, that only wastes RAM on duplicate list nodes).
+Frequency: 433594000
+Frequency: 433650000
+Frequency: 433653000
+Frequency: 433657000
+Frequency: 433880000
+Frequency: 433890000
+Frequency: 433900000
+Frequency: 433910000
+Frequency: 433930000
+Frequency: 433940000
+Frequency: 433950000
+Frequency: 433960000
+Frequency: 434070000
+Frequency: 434170000
+Frequency: 434258000
+Frequency: 440170000
+
+# Hopper frequencies: no Hopper_frequency lines needed here - the firmware's
+# 6 standard hopper frequencies (315/390/430.5/433.92/434.42/868.35MHz) are
+# exactly what this app wants, already included via Add_standard_frequencies.
+
+# Presets used for preset hopping mode (cycles through these modulations)
+Hopping_Preset: AM650
+Hopping_Preset: FM476
+Hopping_Preset: FM95
+
+# Custom preset
+# format for CC1101 "Custom_preset_data:" XX YY XX YY .. 00 00 ZZ ZZ ZZ ZZ ZZ ZZ ZZ ZZ, where: XX-register, YY - register data, 00 00 - end load register, ZZ - 8 byte Pa table register
+#
+# Garage/gate-only preset set: the automotive/vehicle presets (FORDv1-6,
+# Honda1/2, Pagers, AUDIv1-3) live in core Automotive's own copy of this
+# file, not here. FM95 is the only custom preset Garage actually uses (for
+# Ansonic, in Group 8 "Germany") - the other 7 that used to live here
+# (OOK_LR, OOK_U, AM_1, FSK_1, FreqFast, FreqUnlckd, FM15k) were dead
+# weight, not referenced by any protocol or Hopping_Preset entry, each
+# costing ~100 bytes of permanently-resident heap for nothing.
+
+Custom_preset_name: FM95
+Custom_preset_module: CC1101
+Custom_preset_data: 02 0D 0B 06 08 32 07 04 14 00 13 02 12 04 11 83 10 67 15 24 18 18 19 16 1D 91 1C 00 1B 07 20 FB 22 10 21 56 00 00 C0 00 00 00 00 00 00 00

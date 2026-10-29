@@ -86,6 +86,8 @@ const SubGhzDeviceInterconnect subghz_device_cc1101_int_interconnect = {
 
     .get_rssi = furi_hal_subghz_get_rssi,
     .get_lqi = furi_hal_subghz_get_lqi,
+    .get_freq_est = furi_hal_subghz_get_freq_est, // [ARF_PORT]
+    .rssi_burst = furi_hal_subghz_rssi_burst, // [ARF_PORT]
 
     .rx_pipe_not_empty = furi_hal_subghz_rx_pipe_not_empty,
     .is_rx_data_crc_valid = furi_hal_subghz_is_rx_data_crc_valid,

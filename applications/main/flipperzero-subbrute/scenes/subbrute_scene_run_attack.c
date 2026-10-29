@@ -27,9 +27,10 @@ static void
 void subbrute_scene_run_attack_on_exit(void* context) {
     furi_assert(context);
     SubBruteState* instance = (SubBruteState*)context;
-    // FURI_LOG_W(TAG, "subbrute_scene_run_attack_on_exit");
+    FURI_LOG_I(TAG, "on_exit: stop worker");
     notification_message(instance->notifications, &sequence_blink_stop);
     subbrute_worker_stop(instance->worker);
+    FURI_LOG_I(TAG, "on_exit: done");
 }
 
 void subbrute_scene_run_attack_on_enter(void* context) {
@@ -70,16 +71,21 @@ bool subbrute_scene_run_attack_on_event(void* context, SceneManagerEvent event) 
         if(event.event == SubBruteCustomEventTypeTransmitFinished) {
             notification_message(instance->notifications, &sequence_display_backlight_on);
             notification_message(instance->notifications, &sequence_double_vibro);
-
-            scene_manager_next_scene(instance->scene_manager, SubBruteSceneSetupAttack);
+            if(!scene_manager_search_and_switch_to_previous_scene(
+                   instance->scene_manager, SubBruteSceneSetupAttack)) {
+                scene_manager_next_scene(instance->scene_manager, SubBruteSceneSetupAttack);
+            }
         } else if(
             event.event == SubBruteCustomEventTypeTransmitNotStarted ||
             event.event == SubBruteCustomEventTypeBackPressed) {
+            FURI_LOG_I(
+                TAG,
+                "cancel event=%lu running=%d",
+                (unsigned long)event.event,
+                subbrute_worker_is_running(instance->worker));
             if(subbrute_worker_is_running(instance->worker)) {
-                // Notify
                 notification_message(instance->notifications, &sequence_single_vibro);
             }
-            // Stop transmit
             scene_manager_search_and_switch_to_previous_scene(
                 instance->scene_manager, SubBruteSceneSetupAttack);
         } else if(event.event == SubBruteCustomEventTypeError) {

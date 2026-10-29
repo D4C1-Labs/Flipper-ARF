@@ -209,6 +209,31 @@ uint8_t subghz_devices_get_lqi(const SubGhzDevice* device) {
     return ret;
 }
 
+// [ARF_PORT 2026-10-26] Wrappers ported from doctor-firmware.
+int8_t subghz_devices_get_freq_est(const SubGhzDevice* device) {
+    furi_check(device);
+    int8_t ret = 0;
+    if(device->interconnect->get_freq_est) {
+        ret = device->interconnect->get_freq_est();
+    }
+    return ret;
+}
+
+uint32_t subghz_devices_rssi_burst(
+    const SubGhzDevice* device,
+    uint8_t* out,
+    size_t count,
+    uint32_t period_us) {
+    furi_check(device);
+    if(!device->interconnect->rssi_burst) return 0;
+    return device->interconnect->rssi_burst(out, count, period_us);
+}
+
+bool subghz_devices_rssi_burst_is_supported(const SubGhzDevice* device) {
+    furi_check(device);
+    return device->interconnect->rssi_burst != NULL;
+}
+
 bool subghz_devices_rx_pipe_not_empty(const SubGhzDevice* device) {
     furi_check(device);
     bool ret = false;

@@ -47,6 +47,9 @@ extern const FuriHalSpiBusHandle furi_hal_spi_bus_handle_nfc;
  */
 extern const FuriHalSpiBusHandle furi_hal_spi_bus_handle_external;
 
+/** [ARF_PORT] External radio (si4463_ext) on `furi_hal_spi_bus_r`, 8 MHz */
+extern const FuriHalSpiBusHandle furi_hal_spi_bus_handle_external_radio;
+
 /** ST7567(Display) on `furi_hal_spi_bus_d` */
 extern const FuriHalSpiBusHandle furi_hal_spi_bus_handle_display;
 

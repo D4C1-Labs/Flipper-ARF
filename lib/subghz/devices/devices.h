@@ -42,6 +42,15 @@ void subghz_devices_stop_async_rx(const SubGhzDevice* device);
 float subghz_devices_get_rssi(const SubGhzDevice* device);
 uint8_t subghz_devices_get_lqi(const SubGhzDevice* device);
 
+// [ARF_PORT 2026-10-26] Ported from doctor-firmware (RSSI envelope / freq error).
+int8_t subghz_devices_get_freq_est(const SubGhzDevice* device);
+uint32_t subghz_devices_rssi_burst(
+    const SubGhzDevice* device,
+    uint8_t* out,
+    size_t count,
+    uint32_t period_us);
+bool subghz_devices_rssi_burst_is_supported(const SubGhzDevice* device);
+
 bool subghz_devices_rx_pipe_not_empty(const SubGhzDevice* device);
 bool subghz_devices_is_rx_data_crc_valid(const SubGhzDevice* device);
 void subghz_devices_read_packet(const SubGhzDevice* device, uint8_t* data, uint8_t* size);

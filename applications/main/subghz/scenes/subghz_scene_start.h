@@ -11,4 +11,5 @@ enum SubmenuIndex {
     SubmenuIndexRadioSetting,
     SubmenuIndexKeeloqKeys,
     SubmenuIndexKeeloqBf2,
+    SubmenuIndexGarage,
 };

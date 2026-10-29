@@ -1,4 +1,5 @@
 #include "renault_v1.h"
+#include "hitag2_key_db.h"
 // [HITAG2_BF] Renault V1 REUSES the Fiat V1 hitag2 cipher (do not duplicate it).
 #include "fiat_v1.h"
 // [HITAG2_SEED] Classic byte-array Hitag2 cipher + 4-byte SEED model. This is a
@@ -767,6 +768,37 @@ static void renault_v1_verify_hitag2_key(SubGhzProtocolDecoderRenaultV1* instanc
                     instance->hitag2_iv_combo = combo;
                     instance->hitag2_hop = hop;
                     return;
+                }
+            }
+        }
+    }
+
+    // [ARF_PORT 2026-10-26] Hitag2 key database lookup (ported from
+    // doctor-firmware). If none of the built-in keys matched, try a key cracked
+    // earlier for THIS car (keyed by UID), validating it against every
+    // slice/combo exactly like the known-key scan above. Additive only: a DB
+    // record that does not validate just falls through, leaving behaviour
+    // identical to before. Does not touch the seed path.
+    if(uid != 0U && uid != 0xFFFFFFUL) {
+        Hitag2KeyDbRecord record = {0};
+        if(hitag2_key_db_find(uid, &record) && record.has_key) {
+            for(uint8_t slice = 0U; slice < RENAULT_V1_HOP_SLICE_COUNT; slice++) {
+                const uint32_t hop = subghz_protocol_renault_v1_candidate_hop(payload42, slice);
+                for(uint8_t combo = 0U; combo < RENAULT_V1_IV_COMBO_COUNT; combo++) {
+                    const uint8_t iv_btn = subghz_protocol_renault_v1_iv_button(button, combo);
+                    const uint16_t iv_ctrl =
+                        subghz_protocol_renault_v1_iv_control(counter, combo);
+                    const uint32_t auth = subghz_protocol_fiat_v1_compute_auth(
+                        uid, iv_btn, iv_ctrl, record.key, 0U);
+                    if(auth == hop) {
+                        memcpy(instance->hitag2_key, record.key, sizeof(instance->hitag2_key));
+                        instance->hitag2_key_valid = true;
+                        instance->hitag2_epoch = 0U;
+                        instance->hitag2_hop_slice = slice;
+                        instance->hitag2_iv_combo = combo;
+                        instance->hitag2_hop = hop;
+                        return;
+                    }
                 }
             }
         }
@@ -1610,6 +1642,16 @@ SubGhzProtocolStatus subghz_protocol_decoder_renault_v1_serialize(
                flipper_format, RENAULT_V1_HITAG2_SLICE_FIELD, &slice, 1)) {
             return SubGhzProtocolStatusErrorParserOthers;
         }
+
+        // [ARF_PORT 2026-10-26] Remember the Fiat-BCM key in the global UID->key
+        // DB so a future capture of the same car resolves instantly via the
+        // lookup in renault_v1_verify_hitag2_key(). Best-effort.
+        {
+            const uint32_t uid = instance->generic.serial & 0xFFFFFFUL;
+            if(uid != 0U && uid != 0xFFFFFFUL) {
+                hitag2_key_db_save_key(uid, instance->hitag2_key, epoch);
+            }
+        }
     }
 
     // [HITAG2_SEED] Persist the classic-Hitag2 recovered marker + 4-byte SEED so
@@ -1631,6 +1673,16 @@ SubGhzProtocolStatus subghz_protocol_decoder_renault_v1_serialize(
             if(!flipper_format_insert_or_update_hex(
                    flipper_format, RENAULT_V1_SEED_FIELD, seed_be, 4U)) {
                 return SubGhzProtocolStatusErrorParserOthers;
+            }
+
+            // [ARF_PORT 2026-10-26] Remember the recovered SEED in the global
+            // UID->seed DB (ported from doctor-firmware) so a future capture of
+            // the same car does not need the heavy seed brute force again.
+            {
+                const uint32_t uid = instance->generic.serial & 0xFFFFFFUL;
+                if(uid != 0U && uid != 0xFFFFFFUL) {
+                    hitag2_key_db_save_seed(uid, instance->seed);
+                }
             }
         }
     }
@@ -1790,6 +1842,22 @@ SubGhzProtocolStatus
             instance->seed_recovered = HITAG2_SEED_RECOVERED_NO;
             instance->seed = 0U;
             instance->generic.seed = 0U;
+
+            // [ARF_PORT 2026-10-26] The .sub has no stored SEED. Before leaving it
+            // unrecovered, check the global UID->seed DB (ported from
+            // doctor-firmware): if this car's seed was cracked in a previous
+            // capture, inherit it here so the user does not have to run the heavy
+            // seed brute force again. Still NO brute force on load — just a cheap
+            // file lookup. If nothing is found, behaviour is identical to before.
+            const uint32_t uid = instance->generic.serial & 0xFFFFFFUL;
+            if(uid != 0U && uid != 0xFFFFFFUL) {
+                Hitag2KeyDbRecord record = {0};
+                if(hitag2_key_db_find(uid, &record) && record.has_seed) {
+                    instance->seed_recovered = HITAG2_SEED_RECOVERED_YES;
+                    instance->seed = record.seed;
+                    instance->generic.seed = record.seed;
+                }
+            }
         }
     }
 

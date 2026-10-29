@@ -27,6 +27,9 @@ env.Append(
         File("subghz_protocol_registry.h"),
         File("devices/cc1101_configs.h"),
         File("devices/cc1101_int/cc1101_int_interconnect.h"),
+        # [ARF_PORT] expose the shared devices API so analyzer/bruteforce FAPs
+        # can include <lib/subghz/devices/devices.h> (rssi_burst / freq_est).
+        File("devices/devices.h"),
         File("subghz_file_encoder_worker.h"),
     ],
 )

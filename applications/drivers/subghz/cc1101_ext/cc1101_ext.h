@@ -143,6 +143,12 @@ float subghz_device_cc1101_ext_get_rssi(void);
  */
 uint8_t subghz_device_cc1101_ext_get_lqi(void);
 
+/** [ARF_PORT] Get frequency-error estimate (external CC1101) */
+int8_t subghz_device_cc1101_ext_get_freq_est(void);
+
+/** [ARF_PORT] Sample a burst of raw RSSI values (external CC1101) */
+uint32_t subghz_device_cc1101_ext_rssi_burst(uint8_t* out, size_t count, uint32_t period_us);
+
 /** Check if frequency is in valid range
  *
  * @param      value  frequency in Hz

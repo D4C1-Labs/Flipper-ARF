@@ -6,7 +6,7 @@ $ErrorActionPreference = "Stop"        #
 [string]$FirmwareVersion = $args[0]
 [string]$ReleaseVersion = $args[1]
 [string]$RepoSelf = $args[2]
-[string]$RepoUnleashed = $args[3]
+[string]$RepoFirmware = $args[3]
 [bool]$ForGithubActions = $true
 
 ################################################################################################################################
@@ -30,7 +30,7 @@ $Output = @{
 
 $Release = @(`
     (CleanInput `
-        (gh release list -L 1 --repo $RepoUnleashed)`
+        (gh release list -L 1 --repo $RepoFirmware)`
     ) -split "`t")
 
 $FirmwareVersionNumber = 0
@@ -62,7 +62,7 @@ $NewVersionFw = $false
 Write-Host ('Latest firmware {0}' -f $FirmwareVersionNumber)
 
 $Output.REMOTE_TAG_INFO = Write-Host ('[{0}]({1}/releases/tag/{2})' `
-        -f $LatestFirmware, $RepoUnleashed, $LatestFirmware)
+        -f $LatestFirmware, $RepoFirmware, $LatestFirmware)
 if (($FirmwareVersionNumber -gt $StoredFirmwareVersionNumber) -and ( $Delta -gt [TimeSpan]::FromMinutes(10)))
 {
     $Output.REMOTE_TAG_INFO = $LatestFirmware

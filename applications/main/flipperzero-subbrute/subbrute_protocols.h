@@ -168,46 +168,6 @@ typedef enum {
 } SubBruteAttacks;
 
 /**
- * @enum SubBruteBrand
- * @brief Enum defining the brand groupings for hierarchical menu navigation.
- */
-typedef enum {
-    SubBruteBrandCAME,
-    SubBruteBrandNICE,
-    SubBruteBrandAnsonic,
-    SubBruteBrandHoltek,
-    SubBruteBrandChamberlain,
-    SubBruteBrandLinear,
-    SubBruteBrandUNILARM,
-    SubBruteBrandSMC5326,
-    SubBruteBrandPT2260,
-    SubBruteBrandPT2262,
-    SubBruteBrandLoadFile,
-    SubBruteBrandCount,
-} SubBruteBrand;
-
-/**
- * @struct SubBruteTypeGroup
- * @brief A type variant within a brand (e.g. "9bit", "FM 12bit").
- */
-typedef struct {
-    const char* name;
-    const SubBruteAttacks* attacks;
-    uint8_t attack_count;
-} SubBruteTypeGroup;
-
-/**
- * @struct SubBruteBrandGroup
- * @brief A brand grouping containing one or more type groups.
- * When type_count == 1, the type level is skipped in the menu.
- */
-typedef struct {
-    const char* name;
-    const SubBruteTypeGroup* types;
-    uint8_t type_count;
-} SubBruteBrandGroup;
-
-/**
  * @struct SubBruteProtocol
  * @brief Structure representing the SubBrute protocol.
  *
@@ -416,22 +376,3 @@ void subbrute_protocol_file_generate_file(
  */
 uint64_t
     subbrute_protocol_calc_max_value(SubBruteAttacks attack_type, uint8_t bits, bool two_bytes);
-
-/**
- * @brief Get the brand group at the given index.
- */
-const SubBruteBrandGroup* subbrute_brand_group(SubBruteBrand brand);
-
-/**
- * @brief Get the frequency-only display name for a protocol (e.g. "303MHz").
- */
-const char* subbrute_protocol_freq_name(SubBruteAttacks index);
-
-/**
- * @brief Reverse-lookup: find the brand, type, and frequency index for a given attack.
- */
-void subbrute_protocol_find_brand_type(
-    SubBruteAttacks attack,
-    uint8_t* brand,
-    uint8_t* type,
-    uint8_t* freq_idx);

@@ -39,10 +39,10 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        firmware: [unlshd, official]
+        firmware: [doctors, official]
         include:
-          - firmware: unlshd
-            url: ${{ vars.REPO_UNLEASHED }}
+          - firmware: doctors
+            url: ${{ vars.REPO_FIRMWARE }}
             version: ${{ vars.FIRMWARE_VERSION }}
             src-included: 0
           - firmware: official
@@ -51,7 +51,7 @@ jobs:
             src-included: 0
     steps:
       - name: Copy Firmware Files
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
         with:
           repository: ${{ matrix.url }}
           clean: true
@@ -60,7 +60,7 @@ jobs:
 
       - name: Copy Repo Files
         if: ${{ matrix.src-included == 0 }}
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
         with:
           repository: ${{ vars.REPO_SELF }}
           clean: true
@@ -185,7 +185,7 @@ jobs:
               }
           }
           $appName = $env:APP_NAME
-          if ( '${{ matrix.firmware }}' -eq 'unlshd' ) {
+          if ( '${{ matrix.firmware }}' -eq 'doctors' ) {
             $appName = ('{0}_${{ env.FW_VERSION }}' -f $appName)
           } else {
             $appName = ('{0}_${{ matrix.firmware}}-${{ env.FW_VERSION }}' -f $appName)

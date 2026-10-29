@@ -5,17 +5,17 @@
 #include <gui/elements.h>
 
 #define STATUS_BAR_Y_SHIFT 14
-#define TAG "SubBruteMainView"
+#define TAG                "SubBruteMainView"
 
-#define ITEMS_ON_SCREEN 3
-#define ITEMS_INTERVAL 1
-#define ITEM_WIDTH 14
-#define ITEM_Y 27
-#define ITEM_HEIGHT 13
-#define TEXT_X 6
-#define TEXT_Y 37
-#define TEXT_INTERVAL 3
-#define TEXT_WIDTH 12
+#define ITEMS_ON_SCREEN   3
+#define ITEMS_INTERVAL    1
+#define ITEM_WIDTH        14
+#define ITEM_Y            27
+#define ITEM_HEIGHT       13
+#define TEXT_X            6
+#define TEXT_Y            37
+#define TEXT_INTERVAL     3
+#define TEXT_WIDTH        12
 #define ITEM_FRAME_RADIUS 2
 
 struct SubBruteMainView {
@@ -28,13 +28,6 @@ struct SubBruteMainView {
     uint64_t key_from_file;
     uint8_t repeat_values[SubBruteAttackTotalCount];
     uint8_t window_position;
-
-    // Hierarchical menu state
-    SubBruteMenuLevel menu_level;
-    uint8_t selected_brand;
-    uint8_t selected_type;
-    uint8_t level_index;
-    uint8_t level_window_position;
 };
 
 typedef struct {
@@ -44,13 +37,6 @@ typedef struct {
     bool is_select_byte;
     bool two_bytes;
     uint64_t key_from_file;
-
-    // Hierarchical menu state
-    SubBruteMenuLevel menu_level;
-    uint8_t selected_brand;
-    uint8_t selected_type;
-    uint8_t level_index;
-    uint8_t level_window_position;
 } SubBruteMainViewModel;
 
 void subbrute_main_view_set_callback(
@@ -145,82 +131,35 @@ void subbrute_main_view_draw_is_byte_selected(Canvas* canvas, SubBruteMainViewMo
     }
 }
 
-static uint8_t subbrute_main_view_get_level_count(SubBruteMainViewModel* model) {
-    if(model->menu_level == SubBruteMenuLevelBrand) {
-        return SubBruteBrandCount;
-    } else if(model->menu_level == SubBruteMenuLevelType) {
-        return subbrute_brand_group(model->selected_brand)->type_count;
-    } else {
-        return subbrute_brand_group(model->selected_brand)
-            ->types[model->selected_type]
-            .attack_count;
-    }
-}
-
-static const char* subbrute_main_view_get_item_name(SubBruteMainViewModel* model, uint8_t pos) {
-    if(model->menu_level == SubBruteMenuLevelBrand) {
-        return subbrute_brand_group(pos)->name;
-    } else if(model->menu_level == SubBruteMenuLevelType) {
-        return subbrute_brand_group(model->selected_brand)->types[pos].name;
-    } else {
-        SubBruteAttacks attack = subbrute_brand_group(model->selected_brand)
-                                     ->types[model->selected_type]
-                                     .attacks[pos];
-        return subbrute_protocol_freq_name(attack);
-    }
-}
-
-static const char* subbrute_main_view_get_title(SubBruteMainViewModel* model) {
-    if(model->menu_level == SubBruteMenuLevelBrand) {
-        return SUB_BRUTE_FORCER_VERSION;
-    } else if(model->menu_level == SubBruteMenuLevelType) {
-        return subbrute_brand_group(model->selected_brand)->name;
-    } else {
-        const SubBruteBrandGroup* bg = subbrute_brand_group(model->selected_brand);
-        if(bg->type_count == 1) {
-            return bg->name;
-        }
-        // Show "Brand > Type" for multi-type brands
-        static char title_buf[32];
-        snprintf(title_buf, sizeof(title_buf), "%s > %s", bg->name, bg->types[model->selected_type].name);
-        return title_buf;
-    }
-}
-
 void subbrute_main_view_draw_is_ordinary_selected(Canvas* canvas, SubBruteMainViewModel* model) {
     uint16_t screen_width = canvas_width(canvas);
     uint16_t screen_height = canvas_height(canvas);
 
-    // Title bar
+    // Title
     canvas_set_font(canvas, FontPrimary);
     canvas_draw_box(canvas, 0, 0, canvas_width(canvas), STATUS_BAR_Y_SHIFT);
     canvas_invert_color(canvas);
-    canvas_draw_str_aligned(
-        canvas, 64, 3, AlignCenter, AlignTop, subbrute_main_view_get_title(model));
+    canvas_draw_str_aligned(canvas, 64, 3, AlignCenter, AlignTop, SUB_BRUTE_FORCER_VERSION);
     canvas_invert_color(canvas);
 
-    // Menu items
+    // Menu
     canvas_set_color(canvas, ColorBlack);
     canvas_set_font(canvas, FontSecondary);
     const uint8_t item_height = 16;
     const uint8_t string_height_offset = 9;
 
-    uint8_t total_items = subbrute_main_view_get_level_count(model);
-
-    for(uint8_t position = 0; position < total_items; ++position) {
-        uint8_t item_position = position - model->level_window_position;
+    for(size_t position = 0; position < SubBruteAttackTotalCount; ++position) {
+        uint8_t item_position = position - model->window_position;
 
         if(item_position < ITEMS_ON_SCREEN) {
-            const char* item_name = subbrute_main_view_get_item_name(model, position);
-
-            if(model->level_index == position) {
+            if(model->index == position) {
                 canvas_draw_str_aligned(
                     canvas,
                     3,
                     string_height_offset + (item_position * item_height) + STATUS_BAR_Y_SHIFT,
                     AlignLeft,
                     AlignCenter,
-                    item_name);
+                    subbrute_protocol_name(position));
 
                 elements_frame(
                     canvas, 1, 1 + (item_position * item_height) + STATUS_BAR_Y_SHIFT, 124, 15);
@@ -231,37 +170,31 @@ void subbrute_main_view_draw_is_ordinary_selected(Canvas* canvas, SubBruteMainVi
                     string_height_offset + (item_position * item_height) + STATUS_BAR_Y_SHIFT,
                     AlignLeft,
                     AlignCenter,
-                    item_name);
+                    subbrute_protocol_name(position));
             }
 
-            // Show repeat count only at freq level
-            if(model->menu_level == SubBruteMenuLevelFreq) {
-                SubBruteAttacks attack = subbrute_brand_group(model->selected_brand)
-                                             ->types[model->selected_type]
-                                             .attacks[position];
-                uint8_t current_repeat_count = model->repeat_values[attack];
-                uint8_t min_repeat_count = subbrute_protocol_repeats_count(attack);
+            uint8_t current_repeat_count = model->repeat_values[position];
+            uint8_t min_repeat_count = subbrute_protocol_repeats_count(position);
 
-                if(current_repeat_count > min_repeat_count) {
+            if(current_repeat_count > min_repeat_count) {
 #ifdef FW_ORIGIN_Official
-                    canvas_set_font(canvas, FontSecondary);
+                canvas_set_font(canvas, FontSecondary);
 #else
-                    canvas_set_font(canvas, FontBatteryPercent);
+                canvas_set_font(canvas, FontBatteryPercent);
 #endif
-                    char buffer[10] = {0};
-                    snprintf(buffer, sizeof(buffer), "x%d", current_repeat_count);
-                    uint8_t temp_x_offset_repeats =
-                        current_repeat_count <= SUBBRUTE_PROTOCOL_MAX_REPEATS ? 15 : 18;
+                char buffer[10] = {0};
+                snprintf(buffer, sizeof(buffer), "x%d", current_repeat_count);
+                uint8_t temp_x_offset_repeats =
+                    current_repeat_count <= SUBBRUTE_PROTOCOL_MAX_REPEATS ? 15 : 18;
 
-                    canvas_draw_str_aligned(
-                        canvas,
-                        screen_width - temp_x_offset_repeats,
-                        string_height_offset + (item_position * item_height) + STATUS_BAR_Y_SHIFT,
-                        AlignLeft,
-                        AlignCenter,
-                        buffer);
-                    canvas_set_font(canvas, FontSecondary);
-                }
+                canvas_draw_str_aligned(
+                    canvas,
+                    screen_width - temp_x_offset_repeats,
+                    string_height_offset + (item_position * item_height) + STATUS_BAR_Y_SHIFT,
+                    AlignLeft,
+                    AlignCenter,
+                    buffer);
+                canvas_set_font(canvas, FontSecondary);
             }
         }
     }
@@ -271,8 +204,8 @@ void subbrute_main_view_draw_is_ordinary_selected(Canvas* canvas, SubBruteMainVi
         screen_width,
         STATUS_BAR_Y_SHIFT + 2,
         screen_height - STATUS_BAR_Y_SHIFT,
-        model->level_index,
-        total_items);
+        model->index,
+        SubBruteAttackTotalCount);
 }
 
 void subbrute_main_view_draw(Canvas* canvas, SubBruteMainViewModel* model) {
@@ -307,132 +240,72 @@ bool subbrute_main_view_input_file_protocol(InputEvent* event, SubBruteMainView*
 
         updated = true;
     } else if(event->key == InputKeyOk) {
-      instance->callback(SubBruteCustomEventTypeIndexSelected,
-                         instance->context);
+        instance->callback(SubBruteCustomEventTypeIndexSelected, instance->context);
 
         updated = true;
     }
     return updated;
 }
 
-static void subbrute_main_view_update_window_position(SubBruteMainView* instance) {
-    uint8_t total = 0;
-    if(instance->menu_level == SubBruteMenuLevelBrand) {
-        total = SubBruteBrandCount;
-    } else if(instance->menu_level == SubBruteMenuLevelType) {
-        total = subbrute_brand_group(instance->selected_brand)->type_count;
-    } else {
-        total = subbrute_brand_group(instance->selected_brand)
-                    ->types[instance->selected_type]
-                    .attack_count;
-    }
-
-    instance->level_window_position = instance->level_index;
-    if(instance->level_window_position > 0) {
-        instance->level_window_position -= 1;
-    }
-    if(total <= ITEMS_ON_SCREEN) {
-        instance->level_window_position = 0;
-    } else if(instance->level_window_position >= (total - ITEMS_ON_SCREEN)) {
-        instance->level_window_position = (total - ITEMS_ON_SCREEN);
-    }
-}
-
-static SubBruteAttacks subbrute_main_view_get_current_attack(SubBruteMainView* instance) {
-    return subbrute_brand_group(instance->selected_brand)
-        ->types[instance->selected_type]
-        .attacks[instance->level_index];
-}
-
 bool subbrute_main_view_input_ordinary_protocol(
     InputEvent* event,
     SubBruteMainView* instance,
     bool is_short) {
+    const uint8_t min_value = 0;
+    const uint8_t correct_total = SubBruteAttackTotalCount - 1;
+    uint8_t index = instance->index;
+    uint8_t min_repeats = subbrute_protocol_repeats_count(index);
+    uint8_t max_repeats = min_repeats * 3;
+    uint8_t current_repeats = instance->repeat_values[index];
 
-    uint8_t total = 0;
-    if(instance->menu_level == SubBruteMenuLevelBrand) {
-        total = SubBruteBrandCount;
-    } else if(instance->menu_level == SubBruteMenuLevelType) {
-        total = subbrute_brand_group(instance->selected_brand)->type_count;
-    } else {
-        total = subbrute_brand_group(instance->selected_brand)
-                    ->types[instance->selected_type]
-                    .attack_count;
-    }
-
-    const uint8_t max_index = total - 1;
     bool updated = false;
-
     if(event->key == InputKeyUp && is_short) {
-        if(instance->level_index == 0) {
-            instance->level_index = max_index;
+        if(index == min_value) {
+            instance->index = correct_total;
         } else {
-            instance->level_index--;
+            instance->index = CLAMP(index - 1, correct_total, min_value);
         }
+
         updated = true;
     } else if(event->key == InputKeyDown && is_short) {
-        if(instance->level_index == max_index) {
-            instance->level_index = 0;
+        if(index == correct_total) {
+            instance->index = min_value;
         } else {
-            instance->level_index++;
+            instance->index = CLAMP(index + 1, correct_total, min_value);
         }
+
+        updated = true;
+    } else if(event->key == InputKeyLeft && is_short) {
+        instance->repeat_values[index] = CLAMP(current_repeats - 1, max_repeats, min_repeats);
+
+        updated = true;
+    } else if(event->key == InputKeyRight && is_short) {
+        instance->repeat_values[index] = CLAMP(current_repeats + 1, max_repeats, min_repeats);
+
         updated = true;
     } else if(event->key == InputKeyOk && is_short) {
-        if(instance->menu_level == SubBruteMenuLevelBrand) {
-            if(instance->level_index == SubBruteBrandLoadFile) {
-                // Load file - direct action
-                instance->callback(SubBruteCustomEventTypeLoadFile, instance->context);
-            } else {
-                instance->selected_brand = instance->level_index;
-                const SubBruteBrandGroup* bg = subbrute_brand_group(instance->selected_brand);
-                if(bg->type_count == 1) {
-                    // Skip type level
-                    instance->selected_type = 0;
-                    instance->menu_level = SubBruteMenuLevelFreq;
-                } else {
-                    instance->menu_level = SubBruteMenuLevelType;
-                }
-                instance->level_index = 0;
-                instance->level_window_position = 0;
-            }
-            updated = true;
-        } else if(instance->menu_level == SubBruteMenuLevelType) {
-            instance->selected_type = instance->level_index;
-            instance->menu_level = SubBruteMenuLevelFreq;
-            instance->level_index = 0;
-            instance->level_window_position = 0;
-            updated = true;
+        if(index == SubBruteAttackLoadFile) {
+            instance->callback(SubBruteCustomEventTypeLoadFile, instance->context);
         } else {
-            // Freq level - select the attack
-            SubBruteAttacks attack = subbrute_main_view_get_current_attack(instance);
-            instance->index = attack;
             instance->callback(SubBruteCustomEventTypeMenuSelected, instance->context);
-            updated = true;
         }
-    } else if(event->key == InputKeyLeft && is_short) {
-        if(instance->menu_level == SubBruteMenuLevelFreq) {
-            SubBruteAttacks attack = subbrute_main_view_get_current_attack(instance);
-            uint8_t min_repeats = subbrute_protocol_repeats_count(attack);
-            uint8_t max_repeats = min_repeats * 3;
-            uint8_t current_repeats = instance->repeat_values[attack];
-            instance->repeat_values[attack] =
-                CLAMP(current_repeats - 1, max_repeats, min_repeats);
-            updated = true;
-        }
-    } else if(event->key == InputKeyRight && is_short) {
-        if(instance->menu_level == SubBruteMenuLevelFreq) {
-            SubBruteAttacks attack = subbrute_main_view_get_current_attack(instance);
-            uint8_t min_repeats = subbrute_protocol_repeats_count(attack);
-            uint8_t max_repeats = min_repeats * 3;
-            uint8_t current_repeats = instance->repeat_values[attack];
-            instance->repeat_values[attack] =
-                CLAMP(current_repeats + 1, max_repeats, min_repeats);
-            updated = true;
-        }
+
+        updated = true;
     }
 
     if(updated) {
-        subbrute_main_view_update_window_position(instance);
+        instance->window_position = instance->index;
+        if(instance->window_position > 0) {
+            instance->window_position -= 1;
+        }
+
+        if(SubBruteAttackTotalCount <= ITEMS_ON_SCREEN) {
+            instance->window_position = 0;
+        } else {
+            if(instance->window_position >= (SubBruteAttackTotalCount - ITEMS_ON_SCREEN)) {
+                instance->window_position = (SubBruteAttackTotalCount - ITEMS_ON_SCREEN);
+            }
+        }
     }
 
     return updated;
@@ -445,42 +318,9 @@ bool subbrute_main_view_input(InputEvent* event, void* context) {
     SubBruteMainView* instance = (SubBruteMainView*)context;
 
     if(event->key == InputKeyBack && event->type == InputTypeShort) {
-#ifdef FURI_DEBUG
-        FURI_LOG_I(TAG, "InputKey: BACK");
-#endif
-        if(!instance->is_select_byte && instance->menu_level != SubBruteMenuLevelBrand) {
-            // Go up one level
-            if(instance->menu_level == SubBruteMenuLevelFreq) {
-                const SubBruteBrandGroup* bg = subbrute_brand_group(instance->selected_brand);
-                if(bg->type_count == 1) {
-                    // Type was skipped, go back to brand
-                    instance->menu_level = SubBruteMenuLevelBrand;
-                    instance->level_index = instance->selected_brand;
-                } else {
-                    instance->menu_level = SubBruteMenuLevelType;
-                    instance->level_index = instance->selected_type;
-                }
-            } else if(instance->menu_level == SubBruteMenuLevelType) {
-                instance->menu_level = SubBruteMenuLevelBrand;
-                instance->level_index = instance->selected_brand;
-            }
-            subbrute_main_view_update_window_position(instance);
-
-            with_view_model(
-                instance->view,
-                SubBruteMainViewModel * model,
-                {
-                    model->menu_level = instance->menu_level;
-                    model->selected_brand = instance->selected_brand;
-                    model->selected_type = instance->selected_type;
-                    model->level_index = instance->level_index;
-                    model->level_window_position = instance->level_window_position;
-                },
-                true);
-            return true;
-        }
+        FURI_LOG_I(TAG, "Back short → BackPressed");
         instance->callback(SubBruteCustomEventTypeBackPressed, instance->context);
-        return false;
+        return true;
     }
 
 #ifdef FURI_DEBUG
@@ -512,15 +352,7 @@ bool subbrute_main_view_input(InputEvent* event, void* context) {
                 model->key_from_file = instance->key_from_file;
                 model->is_select_byte = instance->is_select_byte;
                 model->two_bytes = instance->two_bytes;
-                model->menu_level = instance->menu_level;
-                model->selected_brand = instance->selected_brand;
-                model->selected_type = instance->selected_type;
-                model->level_index = instance->level_index;
-                model->level_window_position = instance->level_window_position;
-                // Sync all repeat values since attack index may change
-                for(size_t i = 0; i < SubBruteAttackTotalCount; i++) {
-                    model->repeat_values[i] = instance->repeat_values[i];
-                }
+                model->repeat_values[model->index] = instance->repeat_values[instance->index];
             },
             true);
     }
@@ -551,11 +383,6 @@ SubBruteMainView* subbrute_main_view_alloc() {
     instance->key_from_file = 0;
     instance->is_select_byte = false;
     instance->two_bytes = false;
-    instance->menu_level = SubBruteMenuLevelBrand;
-    instance->selected_brand = 0;
-    instance->selected_type = 0;
-    instance->level_index = 0;
-    instance->level_window_position = 0;
 
     with_view_model(
         instance->view,
@@ -566,11 +393,6 @@ SubBruteMainView* subbrute_main_view_alloc() {
             model->key_from_file = instance->key_from_file;
             model->is_select_byte = instance->is_select_byte;
             model->two_bytes = instance->two_bytes;
-            model->menu_level = instance->menu_level;
-            model->selected_brand = instance->selected_brand;
-            model->selected_type = instance->selected_type;
-            model->level_index = instance->level_index;
-            model->level_window_position = instance->level_window_position;
         },
         true);
 
@@ -597,7 +419,6 @@ void subbrute_main_view_set_index(
     bool is_select_byte,
     bool two_bytes,
     uint64_t key_from_file) {
-
     furi_assert(instance);
     furi_assert(idx < SubBruteAttackTotalCount);
 #ifdef FURI_DEBUG
@@ -610,26 +431,13 @@ void subbrute_main_view_set_index(
     instance->two_bytes = two_bytes;
     instance->key_from_file = key_from_file;
     instance->index = idx;
-
-    if(!is_select_byte) {
-        // Restore hierarchical position from the saved attack index
-        uint8_t brand = 0, type = 0, freq_idx = 0;
-        subbrute_protocol_find_brand_type(idx, &brand, &type, &freq_idx);
-        instance->selected_brand = brand;
-        instance->selected_type = type;
-        // Start at brand level so user sees the top menu
-        instance->menu_level = SubBruteMenuLevelBrand;
-        instance->level_index = brand;
-        instance->level_window_position = 0;
-        subbrute_main_view_update_window_position(instance);
-    }
-
-    // Legacy window_position for file byte select mode
     instance->window_position = idx;
+
     if(!is_select_byte) {
         if(instance->window_position > 0) {
             instance->window_position -= 1;
         }
+
         if(instance->window_position >= (SubBruteAttackTotalCount - ITEMS_ON_SCREEN)) {
             instance->window_position = (SubBruteAttackTotalCount - ITEMS_ON_SCREEN);
         }
@@ -644,11 +452,6 @@ void subbrute_main_view_set_index(
             model->key_from_file = instance->key_from_file;
             model->is_select_byte = instance->is_select_byte;
             model->two_bytes = instance->two_bytes;
-            model->menu_level = instance->menu_level;
-            model->selected_brand = instance->selected_brand;
-            model->selected_type = instance->selected_type;
-            model->level_index = instance->level_index;
-            model->level_window_position = instance->level_window_position;
 
             for(size_t i = 0; i < SubBruteAttackTotalCount; i++) {
                 model->repeat_values[i] = repeats[i];
