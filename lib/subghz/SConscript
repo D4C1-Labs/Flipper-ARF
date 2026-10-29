@@ -34,7 +34,7 @@ env.Append(
 libenv = env.Clone(FW_LIB_NAME="subghz")
 libenv.ApplyLibFlags()
 
-sources = libenv.GlobRecursive("*.c*")
+sources = libenv.GlobRecursive("*.c*", exclude=["*toyota-old.c.bak"])
 
 lib = libenv.StaticLibrary("${FW_LIB_NAME}", sources)
 libenv.Install("${LIB_DIST_DIR}", lib)

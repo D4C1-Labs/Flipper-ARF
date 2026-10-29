@@ -25,6 +25,12 @@ struct SubGhzBlockGeneric {
     uint32_t cnt;
     uint8_t cnt_2;
     uint32_t seed;
+    /* Additional protocol-specific fields used by imported automotive decoders. */
+    uint64_t data_3;
+    uint16_t validation_field;
+    uint16_t te;
+    uint32_t extra;
+    uint8_t type;
 };
 
 typedef struct SubGhzBlockGenericGlobal SubGhzBlockGenericGlobal;

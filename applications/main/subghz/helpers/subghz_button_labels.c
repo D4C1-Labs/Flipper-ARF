@@ -22,6 +22,11 @@ typedef struct {
 } SubGhzProtocolButtonLabels;
 
 static const SubGhzProtocolButtonLabels protocol_button_labels[] = {
+    {"BMW", 3, {"Original", "Lock", "Unlock", "Trunk"}},
+    {"Mazda V2", 3, {"Original", "Lock", "Unlock", "Trunk"}},
+    {"Mercedes V0", 3, {"Original", "Lock", "Unlock", "Aux"}},
+    {"Mercedes V1", 2, {"Original", "Lock", "Unlock"}},
+    {"Toyota", 4, {"Original", "Button 1", "Button 2", "Button 3", "Button 3"}},
     {"VAG GROUP", 4, {"Original", "Lock", "Unlock", "Trunk", "Panic"}},
     {"Porsche AG", 4, {"Original", "Lock", "Unlock", "Trunk", "Open"}},
     {"FORD V0", 3, {"Original", "Lock", "Unlock", "Trunk"}},
