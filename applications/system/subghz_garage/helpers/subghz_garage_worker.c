@@ -72,13 +72,23 @@ static int32_t subghz_garage_worker_thread_callback(void* context) {
 }
 
 SubGhzGarageWorker* subghz_garage_worker_alloc(void) {
-    SubGhzGarageWorker* instance = malloc(sizeof(SubGhzGarageWorker));
+    SubGhzGarageWorker* instance = calloc(1, sizeof(SubGhzGarageWorker));
+    if(!instance) return NULL;
 
     instance->thread = furi_thread_alloc_ex(
         "SubGhzGarageWorker", 4096, subghz_garage_worker_thread_callback, instance);
+    if(!instance->thread) {
+        free(instance);
+        return NULL;
+    }
 
     instance->stream = furi_stream_buffer_alloc(
         sizeof(LevelDuration) * SUBGHZ_GARAGE_WORKER_STREAM_DEPTH, sizeof(LevelDuration));
+    if(!instance->stream) {
+        furi_thread_free(instance->thread);
+        free(instance);
+        return NULL;
+    }
 
     instance->filter_duration = 30;
 

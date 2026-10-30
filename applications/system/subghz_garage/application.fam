@@ -8,15 +8,9 @@ App(
         "gui",
         "dialogs",
     ],
-    # 3KB (inherited from the Automotive fork, which never exercises the
-    # PluginManager/ELF loader since it's compiled directly into firmware)
-    # was marginal here: this app loads external .fal plugins at runtime
-    # (external CC1101 device, protocol group plugins), and that machinery
-    # has deeper/more stack-hungry call chains than a normal statically-
-    # linked app ever hits. General heap has 130KB+ free at idle, so this
-    # is cheap - raised to give real headroom against a stack overflow.
+    # Runtime protocol .fal loading and decode paths need the original headroom.
     stack_size=6 * 1024,
-    resources="resources",
+    #resources="resources",
     # cdefines ajustados para Flipper-ARF. Cada SUBGHZ_GARAGE_HAS_* activa
     # el uso directo de una API de la lib/firmware; si se omite, el shim
     # helpers/*_compat.h usa un fallback. Verificado contra ARF:

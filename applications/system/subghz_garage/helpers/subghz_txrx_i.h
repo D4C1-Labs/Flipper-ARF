@@ -27,6 +27,8 @@ struct SubGhzTxRx {
     bool radio_initialized;
 
     bool radio_registry_loaded;
+    bool radio_registry_active;
+    const SubGhzDevice* internal_radio_device;
     SubGhzHopperState hopper_state;
 
     SubGhzTxRxState txrx_state;

@@ -65,7 +65,7 @@ ust reclaim flash. Options, cheapest first:
  * ============================================================================
  */
 const SubGhzProtocol* const subghz_protocol_registry_items[] = {
-    &subghz_protocol_princeton,
+    //&subghz_protocol_princeton,
     &subghz_protocol_raw,
     &subghz_protocol_bin_raw,
     &subghz_protocol_keeloq,

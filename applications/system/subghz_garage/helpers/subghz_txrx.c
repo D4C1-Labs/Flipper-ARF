@@ -14,7 +14,7 @@
 
 #define TAG "SubGhzTxRx"
 
-#define SUBGHZ_TXRX_WORKER_RAM_COST 11000
+#define SUBGHZ_TXRX_WORKER_RAM_COST 13000
 
 #define CC1101_EXT_STATUS_PATH EXT_PATH("subghz/.cc1101_ext_status")
 
@@ -33,6 +33,17 @@ static const SubGhzProtocolRegistry subghz_garage_empty_protocol_registry = {
     .size = 0,
 };
 
+static SubGhzReceiver* subghz_txrx_receiver_alloc(SubGhzTxRx* instance) {
+    SubGhzReceiver* receiver = subghz_receiver_alloc_init(instance->environment);
+    if(receiver) {
+        /* receiver_alloc_init() leaves its protocol filter uninitialized.
+         * File decoding feeds it immediately, before any RX event can set it. */
+        subghz_receiver_set_filter(receiver, (SubGhzProtocolFlag)UINT32_MAX);
+        subghz_receiver_reset(receiver);
+    }
+    return receiver;
+}
+
 static void subghz_txrx_ensure_radio_init(SubGhzTxRx* instance) {
     furi_assert(instance);
     if(instance->radio_initialized && instance->radio_registry_loaded) {
@@ -47,8 +58,11 @@ static void subghz_txrx_ensure_radio_init(SubGhzTxRx* instance) {
 
         subghz_debug_log_write("About to init device registry");
         subghz_garage_devices_init_radio_only();
+        instance->radio_registry_active = true;
         subghz_debug_log_write("Device registry init done");
-        instance->radio_device = subghz_devices_get_by_name(SUBGHZ_DEVICE_CC1101_INT_NAME);
+        instance->internal_radio_device =
+            subghz_devices_get_by_name(SUBGHZ_DEVICE_CC1101_INT_NAME);
+        instance->radio_device = instance->internal_radio_device;
         instance->radio_device_type = SubGhzRadioDeviceTypeInternal;
 
         subghz_txrx_ensure_external_device(instance);
@@ -61,6 +75,12 @@ static void subghz_txrx_ensure_radio_init(SubGhzTxRx* instance) {
             instance->radio_device_type = SubGhzRadioDeviceTypeExternalCC1101;
         } else {
             subghz_txrx_radio_device_power_off(instance);
+            /* Keep only the built-in device; the registry's plugin manager
+             * otherwise holds every external radio .fal in RAM for the whole
+             * capture session. The internal device descriptor is firmware
+             * static and remains valid after registry teardown. */
+            subghz_devices_deinit();
+            instance->radio_registry_active = false;
         }
         subghz_debug_log_write("Radio init: external connected=%d", (int)is_connected);
 
@@ -86,7 +106,7 @@ static void subghz_txrx_ensure_radio_init(SubGhzTxRx* instance) {
             instance->environment, SUBGHZ_NICE_FLOR_S_DIR_NAME);
         subghz_environment_set_protocol_registry(
             instance->environment, (void*)instance->protocol_registry);
-        instance->receiver = subghz_receiver_alloc_init(instance->environment);
+        instance->receiver = subghz_txrx_receiver_alloc(instance);
 
         if(instance->receiver_filter_set) {
             subghz_receiver_set_filter(instance->receiver, instance->receiver_filter);
@@ -115,13 +135,19 @@ void subghz_txrx_release_radio(SubGhzTxRx* instance) {
         subghz_devices_end(instance->radio_device);
     }
 
-    subghz_debug_log_write("About to deinit device registry");
-    subghz_devices_deinit();
-    subghz_debug_log_write("Device registry deinit done");
+    if(instance->radio_registry_active) {
+        subghz_debug_log_write("About to deinit device registry");
+        subghz_devices_deinit();
+        instance->radio_registry_active = false;
+        subghz_debug_log_write("Device registry deinit done");
+    }
 
     instance->radio_device = NULL;
+    instance->internal_radio_device = NULL;
     instance->radio_device_type = SubGhzRadioDeviceTypeInternal;
     instance->radio_registry_loaded = false;
+    instance->radio_registry_active = false;
+    instance->internal_radio_device = NULL;
     instance->external_device_loaded = false;
 
     FURI_LOG_I(TAG, "Radio release done: free heap %zu", memmgr_get_free_heap());
@@ -288,7 +314,7 @@ static const SubGhzGarageProtocolPlugin* subghz_txrx_try_load_protocol_group(
     subghz_environment_set_protocol_registry(
         instance->environment, (void*)instance->protocol_registry);
 
-    instance->receiver = subghz_receiver_alloc_init(instance->environment);
+    instance->receiver = subghz_txrx_receiver_alloc(instance);
     FURI_LOG_I(TAG, "Receiver rebuilt against new group: free heap %zu", memmgr_get_free_heap());
 
     if(instance->worker) {
@@ -352,7 +378,7 @@ const SubGhzGarageProtocolPlugin*
         instance->protocol_registry = &subghz_garage_empty_protocol_registry;
         subghz_environment_set_protocol_registry(
             instance->environment, (void*)instance->protocol_registry);
-        instance->receiver = subghz_receiver_alloc_init(instance->environment);
+        instance->receiver = subghz_txrx_receiver_alloc(instance);
         return NULL;
     }
 
@@ -437,7 +463,7 @@ void subghz_txrx_set_protocol_group(SubGhzTxRx* instance, SubGhzGarageProtocolGr
 
         subghz_environment_set_protocol_registry(
             instance->environment, (void*)instance->protocol_registry);
-        instance->receiver = subghz_receiver_alloc_init(instance->environment);
+        instance->receiver = subghz_txrx_receiver_alloc(instance);
     }
     if(instance->active_protocol_group != group) {
         instance->protocol_plugin_load_failed = false;
@@ -455,7 +481,7 @@ void subghz_txrx_release_protocol_group(SubGhzTxRx* instance) {
     subghz_txrx_unload_protocol_plugin(instance);
     subghz_environment_set_protocol_registry(
         instance->environment, (void*)instance->protocol_registry);
-    instance->receiver = subghz_receiver_alloc_init(instance->environment);
+    instance->receiver = subghz_txrx_receiver_alloc(instance);
 }
 
 SubGhzGarageProtocolGroup subghz_txrx_get_protocol_group(SubGhzTxRx* instance) {
@@ -710,7 +736,7 @@ static void subghz_txrx_reverify_external_or_fallback(SubGhzTxRx* instance) {
         subghz_debug_log_write("External CC1101 stopped answering - falling back to Internal");
         subghz_txrx_radio_device_power_off(instance);
         subghz_devices_end(instance->radio_device);
-        instance->radio_device = subghz_devices_get_by_name(SUBGHZ_DEVICE_CC1101_INT_NAME);
+        instance->radio_device = instance->internal_radio_device;
         instance->radio_device_type = SubGhzRadioDeviceTypeInternal;
         Storage* fallback_storage = furi_record_open(RECORD_STORAGE);
         File* fallback_file = storage_file_alloc(fallback_storage);
@@ -776,6 +802,11 @@ static bool subghz_txrx_ensure_worker(SubGhzTxRx* instance) {
         max_block,
         (void*)instance->receiver);
     instance->worker = subghz_garage_worker_alloc();
+    if(!instance->worker) {
+        FURI_LOG_E(TAG, "ensure_worker: allocation failed");
+        subghz_debug_log_write("ensure_worker: allocation failed");
+        return false;
+    }
     FURI_LOG_I(TAG, "ensure_worker: alloc'd %p, wiring callbacks", (void*)instance->worker);
     subghz_debug_log_write("ensure_worker: alloc'd %p, wiring callbacks", (void*)instance->worker);
     subghz_garage_worker_set_overrun_callback(
@@ -1327,6 +1358,17 @@ bool subghz_txrx_radio_device_is_external_connected(SubGhzTxRx* instance, const 
 
     subghz_txrx_ensure_external_device(instance);
 
+    /* Only load external radio plugins when the user explicitly checks for
+     * an external device. If no device is found, unload them again so normal
+     * internal-radio capture keeps the heap they occupied. */
+    bool registry_was_active = instance->radio_registry_active;
+    if(!registry_was_active) {
+        subghz_garage_devices_init_radio_only();
+        instance->radio_registry_active = true;
+        instance->internal_radio_device =
+            subghz_devices_get_by_name(SUBGHZ_DEVICE_CC1101_INT_NAME);
+    }
+
     bool is_connect = false;
     bool is_otg_enabled = furi_hal_power_is_otg_enabled();
 
@@ -1341,6 +1383,11 @@ bool subghz_txrx_radio_device_is_external_connected(SubGhzTxRx* instance, const 
 
     if(!is_otg_enabled) {
         subghz_txrx_radio_device_power_off(instance);
+    }
+
+    if(!registry_was_active && !is_connect) {
+        subghz_devices_deinit();
+        instance->radio_registry_active = false;
     }
     return is_connect;
 }
@@ -1363,7 +1410,7 @@ SubGhzRadioDeviceType
         if(instance->radio_device_type != SubGhzRadioDeviceTypeInternal) {
             subghz_devices_end(instance->radio_device);
         }
-        instance->radio_device = subghz_devices_get_by_name(SUBGHZ_DEVICE_CC1101_INT_NAME);
+        instance->radio_device = instance->internal_radio_device;
         instance->radio_device_type = SubGhzRadioDeviceTypeInternal;
     }
 

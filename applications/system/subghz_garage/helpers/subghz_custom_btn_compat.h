@@ -2,6 +2,15 @@
 
 #ifdef SUBGHZ_GARAGE_HAS_CUSTOM_BTN
 #include <lib/subghz/blocks/custom_btn.h>
+
+/* ARF declares this helper but disables it in the external app API. */
+static inline void subghz_garage_custom_btn_set_long(bool value) {
+#ifdef SUBGHZ_GARAGE_HAS_CUSTOM_BTN_SET_LONG
+    subghz_custom_btn_set_long(value);
+#else
+    (void)value;
+#endif
+}
 #else
 
 #include <stdbool.h>
@@ -42,6 +51,10 @@ static inline bool subghz_custom_btn_is_allowed(void) {
 }
 
 static inline void subghz_custom_btn_set_long(bool v) {
+    (void)v;
+}
+
+static inline void subghz_garage_custom_btn_set_long(bool v) {
     (void)v;
 }
 
