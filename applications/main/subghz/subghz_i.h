@@ -6,7 +6,7 @@
 #include "subghz.h"
 #include "views/receiver.h"
 #include "views/transmitter.h"
-#include "views/subghz_frequency_analyzer.h"
+// [ARF] Frequency Analyzer internal view removed (launched as external .fap).
 #include "views/subghz_read_raw.h"
 #include "views/subghz_psa_decrypt.h"
 #include "views/subghz_keeloq_decrypt.h"
@@ -51,6 +51,10 @@
 #define SUBGHZ_RAW_THRESHOLD_MIN (-90.0f)
 #define SUBGHZ_MEASURE_LOADING   false
 
+// [ARF] JAM! pre-recorded RAW jamming captures live here (installed from
+// applications/main/subghz/resources/subghz/jam via the app's resources=).
+#define SUBGHZ_JAM_FOLDER        EXT_PATH("subghz/jam")
+
 struct SubGhz {
     Gui* gui;
     NotificationApp* notifications;
@@ -75,7 +79,7 @@ struct SubGhz {
     SubGhzViewTransmitter* subghz_transmitter;
     VariableItemList* variable_item_list;
 
-    SubGhzFrequencyAnalyzer* subghz_frequency_analyzer;
+    // [ARF] subghz_frequency_analyzer removed (external .fap now).
     SubGhzReadRAW* subghz_read_raw;
     SubGhzViewPsaDecrypt* subghz_psa_decrypt;
     SubGhzViewKeeloqDecrypt* subghz_keeloq_decrypt;
@@ -133,6 +137,17 @@ struct SubGhz {
 void subghz_blink_start(SubGhz* subghz);
 void subghz_blink_stop(SubGhz* subghz);
 
+// [ARF] Lazy alloc/free of heavy views (created on scene enter, freed on exit)
+// to keep startup/capture RAM low. See subghz.c for rationale.
+void subghz_ensure_psa_decrypt_view(SubGhz* subghz);
+void subghz_release_psa_decrypt_view(SubGhz* subghz);
+void subghz_ensure_keeloq_decrypt_view(SubGhz* subghz);
+void subghz_release_keeloq_decrypt_view(SubGhz* subghz);
+void subghz_ensure_car_emulate_view(SubGhz* subghz);
+void subghz_release_car_emulate_view(SubGhz* subghz);
+void subghz_ensure_hitag2_bf_view(SubGhz* subghz);
+void subghz_release_hitag2_bf_view(SubGhz* subghz);
+
 bool subghz_tx_start(SubGhz* subghz, FlipperFormat* flipper_format);
 void subghz_dialog_message_freq_error(SubGhz* subghz, bool only_rx);
 
@@ -144,6 +159,7 @@ bool subghz_save_protocol_to_file(
     const char* dev_file_name);
 void subghz_save_to_file(void* context);
 bool subghz_load_protocol_from_file(SubGhz* subghz);
+bool subghz_load_jam_from_file(SubGhz* subghz); // [ARF] JAM! file picker
 bool subghz_rename_file(SubGhz* subghz);
 bool subghz_file_available(SubGhz* subghz);
 bool subghz_delete_file(SubGhz* subghz);

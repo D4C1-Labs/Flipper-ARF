@@ -56,6 +56,8 @@ void subghz_scene_start_on_enter(void* context) {
     submenu_add_item(
         subghz->submenu, "Saved", SubmenuIndexSaved, subghz_scene_start_submenu_callback, subghz);
     submenu_add_item(
+        subghz->submenu, "JAM!", SubmenuIndexJam, subghz_scene_start_submenu_callback, subghz);
+    submenu_add_item(
         subghz->submenu,
         "Add Manually",
         SubmenuIndexAddManuallyAdvanced,
@@ -126,6 +128,11 @@ bool subghz_scene_start_on_event(void* context, SceneManagerEvent event) {
             scene_manager_set_scene_state(
                 subghz->scene_manager, SubGhzSceneStart, SubmenuIndexSaved);
             scene_manager_next_scene(subghz->scene_manager, SubGhzSceneSaved);
+            return true;
+        } else if(event.event == SubmenuIndexJam) {
+            scene_manager_set_scene_state(
+                subghz->scene_manager, SubGhzSceneStart, SubmenuIndexJam);
+            scene_manager_next_scene(subghz->scene_manager, SubGhzSceneJam);
             return true;
         } else if(event.event == SubmenuIndexAddManuallyAdvanced) {
             scene_manager_set_scene_state(

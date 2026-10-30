@@ -202,6 +202,9 @@ void subghz_scene_car_emulate_on_enter(void* context) {
     SubGhz* subghz = context;
     furi_assert(subghz);
 
+    // [ARF] Lazy-allocate this heavy view only now that its scene is entered.
+    subghz_ensure_car_emulate_view(subghz);
+
     /* Allocate per-session state */
     s_state = malloc(sizeof(CarEmulateState));
     furi_check(s_state);
@@ -414,4 +417,7 @@ void subghz_scene_car_emulate_on_exit(void* context) {
         free(s_state);
         s_state = NULL;
     }
+
+    // [ARF] TX is stopped and callbacks cleared above, so free the view now.
+    subghz_release_car_emulate_view(subghz);
 }

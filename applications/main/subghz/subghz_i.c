@@ -356,6 +356,31 @@ bool subghz_load_protocol_from_file(SubGhz* subghz) {
     return res;
 }
 
+// [ARF] JAM! file picker: identical to subghz_load_protocol_from_file() but
+// rooted at the jammer folder (/ext/subghz/jam) so the browser only shows the
+// pre-recorded RAW jamming captures. Selecting one loads it like any saved .sub;
+// the caller then plays it back through the existing Read RAW TX flow (jamming).
+bool subghz_load_jam_from_file(SubGhz* subghz) {
+    furi_assert(subghz);
+
+    DialogsFileBrowserOptions browser_options;
+    dialog_file_browser_set_basic_options(
+        &browser_options, SUBGHZ_APP_FILENAME_EXTENSION, &I_sub1_10px);
+    browser_options.base_path = SUBGHZ_JAM_FOLDER;
+
+    // Seed the browser at the jam folder so it opens there directly.
+    furi_string_set(subghz->file_path, SUBGHZ_JAM_FOLDER);
+
+    bool res = dialog_file_browser_show(
+        subghz->dialogs, subghz->file_path, subghz->file_path, &browser_options);
+
+    if(res) {
+        res = subghz_key_load(subghz, furi_string_get_cstr(subghz->file_path), true);
+    }
+
+    return res;
+}
+
 bool subghz_rename_file(SubGhz* subghz) {
     furi_assert(subghz);
     bool ret = true;

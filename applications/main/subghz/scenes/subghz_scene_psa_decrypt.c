@@ -220,6 +220,9 @@ static void psa_decrypt_view_callback(SubGhzCustomEvent event, void* context) {
 void subghz_scene_psa_decrypt_on_enter(void* context) {
     SubGhz* subghz = context;
 
+    // [ARF] Lazy-allocate this heavy view only now that its scene is entered.
+    subghz_ensure_psa_decrypt_view(subghz);
+
     PsaDecryptCtx* ctx = malloc(sizeof(PsaDecryptCtx));
     memset(ctx, 0, sizeof(PsaDecryptCtx));
     ctx->subghz = subghz;
@@ -360,4 +363,7 @@ void subghz_scene_psa_decrypt_on_exit(void* context) {
         free(ctx);
         scene_manager_set_scene_state(subghz->scene_manager, SubGhzScenePsaDecrypt, 0);
     }
+
+    // [ARF] Worker is joined above, so nothing can touch the view anymore: free it.
+    subghz_release_psa_decrypt_view(subghz);
 }

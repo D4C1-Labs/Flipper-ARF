@@ -90,10 +90,94 @@ static void subghz_load_custom_presets(SubGhzSetting* setting) {
 }
 */
 
+// [ARF] Lazy allocation of heavy, rarely-used views. Each view is created the
+// first time its scene is entered and released when that scene is exited, so the
+// capture/decode flow (and startup) never pays their RAM cost. This fixes the
+// out-of-memory reboot that happened with USB attached (RPC screen-stream eats
+// extra heap, pushing the always-allocated layout over the edge).
+void subghz_ensure_psa_decrypt_view(SubGhz* subghz) {
+    furi_assert(subghz);
+    if(subghz->subghz_psa_decrypt) return;
+    subghz->subghz_psa_decrypt = subghz_view_psa_decrypt_alloc();
+    view_dispatcher_add_view(
+        subghz->view_dispatcher,
+        SubGhzViewIdPsaDecrypt,
+        subghz_view_psa_decrypt_get_view(subghz->subghz_psa_decrypt));
+}
+
+void subghz_release_psa_decrypt_view(SubGhz* subghz) {
+    furi_assert(subghz);
+    if(!subghz->subghz_psa_decrypt) return;
+    view_dispatcher_remove_view(subghz->view_dispatcher, SubGhzViewIdPsaDecrypt);
+    subghz_view_psa_decrypt_free(subghz->subghz_psa_decrypt);
+    subghz->subghz_psa_decrypt = NULL;
+}
+
+void subghz_ensure_keeloq_decrypt_view(SubGhz* subghz) {
+    furi_assert(subghz);
+    if(subghz->subghz_keeloq_decrypt) return;
+    subghz->subghz_keeloq_decrypt = subghz_view_keeloq_decrypt_alloc();
+    view_dispatcher_add_view(
+        subghz->view_dispatcher,
+        SubGhzViewIdKeeloqDecrypt,
+        subghz_view_keeloq_decrypt_get_view(subghz->subghz_keeloq_decrypt));
+}
+
+void subghz_release_keeloq_decrypt_view(SubGhz* subghz) {
+    furi_assert(subghz);
+    if(!subghz->subghz_keeloq_decrypt) return;
+    view_dispatcher_remove_view(subghz->view_dispatcher, SubGhzViewIdKeeloqDecrypt);
+    subghz_view_keeloq_decrypt_free(subghz->subghz_keeloq_decrypt);
+    subghz->subghz_keeloq_decrypt = NULL;
+}
+
+void subghz_ensure_car_emulate_view(SubGhz* subghz) {
+    furi_assert(subghz);
+    if(subghz->car_emulate_view) return;
+    subghz->car_emulate_view = subghz_car_emulate_view_alloc();
+    view_dispatcher_add_view(
+        subghz->view_dispatcher,
+        SubGhzViewIdCarEmulate,
+        subghz_car_emulate_view_get_view(subghz->car_emulate_view));
+}
+
+void subghz_release_car_emulate_view(SubGhz* subghz) {
+    furi_assert(subghz);
+    if(!subghz->car_emulate_view) return;
+    view_dispatcher_remove_view(subghz->view_dispatcher, SubGhzViewIdCarEmulate);
+    subghz_car_emulate_view_free(subghz->car_emulate_view);
+    subghz->car_emulate_view = NULL;
+}
+
+void subghz_ensure_hitag2_bf_view(SubGhz* subghz) {
+    furi_assert(subghz);
+    if(subghz->subghz_hitag2_bf) return;
+    subghz->subghz_hitag2_bf = subghz_view_hitag2_bf_alloc();
+    view_dispatcher_add_view(
+        subghz->view_dispatcher,
+        SubGhzViewIdHitag2Bf,
+        subghz_view_hitag2_bf_get_view(subghz->subghz_hitag2_bf));
+}
+
+void subghz_release_hitag2_bf_view(SubGhz* subghz) {
+    furi_assert(subghz);
+    if(!subghz->subghz_hitag2_bf) return;
+    view_dispatcher_remove_view(subghz->view_dispatcher, SubGhzViewIdHitag2Bf);
+    subghz_view_hitag2_bf_free(subghz->subghz_hitag2_bf);
+    subghz->subghz_hitag2_bf = NULL;
+}
+
 SubGhz* subghz_alloc(bool alloc_for_tx_only) {
     SubGhz* subghz = malloc(sizeof(SubGhz));
 
     subghz->keeloq_keys_manager = NULL;
+
+    // [ARF] Lazy-allocated heavy views: created on their scene enter, freed on
+    // scene exit. NULL here so ensure/free logic can tell they are not live yet.
+    subghz->subghz_psa_decrypt = NULL;
+    subghz->subghz_keeloq_decrypt = NULL;
+    subghz->car_emulate_view = NULL;
+    subghz->subghz_hitag2_bf = NULL;
 
     subghz->keeloq_bf2.sig1_loaded = false;
     subghz->keeloq_bf2.sig2_loaded = false;
@@ -179,13 +263,9 @@ SubGhz* subghz_alloc(bool alloc_for_tx_only) {
             SubGhzViewIdVariableItemList,
             variable_item_list_get_view(subghz->variable_item_list));
 
-        // Frequency Analyzer
-        // View knows too much
-        subghz->subghz_frequency_analyzer = subghz_frequency_analyzer_alloc(subghz->txrx);
-        view_dispatcher_add_view(
-            subghz->view_dispatcher,
-            SubGhzViewIdFrequencyAnalyzer,
-            subghz_frequency_analyzer_get_view(subghz->subghz_frequency_analyzer));
+        // [ARF] Frequency Analyzer internal view removed: it is now launched as an
+        // external .fap (see subghz_scene_start). The heavy internal view + worker
+        // are no longer allocated here, freeing RAM at startup.
     }
     // Read RAW
     subghz->subghz_read_raw = subghz_read_raw_alloc(alloc_for_tx_only);
@@ -194,30 +274,9 @@ SubGhz* subghz_alloc(bool alloc_for_tx_only) {
         SubGhzViewIdReadRAW,
         subghz_read_raw_get_view(subghz->subghz_read_raw));
 
-    subghz->subghz_psa_decrypt = subghz_view_psa_decrypt_alloc();
-    view_dispatcher_add_view(
-        subghz->view_dispatcher,
-        SubGhzViewIdPsaDecrypt,
-        subghz_view_psa_decrypt_get_view(subghz->subghz_psa_decrypt));
-
-    subghz->subghz_keeloq_decrypt = subghz_view_keeloq_decrypt_alloc();
-    view_dispatcher_add_view(
-        subghz->view_dispatcher,
-        SubGhzViewIdKeeloqDecrypt,
-        subghz_view_keeloq_decrypt_get_view(subghz->subghz_keeloq_decrypt));
-
-    subghz->car_emulate_view = subghz_car_emulate_view_alloc();
-    view_dispatcher_add_view(
-        subghz->view_dispatcher,
-        SubGhzViewIdCarEmulate,
-        subghz_car_emulate_view_get_view(subghz->car_emulate_view));
-
-    // [HITAG2_BF] Hitag2 Bruteforce view
-    subghz->subghz_hitag2_bf = subghz_view_hitag2_bf_alloc();
-    view_dispatcher_add_view(
-        subghz->view_dispatcher,
-        SubGhzViewIdHitag2Bf,
-        subghz_view_hitag2_bf_get_view(subghz->subghz_hitag2_bf));
+    // [ARF] PSA Decrypt, KeeLoq Decrypt, Car Emulate and Hitag2 BF views are no
+    // longer allocated here. They are created lazily on their scene enter (see
+    // subghz_ensure_*_view) and freed on scene exit, keeping startup RAM low.
 
     //init threshold rssi
     subghz->threshold_rssi = subghz_threshold_rssi_alloc();
@@ -322,25 +381,35 @@ void subghz_free(SubGhz* subghz, bool alloc_for_tx_only) {
         view_dispatcher_remove_view(subghz->view_dispatcher, SubGhzViewIdVariableItemList);
         variable_item_list_free(subghz->variable_item_list);
 
-        // Frequency Analyzer
-        view_dispatcher_remove_view(subghz->view_dispatcher, SubGhzViewIdFrequencyAnalyzer);
-        subghz_frequency_analyzer_free(subghz->subghz_frequency_analyzer);
+        // [ARF] Frequency Analyzer internal view removed (now external .fap).
     }
-    // PSA Decrypt
-    view_dispatcher_remove_view(subghz->view_dispatcher, SubGhzViewIdPsaDecrypt);
-    subghz_view_psa_decrypt_free(subghz->subghz_psa_decrypt);
+    // [ARF] PSA Decrypt / KeeLoq Decrypt / Car Emulate / Hitag2 BF are lazy-
+    // allocated on scene enter and freed on scene exit to keep startup RAM low
+    // (fixes OOM with USB attached). Here we only free them if the app is closed
+    // while one of those scenes is still active (view pointer non-NULL).
+    if(subghz->subghz_psa_decrypt) {
+        view_dispatcher_remove_view(subghz->view_dispatcher, SubGhzViewIdPsaDecrypt);
+        subghz_view_psa_decrypt_free(subghz->subghz_psa_decrypt);
+        subghz->subghz_psa_decrypt = NULL;
+    }
 
-    // KeeLoq Decrypt
-    view_dispatcher_remove_view(subghz->view_dispatcher, SubGhzViewIdKeeloqDecrypt);
-    subghz_view_keeloq_decrypt_free(subghz->subghz_keeloq_decrypt);
+    if(subghz->subghz_keeloq_decrypt) {
+        view_dispatcher_remove_view(subghz->view_dispatcher, SubGhzViewIdKeeloqDecrypt);
+        subghz_view_keeloq_decrypt_free(subghz->subghz_keeloq_decrypt);
+        subghz->subghz_keeloq_decrypt = NULL;
+    }
 
-    // Custom car-emulate view
-    view_dispatcher_remove_view(subghz->view_dispatcher, SubGhzViewIdCarEmulate);
-    subghz_car_emulate_view_free(subghz->car_emulate_view);
+    if(subghz->car_emulate_view) {
+        view_dispatcher_remove_view(subghz->view_dispatcher, SubGhzViewIdCarEmulate);
+        subghz_car_emulate_view_free(subghz->car_emulate_view);
+        subghz->car_emulate_view = NULL;
+    }
 
-    // [HITAG2_BF] Hitag2 Bruteforce view
-    view_dispatcher_remove_view(subghz->view_dispatcher, SubGhzViewIdHitag2Bf);
-    subghz_view_hitag2_bf_free(subghz->subghz_hitag2_bf);
+    if(subghz->subghz_hitag2_bf) {
+        view_dispatcher_remove_view(subghz->view_dispatcher, SubGhzViewIdHitag2Bf);
+        subghz_view_hitag2_bf_free(subghz->subghz_hitag2_bf);
+        subghz->subghz_hitag2_bf = NULL;
+    }
 
     // Read RAW
     view_dispatcher_remove_view(subghz->view_dispatcher, SubGhzViewIdReadRAW);

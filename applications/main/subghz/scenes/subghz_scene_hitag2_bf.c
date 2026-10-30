@@ -671,6 +671,9 @@ static void hitag2_bf_view_callback(SubGhzCustomEvent event, void* context) {
 void subghz_scene_hitag2_bf_on_enter(void* context) {
     SubGhz* subghz = context;
 
+    // [ARF] Lazy-allocate this heavy view only now that its scene is entered.
+    subghz_ensure_hitag2_bf_view(subghz);
+
     Hitag2BfCtx* ctx = malloc(sizeof(Hitag2BfCtx));
     memset(ctx, 0, sizeof(*ctx));
     ctx->subghz = subghz;
@@ -897,4 +900,7 @@ void subghz_scene_hitag2_bf_on_exit(void* context) {
         free(ctx);
         scene_manager_set_scene_state(subghz->scene_manager, SubGhzSceneHitag2Bf, 0);
     }
+
+    // [ARF] Worker is joined above, so nothing can touch the view anymore: free it.
+    subghz_release_hitag2_bf_view(subghz);
 }

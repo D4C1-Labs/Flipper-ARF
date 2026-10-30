@@ -128,6 +128,9 @@ static void kl_decrypt_view_callback(SubGhzCustomEvent event, void* context) {
 void subghz_scene_keeloq_decrypt_on_enter(void* context) {
     SubGhz* subghz = context;
 
+    // [ARF] Lazy-allocate this heavy view only now that its scene is entered.
+    subghz_ensure_keeloq_decrypt_view(subghz);
+
     KlDecryptCtx* ctx = malloc(sizeof(KlDecryptCtx));
     memset(ctx, 0, sizeof(KlDecryptCtx));
     ctx->subghz = subghz;
@@ -299,4 +302,8 @@ void subghz_scene_keeloq_decrypt_on_exit(void* context) {
         free(ctx);
         scene_manager_set_scene_state(subghz->scene_manager, SubGhzSceneKeeloqDecrypt, 0);
     }
+
+    // [ARF] BLE callback is torn down in kl_ble_cleanup above (no worker thread
+    // here), so the view is safe to free now.
+    subghz_release_keeloq_decrypt_view(subghz);
 }
