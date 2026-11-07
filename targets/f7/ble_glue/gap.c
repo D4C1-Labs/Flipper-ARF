@@ -359,7 +359,7 @@ static void gap_init_svc(Gap* gap, const GapRootSecurityKeys* root_keys) {
     // Skip first symbol AD_TYPE_COMPLETE_LOCAL_NAME
     char* name = gap->service.adv_name + 1;
     aci_gap_init(
-        GAP_PERIPHERAL_ROLE,
+        GAP_PERIPHERAL_ROLE | GAP_CENTRAL_ROLE | GAP_OBSERVER_ROLE,
         0,
         strlen(name),
         &gap->service.gap_svc_handle,
