@@ -384,6 +384,27 @@ def ProtoPirateEmbed_plugins(
         ["subaru.c"],
     )
     ProtoPirateTxProtocolPlugin(
+        "volvo",
+        "volvo.h",
+        "VOLVO_PROTOCOL_NAME",
+        "subghz_protocol_volvo",
+        ["volvo.c"],
+    )
+    ProtoPirateTxProtocolPlugin(
+        "datsun_lada",
+        "datsun_lada.h",
+        "SUBGHZ_PROTOCOL_DATSUN_LADA_NAME",
+        "subghz_protocol_datsun_lada",
+        ["datsun_lada.c"],
+    )
+    ProtoPirateTxProtocolPlugin(
+        "land_rover_rke",
+        "landrover_rke.h",
+        "LAND_ROVER_RKE_PROTOCOL_NAME",
+        "subghz_protocol_land_rover_rke",
+        ["landrover_rke.c"],
+    )
+    ProtoPirateTxProtocolPlugin(
         "vag",
         "vag.h",
         "VAG_PROTOCOL_NAME",
