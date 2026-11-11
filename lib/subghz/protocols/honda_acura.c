@@ -241,7 +241,7 @@ static const char* honda_acura_button_name(uint8_t btn) {
     }
 }
 
-// ─── Encoder ────────────────────────────────────────────────────────────────────
+// ─── Encoder ────────────────────────────────────────────────────────────────
 
 void* subghz_protocol_encoder_honda_acura_alloc(SubGhzEnvironment* environment) {
     UNUSED(environment);
