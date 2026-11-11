@@ -114,7 +114,7 @@ static void volvo_extract_fields(SubGhzProtocolDecoderVolvo* instance) {
     instance->checksum_valid = (instance->checksum_received == volvo_calculate_checksum(d));
 }
 
-// ─── Encoder ────────────────────────────────────────────────────────────────────
+// ─── Encoder ────────────────────────────────────────────────────────────────
 
 void* subghz_protocol_encoder_volvo_alloc(SubGhzEnvironment* environment) {
     UNUSED(environment);
@@ -217,7 +217,7 @@ SubGhzProtocolStatus
     return SubGhzProtocolStatusOk;
 }
 
-// ─── Decoder ────────────────────────────────────────────────────────────────────
+// ─── Decoder ────────────────────────────────────────────────────────────────
 
 void* subghz_protocol_decoder_volvo_alloc(SubGhzEnvironment* environment) {
     UNUSED(environment);
@@ -348,7 +348,7 @@ SubGhzProtocolStatus
     return ret;
 }
 
-// ─── Display ────────────────────────────────────────────────────────────────────
+// ─── Display ────────────────────────────────────────────────────────────────
 
 static const char* volvo_button_name(uint8_t btn) {
     switch(btn) {
