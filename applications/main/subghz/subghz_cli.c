@@ -15,6 +15,7 @@
 #include <lib/subghz/devices/cc1101_int/cc1101_int_interconnect.h>
 #include <lib/subghz/devices/devices.h>
 #include <lib/subghz/devices/cc1101_configs.h>
+#include <lib/subghz/subghz_setting.h>
 
 #include <lib/toolbox/args.h>
 #include <lib/toolbox/strint.h>
@@ -397,22 +398,98 @@ void subghz_cli_command_rx(PipeSide* pipe, FuriString* args, void* context) {
     free(instance);
 }
 
+typedef struct {
+    const char* name;
+    const uint8_t* regs;
+} SubGhzCliPreset;
+
+/* Names match doctor-firmware and KAT (HackRF preset table + flipper_preset). */
+#define SUBGHZ_CLI_PRESET_NAMES "AM270|AM650|AM101|FM238|FM12K|FM20K|FM20KR|FM14K|FM476"
+
+static const SubGhzCliPreset subghz_cli_presets[] = {
+    {"AM270", subghz_device_cc1101_preset_ook_270khz_async_regs},
+    {"AM650", subghz_device_cc1101_preset_ook_650khz_async_regs},
+    {"AM101", subghz_device_cc1101_preset_ook_101khz_16kbaud_async_regs},
+    {"FM238", subghz_device_cc1101_preset_2fsk_dev2_38khz_async_regs},
+    {"FM12K", subghz_device_cc1101_preset_2fsk_dev12khz_async_regs},
+    {"FM20K", subghz_device_cc1101_preset_mercedes_async_regs},
+    {"FM20KR", subghz_device_cc1101_preset_mercedes_rx_async_regs},
+    {"FM14K", subghz_device_cc1101_preset_2fsk_dev14khz_38kbaud_async_regs},
+    {"FM476", subghz_device_cc1101_preset_2fsk_dev47_6khz_async_regs},
+};
+
+static SubGhzSetting* subghz_cli_setting = NULL;
+static char subghz_cli_custom_name[32];
+static SubGhzCliPreset subghz_cli_custom_preset = {subghz_cli_custom_name, NULL};
+
+static void subghz_cli_preset_release(void) {
+    if(subghz_cli_setting) {
+        subghz_setting_free(subghz_cli_setting);
+        subghz_cli_setting = NULL;
+    }
+    subghz_cli_custom_preset.regs = NULL;
+}
+
+static const SubGhzCliPreset* subghz_cli_parse_preset(const char* args) {
+    while(*args == ' ') args++;
+    if(*args == '\0') return &subghz_cli_presets[1];
+    for(size_t i = 0; i < COUNT_OF(subghz_cli_presets); i++) {
+        const size_t len = strlen(subghz_cli_presets[i].name);
+        if(strncasecmp(args, subghz_cli_presets[i].name, len) == 0 &&
+           (args[len] == '\0' || args[len] == ' ')) {
+            return &subghz_cli_presets[i];
+        }
+    }
+
+    /* setting_user names KAT already uses on HackRF: Honda1, F4, F3, FM95, ... */
+    size_t len = 0;
+    while(args[len] && args[len] != ' ') len++;
+    if(!len || len >= sizeof(subghz_cli_custom_name)) return NULL;
+    memcpy(subghz_cli_custom_name, args, len);
+    subghz_cli_custom_name[len] = '\0';
+    if(!subghz_cli_setting) {
+        subghz_cli_setting = subghz_setting_alloc();
+        subghz_setting_load(subghz_cli_setting, EXT_PATH("subghz/assets/setting_user"));
+    }
+    subghz_cli_custom_preset.regs =
+        subghz_setting_get_preset_data_by_name(subghz_cli_setting, subghz_cli_custom_name);
+    return subghz_cli_custom_preset.regs ? &subghz_cli_custom_preset : NULL;
+}
+
 void subghz_cli_command_rx_raw(PipeSide* pipe, FuriString* args, void* context) {
     UNUSED(context);
     uint32_t frequency = 433920000;
+    uint32_t device_ind = 0;
+    const SubGhzCliPreset* preset = subghz_cli_parse_preset("");
 
     if(furi_string_size(args)) {
-        if(strint_to_uint32(furi_string_get_cstr(args), NULL, &frequency, 10) !=
-           StrintParseNoError) {
-            cli_print_usage("subghz rx", "<Frequency: in Hz>", furi_string_get_cstr(args));
+        char* args_cstr = (char*)furi_string_get_cstr(args);
+        StrintParseError parse_err = strint_to_uint32(args_cstr, &args_cstr, &frequency, 10);
+        while(*args_cstr == ' ') args_cstr++;
+        if(!parse_err && *args_cstr) {
+            parse_err = strint_to_uint32(args_cstr, &args_cstr, &device_ind, 10);
+            preset = subghz_cli_parse_preset(args_cstr);
+        }
+        if(parse_err || !preset) {
+            subghz_cli_preset_release();
+            cli_print_usage(
+                "subghz rx_raw",
+                "<Frequency: in Hz> [Device: 0 - internal, 1 - external] [Preset: " SUBGHZ_CLI_PRESET_NAMES
+                " or a setting_user name]",
+                furi_string_get_cstr(args));
             return;
         }
-        if(!furi_hal_subghz_is_frequency_valid(frequency)) {
-            printf(
-                "Frequency must be in " SUBGHZ_FREQUENCY_RANGE_STR " range, not %lu\r\n",
-                frequency);
-            return;
-        }
+    }
+
+    subghz_devices_init();
+    const SubGhzDevice* device = subghz_cli_command_get_device(&device_ind);
+    if(!subghz_devices_is_frequency_valid(device, frequency)) {
+        printf(
+            "Frequency must be in " SUBGHZ_FREQUENCY_RANGE_STR " range, not %lu\r\n", frequency);
+        subghz_devices_deinit();
+        subghz_cli_radio_device_power_off();
+        subghz_cli_preset_release();
+        return;
     }
 
     // Allocate context and buffers
@@ -420,19 +497,23 @@ void subghz_cli_command_rx_raw(PipeSide* pipe, FuriString* args, void* context) 
     instance->stream =
         furi_stream_buffer_alloc(sizeof(LevelDuration) * 1024, sizeof(LevelDuration));
 
-    // Configure radio
-    furi_hal_subghz_reset();
-    furi_hal_subghz_load_custom_preset(subghz_device_cc1101_preset_ook_650khz_async_regs);
-    frequency = furi_hal_subghz_set_frequency_and_path(frequency);
-    furi_hal_gpio_init(&gpio_cc1101_g0, GpioModeInput, GpioPullNo, GpioSpeedLow);
+    // Configure radio with the named doctor/KAT preset (AM650 if omitted).
+    subghz_devices_begin(device);
+    subghz_devices_reset(device);
+    subghz_devices_load_preset(device, FuriHalSubGhzPresetCustom, (uint8_t*)preset->regs);
+    frequency = subghz_devices_set_frequency(device, frequency);
 
     furi_hal_power_suppress_charge_enter();
 
     // Prepare and start RX
-    furi_hal_subghz_start_async_rx(subghz_cli_command_rx_capture_callback, instance);
+    subghz_devices_start_async_rx(device, subghz_cli_command_rx_capture_callback, instance);
 
     // Wait for packets to arrive
-    printf("Listening at %lu. Press CTRL+C to stop\r\n", frequency);
+    printf(
+        "Listening at %lu on %s, preset %s. Press CTRL+C to stop\r\n",
+        frequency,
+        subghz_devices_get_name(device),
+        preset->name);
     LevelDuration level_duration;
     size_t counter = 0;
     while(!cli_is_pipe_broken_or_is_etx_next_char(pipe)) {
@@ -461,8 +542,12 @@ void subghz_cli_command_rx_raw(PipeSide* pipe, FuriString* args, void* context) 
     }
 
     // Shutdown radio
-    furi_hal_subghz_stop_async_rx();
-    furi_hal_subghz_sleep();
+    subghz_devices_stop_async_rx(device);
+    subghz_devices_sleep(device);
+    subghz_devices_end(device);
+    subghz_devices_deinit();
+    subghz_cli_radio_device_power_off();
+    subghz_cli_preset_release();
 
     furi_hal_power_suppress_charge_exit();
 
@@ -840,7 +925,9 @@ static void subghz_cli_command_print_usage(void) {
     printf(
         "\ttx <3 byte Key: in hex> <frequency: in Hz> <te: us> <repeat: count> <device: 0 - CC1101_INT, 1 - CC1101_EXT>\t - Transmitting key\r\n");
     printf("\trx <frequency:in Hz> <device: 0 - CC1101_INT, 1 - CC1101_EXT>\t - Receive\r\n");
-    printf("\trx_raw <frequency:in Hz>\t - Receive RAW\r\n");
+    printf(
+        "\trx_raw <frequency:in Hz> [device: 0 - internal, 1 - external] [preset: " SUBGHZ_CLI_PRESET_NAMES
+        "]\t - Receive RAW\r\n");
     printf("\tdecode_raw <file_name: path_RAW_file>\t - Testing\r\n");
     printf(
         "\ttx_from_file <file_name: path_file> <repeat: count> <device: 0 - CC1101_INT, 1 - CC1101_EXT>\t - Transmitting from file\r\n");
