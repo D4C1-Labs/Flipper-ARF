@@ -1,302 +1,389 @@
-/**
- * landrover_rke.c
- * Land Rover RKE (Remote Keyless Entry) protocol — ported from Pandora DXL 5000 firmware
- * Target: Flipper Zero (SubGHz RAW / custom protocol plugin)
- *
- * Protocol ID in original firmware: 0x0E
- * Co-located in firmware with Ford/Jaguar (case 0x0E references 0xed58 "Ford/Jaguar"
- * then falls through to 0xed64 "Land Rover" — same baseband, different ID range).
- *
- * Frequency: 433.92 MHz (EU/RoW) or 315.00 MHz (North America)
- * Modulation: OOK, Fixed-width PWM (similar to Ford RKE / Microchip KEELOQ derivative)
- * Carrier: AM
- *
- * Frame structure (Land Rover Freelander 2 / Discovery 3-4 / Range Rover Sport ~2004-2013):
- *   Preamble : 20 logic-1 pulses (carrier warmup)
- *   Header   : 1 logic-1 + sync gap (~9.6 ms LOW)
- *   Payload  : 66 bits, MSB-first, fixed-width PWM
- *     [65:34] 32-bit KeeLoq encrypted hopping code
- *     [33:18] 16-bit fixed serial number (high word)
- *     [17:10]  8-bit fixed serial (low byte)
- *     [9:6]    4-bit button code
- *              0x1=Lock, 0x2=Unlock, 0x4=Boot/Tailgate, 0x8=Panic
- *     [5:2]    4-bit function bits (repeat count / battery low flags)
- *     [1:0]    2-bit status (0x1=battery low, 0x2=repeat)
- *   Repeated up to 4 times
- *
- * PWM timing (from firmware, FUN_000007cc + FUN_00000840 timer init):
- *   Bit period : 1000 µs
- *   Bit-1      :  700 µs HIGH + 300 µs LOW
- *   Bit-0      :  300 µs HIGH + 700 µs LOW
- *   Preamble pulse: 400 µs HIGH + 600 µs LOW
- *   Sync gap   :   400 µs HIGH + 9600 µs LOW
- *   Tolerance  : ±20%
- *
- * KeeLoq note:
- *   The hopping code is encrypted with KeeLoq (Microchip HCS-series algorithm).
- *   Full decryption requires the manufacturer key (not in the firmware binary —
- *   it's provisioned per fob). This file implements the protocol framing layer;
- *   a separate keeloq.c provides the cipher if you have the key.
- */
+#include "landrover_rke.h"
 
-#include <stdint.h>
-#include <stdbool.h>
+#include "../blocks/const.h"
+#include "../blocks/decoder.h"
+#include "../blocks/encoder.h"
+#include "../blocks/generic.h"
+#include "../blocks/math.h"
+#include "../blocks/custom_btn_i.h"
+
 #include <string.h>
 
-/* -------------------------------------------------------------------------
- * Timing constants (microseconds)
- * ------------------------------------------------------------------------- */
-#define LR_PREAMBLE_HIGH_US    400u
-#define LR_PREAMBLE_LOW_US     600u
-#define LR_PREAMBLE_COUNT       20u
+#define TAG "SubGhzProtocolLandRoverRke"
 
-#define LR_SYNC_HIGH_US        400u
-#define LR_SYNC_LOW_US        9600u
-
-#define LR_BIT_PERIOD_US      1000u
-#define LR_BIT1_HIGH_US        700u
-#define LR_BIT1_LOW_US         300u
-#define LR_BIT0_HIGH_US        300u
-#define LR_BIT0_LOW_US         700u
-
-#define LR_REPEAT_GAP_US      12000u
-#define LR_REPEAT_COUNT          4u
-#define LR_TOLERANCE_PCT        20u
-
-#define LR_FRAME_BITS           66u
-
-/* Button codes (bits [9:6]) */
-#define LR_BTN_LOCK             0x1u
-#define LR_BTN_UNLOCK           0x2u
-#define LR_BTN_BOOT             0x4u
-#define LR_BTN_PANIC            0x8u
-
-/* -------------------------------------------------------------------------
- * Data types
- * ------------------------------------------------------------------------- */
-
-/**
- * Decoded Land Rover RKE frame.
- * The hop_code is the raw 32-bit KeeLoq ciphertext — decrypt separately.
- */
-typedef struct {
-    uint32_t hop_code;      /**< 32-bit KeeLoq encrypted hopping word       */
-    uint32_t serial;        /**< 24-bit fixed serial number (bits [33:10])  */
-    uint8_t  button;        /**< 4-bit button code (LR_BTN_*)               */
-    uint8_t  func_bits;     /**< 4-bit function/repeat flags                */
-    uint8_t  status;        /**< 2-bit status byte                          */
-    bool     valid;         /**< true if frame geometry is correct          */
-} LandRoverFrame;
-
-/** Raw pulse buffer */
-typedef struct {
-    int32_t  pulses[512];
-    uint32_t count;
-} LandRoverRawBuf;
-
-/* -------------------------------------------------------------------------
- * Internal helpers
- * ------------------------------------------------------------------------- */
-
-static bool lr_in_range(int32_t measured_us, uint32_t ref_us)
-{
-    int32_t ref  = (int32_t)ref_us;
-    int32_t diff = measured_us - ref;
-    if (diff < 0) diff = -diff;
-    return (diff * 100) <= (ref * (int32_t)LR_TOLERANCE_PCT);
-}
-
-static void lr_push(LandRoverRawBuf *buf, int32_t val)
-{
-    if (buf->count < 512) buf->pulses[buf->count++] = val;
-}
-
-static void lr_push_pair(LandRoverRawBuf *buf, uint32_t hi, uint32_t lo)
-{
-    lr_push(buf,  (int32_t)hi);
-    lr_push(buf, -(int32_t)lo);
-}
-
-/* -------------------------------------------------------------------------
- * Encode
- * ------------------------------------------------------------------------- */
-
-/**
- * lr_encode() — encode a LandRoverFrame into a Flipper SubGHz RAW buffer.
+/*
+ * Land Rover / Jaguar-family RKE framing (Freelander 2, Discovery 3-4,
+ * Range Rover Sport, about 2004-2013). 433.92 MHz EU or 315 MHz NA.
+ * OOK fixed-width PWM, 66 bits, MSB first.
  *
- * The hop_code field must already be KeeLoq-encrypted by the caller.
- * Emits LR_REPEAT_COUNT repetitions.
+ *   [65:34] 32-bit hopping word (KeeLoq ciphertext; stored opaque)
+ *   [33:10] 24-bit serial
+ *   [9:6]   4-bit button
+ *   [5:2]   4-bit function / repeat flags
+ *   [1:0]   2-bit status
+ *
+ * The hopping word is not decrypted here. A lab replay sends the captured
+ * ciphertext plus the clear button nibble. Changing the button without a
+ * matching hop is the desync the bench is measuring.
  */
-void lr_encode(const LandRoverFrame *frame, LandRoverRawBuf *buf)
-{
-    buf->count = 0;
 
-    /* Pack the 66-bit payload into a uint8_t array, MSB-first            */
-    /* Layout: [65:34]=hop_code [33:10]=serial [9:6]=button               */
-    /*         [5:2]=func_bits  [1:0]=status                              */
-    uint8_t bits[66];
-    memset(bits, 0, sizeof(bits));
+#define LR_SYNC_HIGH_US 400U
+#define LR_SYNC_LOW_US 9600U
+#define LR_BIT1_HIGH_US 700U
+#define LR_BIT1_LOW_US 300U
+#define LR_BIT0_HIGH_US 300U
+#define LR_BIT0_LOW_US 700U
+#define LR_TE_DELTA 160U
+#define LR_SYNC_DELTA 1200U
+#define LR_FRAME_BITS 66U
+#define LR_CLEAR_BITS 64U
+#define LR_REPEAT 4U
 
-    /* hop_code: bits 65..34 */
-    for (int i = 0; i < 32; i++) {
-        bits[65 - i] = (frame->hop_code >> i) & 1u;
-    }
-    /* serial: bits 33..10 (24 bits) */
-    for (int i = 0; i < 24; i++) {
-        bits[33 - i] = (frame->serial >> i) & 1u;
-    }
-    /* button: bits 9..6 */
-    for (int i = 0; i < 4; i++) {
-        bits[9 - i] = (frame->button >> i) & 1u;
-    }
-    /* func_bits: bits 5..2 */
-    for (int i = 0; i < 4; i++) {
-        bits[5 - i] = (frame->func_bits >> i) & 1u;
-    }
-    /* status: bits 1..0 */
-    bits[1] = (frame->status >> 1) & 1u;
-    bits[0] =  frame->status       & 1u;
+typedef enum {
+    LandRoverRkeDecoderStepReset = 0,
+    LandRoverRkeDecoderStepSync,
+    LandRoverRkeDecoderStepSaveDuration,
+    LandRoverRkeDecoderStepCheckDuration,
+} LandRoverRkeDecoderStep;
 
-    for (uint32_t rep = 0; rep < LR_REPEAT_COUNT; rep++) {
-        /* Preamble: 20 pulses */
-        for (uint32_t p = 0; p < LR_PREAMBLE_COUNT; p++) {
-            lr_push_pair(buf, LR_PREAMBLE_HIGH_US, LR_PREAMBLE_LOW_US);
+struct SubGhzProtocolDecoderLandRoverRke {
+    SubGhzProtocolDecoderBase base;
+    SubGhzBlockDecoder decoder;
+    SubGhzBlockGeneric generic;
+    uint8_t status;
+};
+
+struct SubGhzProtocolEncoderLandRoverRke {
+    SubGhzProtocolEncoderBase base;
+    SubGhzProtocolBlockEncoder encoder;
+    SubGhzBlockGeneric generic;
+    uint8_t status;
+};
+
+static const SubGhzBlockConst subghz_protocol_land_rover_rke_const = {
+    .te_short = LR_BIT0_HIGH_US,
+    .te_long = LR_BIT1_HIGH_US,
+    .te_delta = LR_TE_DELTA,
+    .min_count_bit_for_found = LR_FRAME_BITS,
+};
+
+const SubGhzProtocolDecoder subghz_protocol_land_rover_rke_decoder = {
+    .alloc = subghz_protocol_decoder_land_rover_rke_alloc,
+    .free = subghz_protocol_decoder_land_rover_rke_free,
+    .feed = subghz_protocol_decoder_land_rover_rke_feed,
+    .reset = subghz_protocol_decoder_land_rover_rke_reset,
+    .get_hash_data = subghz_protocol_decoder_land_rover_rke_get_hash_data,
+    .serialize = subghz_protocol_decoder_land_rover_rke_serialize,
+    .deserialize = subghz_protocol_decoder_land_rover_rke_deserialize,
+    .get_string = subghz_protocol_decoder_land_rover_rke_get_string,
+};
+
+const SubGhzProtocolEncoder subghz_protocol_land_rover_rke_encoder = {
+    .alloc = subghz_protocol_encoder_land_rover_rke_alloc,
+    .free = subghz_protocol_encoder_land_rover_rke_free,
+    .deserialize = subghz_protocol_encoder_land_rover_rke_deserialize,
+    .stop = subghz_protocol_encoder_land_rover_rke_stop,
+    .yield = subghz_protocol_encoder_land_rover_rke_yield,
+};
+
+const SubGhzProtocol subghz_protocol_land_rover_rke = {
+    .name = LAND_ROVER_RKE_PROTOCOL_NAME,
+    .type = SubGhzProtocolTypeDynamic,
+    .flag = SubGhzProtocolFlag_433 | SubGhzProtocolFlag_315 | SubGhzProtocolFlag_AM |
+            SubGhzProtocolFlag_Decodable | SubGhzProtocolFlag_Load | SubGhzProtocolFlag_Save |
+            SubGhzProtocolFlag_Send,
+    .decoder = &subghz_protocol_land_rover_rke_decoder,
+    .encoder = &subghz_protocol_land_rover_rke_encoder,
+};
+
+static bool lr_near(uint32_t duration, uint32_t ref, uint32_t delta) {
+    return DURATION_DIFF(duration, ref) < delta;
+}
+
+static void lr_unpack(SubGhzBlockGeneric* generic, uint8_t status) {
+    const uint64_t clear = generic->data;
+    generic->serial = (uint32_t)((clear >> 8) & 0xFFFFFFULL);
+    generic->btn = (uint8_t)((clear >> 4) & 0x0FU);
+    generic->cnt = (uint32_t)(clear >> 32);
+    generic->extra = status & 0x03U;
+}
+
+static uint64_t lr_pack_clear(uint32_t hop, uint32_t serial, uint8_t button, uint8_t func) {
+    return ((uint64_t)hop << 32) | ((uint64_t)(serial & 0xFFFFFFU) << 8) |
+           ((uint64_t)(button & 0x0FU) << 4) | (uint64_t)(func & 0x0FU);
+}
+
+static uint8_t lr_read_status(FlipperFormat* flipper_format);
+
+static const char* lr_button_name(uint8_t button) {
+    switch(button) {
+    case 0x1:
+        return "Lock";
+    case 0x2:
+        return "Unlock";
+    case 0x4:
+        return "Boot";
+    case 0x8:
+        return "Panic";
+    default:
+        return "Unknown";
+    }
+}
+
+void* subghz_protocol_encoder_land_rover_rke_alloc(SubGhzEnvironment* environment) {
+    UNUSED(environment);
+    SubGhzProtocolEncoderLandRoverRke* instance = malloc(sizeof(SubGhzProtocolEncoderLandRoverRke));
+    instance->base.protocol = &subghz_protocol_land_rover_rke;
+    instance->generic.protocol_name = instance->base.protocol->name;
+    instance->encoder.size_upload = 220;
+    instance->encoder.upload = malloc(instance->encoder.size_upload * sizeof(LevelDuration));
+    instance->encoder.repeat = LR_REPEAT;
+    instance->encoder.is_running = false;
+    return instance;
+}
+
+void subghz_protocol_encoder_land_rover_rke_free(void* context) {
+    furi_assert(context);
+    SubGhzProtocolEncoderLandRoverRke* instance = context;
+    free(instance->encoder.upload);
+    free(instance);
+}
+
+void subghz_protocol_encoder_land_rover_rke_stop(void* context) {
+    SubGhzProtocolEncoderLandRoverRke* instance = context;
+    instance->encoder.is_running = false;
+}
+
+LevelDuration subghz_protocol_encoder_land_rover_rke_yield(void* context) {
+    SubGhzProtocolEncoderLandRoverRke* instance = context;
+    if(instance->encoder.repeat == 0 || !instance->encoder.is_running) {
+        instance->encoder.is_running = false;
+        return level_duration_reset();
+    }
+    LevelDuration ret = instance->encoder.upload[instance->encoder.front];
+    if(++instance->encoder.front == instance->encoder.size_upload) {
+        instance->encoder.repeat--;
+        instance->encoder.front = 0;
+    }
+    return ret;
+}
+
+static bool lr_encoder_get_upload(SubGhzProtocolEncoderLandRoverRke* instance) {
+    if(subghz_custom_btn_get_original() == 0) {
+        subghz_custom_btn_set_original(instance->generic.btn);
+    }
+    subghz_custom_btn_set_max(4);
+    if(subghz_custom_btn_get() != SUBGHZ_CUSTOM_BTN_OK) {
+        instance->generic.btn = subghz_custom_btn_get();
+    }
+
+    const uint32_t hop = (uint32_t)(instance->generic.data >> 32);
+    const uint8_t func = (uint8_t)(instance->generic.data & 0x0FU);
+    instance->generic.data =
+        lr_pack_clear(hop, instance->generic.serial, instance->generic.btn, func);
+
+    size_t idx = 0;
+    for(uint32_t p = 0; p < 20; p++) {
+        instance->encoder.upload[idx++] = level_duration_make(true, LR_SYNC_HIGH_US);
+        instance->encoder.upload[idx++] = level_duration_make(false, 600);
+    }
+    instance->encoder.upload[idx++] = level_duration_make(true, LR_SYNC_HIGH_US);
+    instance->encoder.upload[idx++] = level_duration_make(false, LR_SYNC_LOW_US);
+
+    for(int bit = 63; bit >= 0; bit--) {
+        const bool one = ((instance->generic.data >> bit) & 1ULL) != 0;
+        instance->encoder.upload[idx++] =
+            level_duration_make(true, one ? LR_BIT1_HIGH_US : LR_BIT0_HIGH_US);
+        instance->encoder.upload[idx++] =
+            level_duration_make(false, one ? LR_BIT1_LOW_US : LR_BIT0_LOW_US);
+    }
+    for(int bit = 1; bit >= 0; bit--) {
+        const bool one = ((instance->status >> bit) & 1U) != 0;
+        instance->encoder.upload[idx++] =
+            level_duration_make(true, one ? LR_BIT1_HIGH_US : LR_BIT0_HIGH_US);
+        instance->encoder.upload[idx++] =
+            level_duration_make(false, one ? LR_BIT1_LOW_US : LR_BIT0_LOW_US);
+    }
+    instance->encoder.upload[idx++] = level_duration_make(false, 12000);
+    instance->encoder.size_upload = idx;
+    return idx <= 220;
+}
+
+SubGhzProtocolStatus subghz_protocol_encoder_land_rover_rke_deserialize(
+    void* context,
+    FlipperFormat* flipper_format) {
+    furi_assert(context);
+    SubGhzProtocolEncoderLandRoverRke* instance = context;
+    SubGhzProtocolStatus ret = subghz_block_generic_deserialize(&instance->generic, flipper_format);
+    if(ret != SubGhzProtocolStatusOk) return ret;
+    if(instance->generic.data_count_bit != LR_FRAME_BITS &&
+       instance->generic.data_count_bit != LR_CLEAR_BITS) {
+        return SubGhzProtocolStatusErrorValueBitCount;
+    }
+    instance->status = lr_read_status(flipper_format);
+    lr_unpack(&instance->generic, instance->status);
+    if(!lr_encoder_get_upload(instance)) return SubGhzProtocolStatusErrorEncoderGetUpload;
+    instance->encoder.front = 0;
+    instance->encoder.is_running = true;
+    return SubGhzProtocolStatusOk;
+}
+
+void* subghz_protocol_decoder_land_rover_rke_alloc(SubGhzEnvironment* environment) {
+    UNUSED(environment);
+    SubGhzProtocolDecoderLandRoverRke* instance = malloc(sizeof(SubGhzProtocolDecoderLandRoverRke));
+    instance->base.protocol = &subghz_protocol_land_rover_rke;
+    instance->generic.protocol_name = instance->base.protocol->name;
+    return instance;
+}
+
+void subghz_protocol_decoder_land_rover_rke_free(void* context) {
+    furi_assert(context);
+    free(context);
+}
+
+void subghz_protocol_decoder_land_rover_rke_reset(void* context) {
+    furi_assert(context);
+    SubGhzProtocolDecoderLandRoverRke* instance = context;
+    instance->decoder.parser_step = LandRoverRkeDecoderStepReset;
+    instance->decoder.decode_data = 0;
+    instance->decoder.decode_count_bit = 0;
+    instance->status = 0;
+}
+
+void subghz_protocol_decoder_land_rover_rke_feed(void* context, bool level, uint32_t duration) {
+    furi_assert(context);
+    SubGhzProtocolDecoderLandRoverRke* instance = context;
+
+    switch(instance->decoder.parser_step) {
+    case LandRoverRkeDecoderStepReset:
+        if(level &&
+           lr_near(duration, LR_SYNC_HIGH_US, subghz_protocol_land_rover_rke_const.te_delta)) {
+            instance->decoder.parser_step = LandRoverRkeDecoderStepSync;
         }
-        /* Sync */
-        lr_push_pair(buf, LR_SYNC_HIGH_US, LR_SYNC_LOW_US);
-
-        /* Data bits, MSB-first (bit 65 first on air) */
-        for (int b = 65; b >= 0; b--) {
-            if (bits[b]) {
-                lr_push_pair(buf, LR_BIT1_HIGH_US, LR_BIT1_LOW_US);
-            } else {
-                lr_push_pair(buf, LR_BIT0_HIGH_US, LR_BIT0_LOW_US);
+        break;
+    case LandRoverRkeDecoderStepSync:
+        if(!level && lr_near(duration, LR_SYNC_LOW_US, LR_SYNC_DELTA)) {
+            instance->decoder.decode_data = 0;
+            instance->decoder.decode_count_bit = 0;
+            instance->status = 0;
+            instance->decoder.parser_step = LandRoverRkeDecoderStepSaveDuration;
+        } else {
+            instance->decoder.parser_step = LandRoverRkeDecoderStepReset;
+        }
+        break;
+    case LandRoverRkeDecoderStepSaveDuration:
+        if(level) {
+            instance->decoder.te_last = duration;
+            instance->decoder.parser_step = LandRoverRkeDecoderStepCheckDuration;
+        } else {
+            instance->decoder.parser_step = LandRoverRkeDecoderStepReset;
+        }
+        break;
+    case LandRoverRkeDecoderStepCheckDuration:
+        if(level) {
+            instance->decoder.parser_step = LandRoverRkeDecoderStepReset;
+            break;
+        }
+        {
+            bool one = false;
+            bool bit_ok = false;
+            if(lr_near(instance->decoder.te_last, LR_BIT1_HIGH_US, LR_TE_DELTA) &&
+               lr_near(duration, LR_BIT1_LOW_US, LR_TE_DELTA)) {
+                one = true;
+                bit_ok = true;
+            } else if(
+                lr_near(instance->decoder.te_last, LR_BIT0_HIGH_US, LR_TE_DELTA) &&
+                lr_near(duration, LR_BIT0_LOW_US, LR_TE_DELTA)) {
+                one = false;
+                bit_ok = true;
             }
-        }
-
-        /* Inter-repetition gap */
-        if (rep < LR_REPEAT_COUNT - 1) {
-            lr_push(buf, -(int32_t)LR_REPEAT_GAP_US);
-        }
-    }
-}
-
-/* -------------------------------------------------------------------------
- * Decode
- * ------------------------------------------------------------------------- */
-
-/**
- * lr_decode() — decode a raw pulse buffer into a LandRoverFrame.
- *
- * Returns true if a geometrically valid frame was found (preamble + sync +
- * 66 bits all within timing tolerance). The hop_code will need KeeLoq
- * decryption by the caller to verify authenticity.
- */
-bool lr_decode(const LandRoverRawBuf *buf, LandRoverFrame *frame)
-{
-    memset(frame, 0, sizeof(*frame));
-
-    for (uint32_t i = 0; i + 1 < buf->count; i++) {
-        /* Look for sync: ~400 µs HIGH + ~9600 µs LOW */
-        if (!lr_in_range( buf->pulses[i],     LR_SYNC_HIGH_US)) continue;
-        if (!lr_in_range(-buf->pulses[i + 1], LR_SYNC_LOW_US))  continue;
-
-        uint32_t j = i + 2;
-        if (j + LR_FRAME_BITS * 2 > buf->count) continue;
-
-        uint8_t bits[66];
-        bool ok = true;
-
-        for (uint32_t b = 0; b < LR_FRAME_BITS; b++) {
-            int32_t hi =  buf->pulses[j];
-            int32_t lo = -buf->pulses[j + 1];
-            j += 2;
-
-            if (lr_in_range(hi, LR_BIT1_HIGH_US) && lr_in_range(lo, LR_BIT1_LOW_US)) {
-                bits[65 - b] = 1;
-            } else if (lr_in_range(hi, LR_BIT0_HIGH_US) && lr_in_range(lo, LR_BIT0_LOW_US)) {
-                bits[65 - b] = 0;
-            } else {
-                ok = false;
+            if(!bit_ok) {
+                instance->decoder.parser_step = LandRoverRkeDecoderStepReset;
                 break;
             }
+            if(instance->decoder.decode_count_bit < LR_CLEAR_BITS) {
+                instance->decoder.decode_data = (instance->decoder.decode_data << 1) | (one ? 1ULL : 0ULL);
+            } else {
+                instance->status = (uint8_t)((instance->status << 1) | (one ? 1U : 0U));
+            }
+            instance->decoder.decode_count_bit++;
+            if(instance->decoder.decode_count_bit == LR_FRAME_BITS) {
+                instance->generic.data = instance->decoder.decode_data;
+                instance->generic.data_count_bit = LR_FRAME_BITS;
+                instance->status &= 0x03U;
+                lr_unpack(&instance->generic, instance->status);
+                if(instance->base.callback) {
+                    instance->base.callback(&instance->base, instance->base.context);
+                }
+                instance->decoder.parser_step = LandRoverRkeDecoderStepReset;
+            } else {
+                instance->decoder.parser_step = LandRoverRkeDecoderStepSaveDuration;
+            }
         }
-
-        if (!ok) continue;
-
-        /* Unpack — MSB of each field is highest-indexed bit */
-        frame->hop_code = 0;
-        for (int k = 0; k < 32; k++) {
-            frame->hop_code |= (uint32_t)bits[65 - k] << (31 - k);
-        }
-        frame->serial = 0;
-        for (int k = 0; k < 24; k++) {
-            frame->serial |= (uint32_t)bits[33 - k] << (23 - k);
-        }
-        frame->button = 0;
-        for (int k = 0; k < 4; k++) {
-            frame->button |= (uint8_t)bits[9 - k] << (3 - k);
-        }
-        frame->func_bits = 0;
-        for (int k = 0; k < 4; k++) {
-            frame->func_bits |= (uint8_t)bits[5 - k] << (3 - k);
-        }
-        frame->status = (bits[1] << 1) | bits[0];
-        frame->valid  = true;
-        return true;
+        break;
     }
-
-    return false;
 }
 
-/* -------------------------------------------------------------------------
- * KeeLoq stub
- *
- * Land Rover uses a KeeLoq-derived hopping code (same baseband as Ford/Jaguar,
- * firmware case 0x0E dispatches both via the same path before branching on
- * the serial-number range).
- *
- * To decrypt hop_code you need the 64-bit manufacturer key. Implement
- * keeloq_decrypt() in a separate keeloq.c (standard NLF cipher, widely
- * documented in Microchip AN-66265).
- *
- * extern uint32_t keeloq_decrypt(uint32_t ciphertext, uint64_t key);
- *
- * Typical Land Rover key derivation (normal learning, from public research):
- *   uint64_t man_key = LR_MANUFACTURER_KEY;  // provisioned, not in firmware
- *   uint64_t dev_key = keeloq_learn_normal(man_key, serial);
- *   uint32_t plain   = keeloq_decrypt(frame.hop_code, dev_key);
- *   // plain[15:0]  = 16-bit counter
- *   // plain[19:16] = button code (must match frame.button)
- *   // plain[31:28] = discriminant (0x6 for LR)
- * ------------------------------------------------------------------------- */
-
-/* -------------------------------------------------------------------------
- * Rolling counter validation
- * Land Rover receivers accept counter in window [last+1, last+32768]
- * ------------------------------------------------------------------------- */
-bool lr_counter_valid(uint16_t stored, uint16_t received)
-{
-    uint16_t delta = (uint16_t)(received - stored);
-    return (delta >= 1u && delta <= 32768u);
+uint8_t subghz_protocol_decoder_land_rover_rke_get_hash_data(void* context) {
+    furi_assert(context);
+    SubGhzProtocolDecoderLandRoverRke* instance = context;
+    return subghz_protocol_blocks_get_hash_data(&instance->decoder, 8);
 }
 
-/* -------------------------------------------------------------------------
- * Flipper Zero SubGHz plugin glue — same pattern as honda_rke.c
- *
- *   void flipper_lr_encode(SubGhzProtocolEncoder *enc, void *ctx) {
- *       LandRoverFrame *f = (LandRoverFrame *)ctx;
- *       LandRoverRawBuf raw;
- *       lr_encode(f, &raw);
- *       // feed raw to SubGHz RAW transmit
- *   }
- *
- *   bool flipper_lr_decode(SubGhzProtocolDecoder *dec,
- *                          const int32_t *pulses, uint32_t count, void *ctx) {
- *       LandRoverRawBuf buf;
- *       buf.count = count > 512 ? 512 : count;
- *       memcpy(buf.pulses, pulses, buf.count * sizeof(int32_t));
- *       LandRoverFrame frame;
- *       return lr_decode(&buf, &frame);
- *   }
- * ------------------------------------------------------------------------- */
+static void lr_write_status(FlipperFormat* flipper_format, uint8_t status) {
+    uint32_t value = status & 0x03U;
+    flipper_format_write_uint32(flipper_format, "LrStatus", &value, 1);
+}
+
+static uint8_t lr_read_status(FlipperFormat* flipper_format) {
+    uint32_t value = 0;
+    if(!flipper_format_read_uint32(flipper_format, "LrStatus", &value, 1)) {
+        return 0;
+    }
+    return (uint8_t)(value & 0x03U);
+}
+
+SubGhzProtocolStatus subghz_protocol_decoder_land_rover_rke_serialize(
+    void* context,
+    FlipperFormat* flipper_format,
+    SubGhzRadioPreset* preset) {
+    furi_assert(context);
+    SubGhzProtocolDecoderLandRoverRke* instance = context;
+    SubGhzProtocolStatus ret =
+        subghz_block_generic_serialize(&instance->generic, flipper_format, preset);
+    if(ret == SubGhzProtocolStatusOk) {
+        lr_write_status(flipper_format, instance->status);
+    }
+    return ret;
+}
+
+SubGhzProtocolStatus subghz_protocol_decoder_land_rover_rke_deserialize(
+    void* context,
+    FlipperFormat* flipper_format) {
+    furi_assert(context);
+    SubGhzProtocolDecoderLandRoverRke* instance = context;
+    SubGhzProtocolStatus ret = subghz_block_generic_deserialize(&instance->generic, flipper_format);
+    if(ret == SubGhzProtocolStatusOk) {
+        instance->status = lr_read_status(flipper_format);
+        lr_unpack(&instance->generic, instance->status);
+    }
+    return ret;
+}
+
+void subghz_protocol_decoder_land_rover_rke_get_string(void* context, FuriString* output) {
+    furi_assert(context);
+    SubGhzProtocolDecoderLandRoverRke* instance = context;
+    furi_string_cat_printf(
+        output,
+        "Land Rover RKE\r\n"
+        "Hop:%08lX Sn:%06lX\r\n"
+        "Btn:%X [%s] Fn:%X St:%X\r\n"
+        "%ubit",
+        (unsigned long)instance->generic.cnt,
+        (unsigned long)instance->generic.serial,
+        instance->generic.btn,
+        lr_button_name(instance->generic.btn),
+        (unsigned)(instance->generic.data & 0x0FU),
+        instance->status,
+        instance->generic.data_count_bit);
+}
