@@ -115,7 +115,7 @@ const SubGhzProtocol subghz_protocol_honda_acura = {
     .encoder = &subghz_protocol_honda_acura_encoder,
 };
 
-// ─── bit / symbol helpers ────────────────────────────────────────────────────────
+// ─── bit / symbol helpers ────────────────────────────────────────────────────
 
 static void honda_acura_symbol_set(uint8_t* buf, uint16_t index, uint8_t v) {
     const uint16_t byte_index = index >> 3U;
@@ -357,7 +357,7 @@ SubGhzProtocolStatus
     return SubGhzProtocolStatusOk;
 }
 
-// ─── Decoder ────────────────────────────────────────────────────────────────────
+// ─── Decoder ────────────────────────────────────────────────────────────────
 
 void* subghz_protocol_decoder_honda_acura_alloc(SubGhzEnvironment* environment) {
     UNUSED(environment);
