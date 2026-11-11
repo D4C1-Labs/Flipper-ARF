@@ -206,11 +206,19 @@ static void subghz_setting_load_default_region(
     subghz_setting_load_default_preset(
         instance, "AM650", subghz_device_cc1101_preset_ook_650khz_async_regs);
     subghz_setting_load_default_preset(
+        instance, "AM101", subghz_device_cc1101_preset_ook_101khz_16kbaud_async_regs);
+    subghz_setting_load_default_preset(
         instance, "FM238", subghz_device_cc1101_preset_2fsk_dev2_38khz_async_regs);
     subghz_setting_load_default_preset(
         instance, "FM476", subghz_device_cc1101_preset_2fsk_dev47_6khz_async_regs);
     subghz_setting_load_default_preset(
         instance, "FM12K", subghz_device_cc1101_preset_2fsk_dev12khz_async_regs);
+    subghz_setting_load_default_preset(
+        instance, "FM20K", subghz_device_cc1101_preset_mercedes_async_regs);
+    subghz_setting_load_default_preset(
+        instance, "FM20KR", subghz_device_cc1101_preset_mercedes_rx_async_regs);
+    subghz_setting_load_default_preset(
+        instance, "FM14K", subghz_device_cc1101_preset_2fsk_dev14khz_38kbaud_async_regs);
 }
 
 // Region check removed
