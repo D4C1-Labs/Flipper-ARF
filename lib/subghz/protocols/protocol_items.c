@@ -125,6 +125,8 @@ const SubGhzProtocol* const subghz_protocol_registry_items[] = {
     &subghz_protocol_audi,
     &subghz_protocol_hundai,
 
+    // [CVMR] New protocols coming soon - proper implementation underway
+
     // [UNLEASHED_PORT] gate remotes (flash budget — build as external FAP if needed)
     //&subghz_protocol_allstar_firefly,
     //&subghz_protocol_ditec_gol4,

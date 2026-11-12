@@ -120,6 +120,8 @@
 #include "nord_ice.h"
 #include "telcoma_edge.h"
 
+// [CVMR] New expanded protocol support coming soon
+
 #include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>

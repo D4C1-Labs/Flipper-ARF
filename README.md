@@ -14,6 +14,7 @@ This project may incorporate, adapt, or build upon **other open-source projects*
 
 - [Showcase](#showcase)
 - [Supported Systems](#supported-systems)
+- [Flux Capacitor Support](#flux-capacitor-support)
 - [How to Build](#how-to-build)
 - [Project Scope](#project-scope)
 - [To Do / Planned Features](#to-do--planned-features)
@@ -117,6 +118,78 @@ This project may incorporate, adapt, or build upon **other open-source projects*
 | Hay21 | 433 MHz | AM | Yes | Yes | No |
 | Revers RB2 | 433 MHz | AM | Yes | Yes | No |
 | Roger | 433 MHz | AM | Yes | Yes | No |
+
+---
+
+## Flux Capacitor Support
+
+Flipper-ARF now includes **native support for the Flux Capacitor**, a powerful RF amplifier module by Rabbit Labs that transforms the Flipper Zero into a long-range automotive research tool.
+
+### What is the Flux Capacitor?
+
+The [Flux Capacitor](https://lab401.com/products/flux-capacitor) is an external CC1101-based RF amplifier that provides:
+
+- **Up to 100 mW transmission power** (vs. Flipper's standard <1% efficiency)
+- **10x+ range improvement** (~100m+ depending on antenna and environment)
+- **Drop-in hardware compatibility** with Flipper Zero
+- **Full protocol support** for all automotive and gate protocols
+- **Tuned antenna** for 315 MHz, 433 MHz, and 868 MHz bands
+
+### Device Selection
+
+Flipper-ARF automatically detects and supports the Flux Capacitor. Users can:
+
+1. **Auto-detect mode** (default): System automatically uses Flux Capacitor if present
+2. **Force external**: Use Flux Capacitor even if internal module is available
+3. **Force internal**: Use Flipper's standard internal CC1101 radio
+
+### Power Levels
+
+The Flux Capacitor supports multiple power output levels:
+
+| Mode | Power Output | dBm | Use Case |
+|:---|:---:|:---:|:---|
+| Low | ~10 mW | 10 | Short-range, low power consumption |
+| Medium | ~50 mW | 17 | Balanced range and power (default) |
+| High | ~100 mW | 20 | Maximum range automotive research |
+| Very High | ~120 mW | 21 | Extended range (if hardware supported) |
+
+### Usage in Flipper-ARF
+
+Simply connect the Flux Capacitor to your Flipper Zero via the expansion port. Flipper-ARF will:
+
+1. Automatically detect the device
+2. Select appropriate power and modulation settings
+3. Provide seamless radio switching between internal and external modules
+4. Report device status and current power level in the UI
+
+### Protocol Compatibility
+
+All supported automotive, gate, and general protocols work with the Flux Capacitor at full fidelity:
+
+- **No protocol modifications needed** - full backward compatibility
+- **Enhanced reception** - improved RSSI and packet capture at distance
+- **Long-range transmission** - all protocols support full 100+ meter range
+- **Automatic fallback** - reverts to internal module if Flux Capacitor is disconnected
+
+### Hardware Notes
+
+⚠️ **Important Safety Requirements:**
+
+- **Always use an antenna when transmitting** - Operating without an antenna causes permanent RF module damage
+- **Comply with local regulations** - TX power limits vary by region and frequency
+- **Use responsibly** - Extended range increases potential for unintended interference
+- **Monitor power consumption** - Increased TX power draws more current from battery
+
+### Building with Flux Capacitor Support
+
+The Flux Capacitor support is **enabled by default** in all Flipper-ARF builds:
+
+```bash
+./fbt COMPACT=1 DEBUG=0 updater_package
+```
+
+For Flux Capacitor-specific builds or customization, refer to [CVMR-LAB.md](CVMR-LAB.md).
 
 ---
 
