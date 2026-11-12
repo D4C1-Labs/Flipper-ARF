@@ -50,8 +50,7 @@
  *   automotive protocol is roughly 2-6 KB of compiled code, so several big
  *   additions can overflow into the C2/radio region. If
  *   `./fbt ... updater_package` warns "Firmware image overlaps C2 region", you
- *   mgit status
-ust reclaim flash. Options, cheapest first:
+ *   must reclaim flash. Options, cheapest first:
  *     - Remove/comment protocols you don't need from the array below.
  *     - Move another large built-in library out of the firmware the way NFC was
  *       (drop it from lib/SConscript BuildModules and from
@@ -110,14 +109,25 @@ const SubGhzProtocol* const subghz_protocol_registry_items[] = {
     &renault_v1_protocol,
     &subghz_protocol_gm,
     &subghz_protocol_toyota,
-    //&subghz_protocol_bmw_cas4,
-    //&subghz_protocol_mercedes,
-    //&subghz_protocol_mazda_infinity,
-    //&subghz_protocol_audi,
-    //&subghz_protocol_hundai,
-    //&subghz_protocol_gm,
+    &subghz_protocol_toyota_lexus,
+    &subghz_protocol_gm_rolling,
+    &subghz_protocol_nissan,
+    &subghz_protocol_renault,
+    &subghz_protocol_honda_acura,
+    &subghz_protocol_hyundai_new,
+    &subghz_protocol_volvo,
+    &subghz_protocol_datsun_lada,
+    &subghz_protocol_land_rover_v0,
+    &subghz_protocol_land_rover_rke,
+    &subghz_protocol_bmw_cas4,
+    &subghz_protocol_mercedes,
+    &subghz_protocol_mazda_infinity,
+    &subghz_protocol_audi,
+    &subghz_protocol_hundai,
 
-    // [UNLEASHED_PORT] New protocols from Unleashed firmware (disabled by default)
+    // [CVMR] New protocols coming soon - proper implementation underway
+
+    // [UNLEASHED_PORT] gate remotes (flash budget — build as external FAP if needed)
     //&subghz_protocol_allstar_firefly,
     //&subghz_protocol_ditec_gol4,
     //&subghz_protocol_nord_ice,
@@ -145,8 +155,12 @@ static const SubGhzProtocolCatalogEntry subghz_protocol_catalog[] = {
     {"BMW", SubGhzProtocolCatalogRoutePolicyAMDefault, NULL},
     {"Hundai", SubGhzProtocolCatalogRoutePolicyAMDefault,
      SUBGHZ_PROTOCOL_CATALOG_TX_KEY("hundai")},
+    {"BMW CAS4", SubGhzProtocolCatalogRoutePolicyAMDefault,
+     SUBGHZ_PROTOCOL_CATALOG_TX_KEY("bmw_cas4")},
     {"Chrysler V0", SubGhzProtocolCatalogRoutePolicyAMDefault,
      SUBGHZ_PROTOCOL_CATALOG_TX_KEY("chrysler_v0")},
+    {"Datsun Lada", SubGhzProtocolCatalogRoutePolicyAMDefault,
+     SUBGHZ_PROTOCOL_CATALOG_TX_KEY("datsun_lada")},
     {"Fiat V0", SubGhzProtocolCatalogRoutePolicyAMDefault,
      SUBGHZ_PROTOCOL_CATALOG_TX_KEY("fiat_v0")},
     {"Fiat V1", SubGhzProtocolCatalogRoutePolicyAMDefault,
@@ -161,6 +175,12 @@ static const SubGhzProtocolCatalogEntry subghz_protocol_catalog[] = {
     {"Ford V3", SubGhzProtocolCatalogRoutePolicyFMF4, NULL},
     {"GM", SubGhzProtocolCatalogRoutePolicyAMDefault,
      SUBGHZ_PROTOCOL_CATALOG_TX_KEY("gm")},
+    {"GM Rolling", SubGhzProtocolCatalogRoutePolicyAMDefault,
+     SUBGHZ_PROTOCOL_CATALOG_TX_KEY("gm_rolling")},
+    {"Honda/Acura", SubGhzProtocolCatalogRoutePolicyAMDefault,
+     SUBGHZ_PROTOCOL_CATALOG_TX_KEY("honda_acura")},
+    {"Hyundai New", SubGhzProtocolCatalogRoutePolicyAMDefault,
+     SUBGHZ_PROTOCOL_CATALOG_TX_KEY("hyundai_new")},
     {"Honda Static", SubGhzProtocolCatalogRoutePolicyFMHonda1,
      SUBGHZ_PROTOCOL_CATALOG_TX_KEY("honda_static")},
     {"Honda V1", SubGhzProtocolCatalogRoutePolicyAMDefault,
@@ -179,6 +199,10 @@ static const SubGhzProtocolCatalogEntry subghz_protocol_catalog[] = {
      SUBGHZ_PROTOCOL_CATALOG_TX_KEY("kia_v6")},
     {"Kia V7", SubGhzProtocolCatalogRoutePolicyFMDefault,
      SUBGHZ_PROTOCOL_CATALOG_TX_KEY("kia_v7")},
+    {"Land Rover V0", SubGhzProtocolCatalogRoutePolicyAMDefault,
+     SUBGHZ_PROTOCOL_CATALOG_TX_KEY("land_rover_v0")},
+    {"Land Rover RKE", SubGhzProtocolCatalogRoutePolicyAMDefault,
+     SUBGHZ_PROTOCOL_CATALOG_TX_KEY("land_rover_rke")},
     {"Honda V2", SubGhzProtocolCatalogRoutePolicyFMF4,
      SUBGHZ_PROTOCOL_CATALOG_TX_KEY("honda_v2")},
     {"Mazda V0", SubGhzProtocolCatalogRoutePolicyByModulation,
@@ -191,6 +215,8 @@ static const SubGhzProtocolCatalogEntry subghz_protocol_catalog[] = {
     {"Mercedes V0", SubGhzProtocolCatalogRoutePolicyFMDefault, NULL},
     {"Mercedes V1", SubGhzProtocolCatalogRoutePolicyFMDefault, NULL},
     {"Mitsubishi V0", SubGhzProtocolCatalogRoutePolicyFMDefault, NULL},
+    {"Nissan", SubGhzProtocolCatalogRoutePolicyAMDefault,
+     SUBGHZ_PROTOCOL_CATALOG_TX_KEY("nissan")},
     {"Opel V1", SubGhzProtocolCatalogRoutePolicyAMDefault, NULL},
     {"Porsche Touareg", SubGhzProtocolCatalogRoutePolicyAMDefault, NULL},
     {"PSA", SubGhzProtocolCatalogRoutePolicyByModulation,
@@ -199,12 +225,19 @@ static const SubGhzProtocolCatalogEntry subghz_protocol_catalog[] = {
      SUBGHZ_PROTOCOL_CATALOG_TX_KEY("renault_v0")},
     {"Renault V1", SubGhzProtocolCatalogRoutePolicyAMDefault,
      SUBGHZ_PROTOCOL_CATALOG_TX_KEY("renault_v1")},
+    {"Renault", SubGhzProtocolCatalogRoutePolicyAMDefault,
+     SUBGHZ_PROTOCOL_CATALOG_TX_KEY("renault")},
     {"Scher-Khan", SubGhzProtocolCatalogRoutePolicyFMDefault, NULL},
     {"Star Line", SubGhzProtocolCatalogRoutePolicyAMDefault,
      SUBGHZ_PROTOCOL_CATALOG_TX_KEY("star_line")},
     {"Subaru", SubGhzProtocolCatalogRoutePolicyAMDefault,
      SUBGHZ_PROTOCOL_CATALOG_TX_KEY("subaru")},
-    {"Toyota", SubGhzProtocolCatalogRoutePolicyAMDefault, NULL},
+    {"Toyota", SubGhzProtocolCatalogRoutePolicyAMDefault,
+     SUBGHZ_PROTOCOL_CATALOG_TX_KEY("toyota")},
+    {"Toyota Lexus", SubGhzProtocolCatalogRoutePolicyAMDefault,
+     SUBGHZ_PROTOCOL_CATALOG_TX_KEY("toyota_lexus")},
+    {"Volvo", SubGhzProtocolCatalogRoutePolicyAMDefault,
+     SUBGHZ_PROTOCOL_CATALOG_TX_KEY("volvo")},
     {"VAG", SubGhzProtocolCatalogRoutePolicyAMVag,
      SUBGHZ_PROTOCOL_CATALOG_TX_KEY("vag")},
 };
@@ -218,7 +251,7 @@ static const SubGhzProtocolCatalogAlias subghz_protocol_catalog_aliases[] = {
     {"Suzuki", "Kia V0"},
     {"Suzuki V0", "Kia V0"},
     {"Honda V0", "Kia V0"},
-    {"Land Rover V0", "Honda V2"},
+    {"Toyota (Lexus)", "Toyota Lexus"},
     {"VW", "VAG"},
 };
 

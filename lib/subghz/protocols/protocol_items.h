@@ -95,7 +95,16 @@
 #include "ford_v2.h"
 #include "ford_v3.h"
 #include "land_rover_v0.h"
+#include "landrover_rke.h"
 #include "toyota.h"
+#include "gm_rolling.h"
+#include "nissan.h"
+#include "renault.h"
+#include "toyota_lexus.h"
+#include "honda_acura.h"
+#include "hyundai_new.h"
+#include "volvo.h"
+#include "datsun_lada.h"
 #include "honda_static.h"
 #include "honda_v1.h"
 #include "honda_v2.h"
@@ -110,6 +119,8 @@
 #include "ditec_gol4.h"
 #include "nord_ice.h"
 #include "telcoma_edge.h"
+
+// [CVMR] New expanded protocol support coming soon
 
 #include <stdbool.h>
 #include <stddef.h>

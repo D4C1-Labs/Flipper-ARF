@@ -1,0 +1,257 @@
+# Included Protocols
+
+Total: 127 protocol source files
+
+## Protocol List
+
+     1	aes_common
+     2	allstar_firefly
+     3	alutech_at_4n
+     4	ansonic
+     5	audi
+     6	aut64
+     7	auto_rke_protocols
+     8	base
+     9	beninca_arc
+    10	bett
+    11	bin_raw
+    12	bmw
+    13	bmw_cas4
+    14	came
+    15	came_atomo
+    16	came_twee
+    17	chamberlain_code
+    18	chrysler
+    19	clemsa
+    20	common
+    21	datsun_lada
+    22	dickert_mahs
+    23	ditec_gol4
+    24	doitrand
+    25	dooya
+    26	elplast
+    27	faac_slh
+    28	feron
+    29	fiat_marelli
+    30	fiat_spa
+    31	fiat_v0
+    32	fiat_v1
+    33	fiat_v2
+    34	ford_v0
+    35	ford_v1
+    36	ford_v2
+    37	ford_v3
+    38	gangqi
+    39	gate_tx
+    40	gm
+    41	gm_rolling
+    42	hay21
+    43	hitag2_key_db
+    44	hitag2_seed
+    45	hollarm
+    46	holtek
+    47	holtek_ht12x
+    48	honda_acura
+    49	honda_static
+    50	honda_v1
+    51	honda_v2
+    52	honeywell
+    53	honeywell_wdb
+    54	hormann
+    55	hundai
+    56	hyundai_new
+    57	ido
+    58	intertechno_v3
+    59	jarolift
+    60	keeloq
+    61	keeloq_common
+    62	keyfinder
+    63	kia_v0
+    64	kia_v1
+    65	kia_v2
+    66	kia_v3_v4
+    67	kia_v5
+    68	kia_v6
+    69	kia_v7
+    70	kinggates_stylo_4k
+    71	land_rover_v0
+    72	landrover_rke
+    73	legrand
+    74	linear
+    75	linear_delta3
+    76	magellan
+    77	marantec
+    78	marantec24
+    79	mastercode
+    80	mazda_infinity
+    81	mazda_siemens
+    82	mazda_v0
+    83	mazda_v2
+    84	megacode
+    85	mercedes
+    86	mercedes_v0
+    87	mercedes_v1
+    88	mitsubishi_v0
+    89	nero_radio
+    90	nero_sketch
+    91	nice_flo
+    92	nice_flor_s
+    93	nissan
+    94	nord_ice
+    95	opel_v1
+    96	phoenix_v2
+    97	porsche_cayenne
+    98	power_smart
+    99	princeton
+   100	protocol_items
+   101	protocol_timings
+   102	protocols_common
+   103	psa
+   104	psa2
+   105	raw
+   106	renault
+   107	renault_v0
+   108	renault_v1
+   109	revers_rb2
+   110	roger
+   111	scher_khan
+   112	secplus_v1
+   113	secplus_v2
+   114	sheriff_cfm
+   115	smc5326
+   116	somfy_keytis
+   117	somfy_telis
+   118	star_line
+   119	subaru
+   120	suzuki
+   121	telcoma_edge
+   122	toyota
+   123	toyota_lexus
+   124	treadmill37
+   125	vag
+   126	volvo
+   127	x10
+
+## Key Protocol Categories
+
+### Automotive OEM
+- audi
+- auto_rke_protocols
+- bmw
+- bmw_cas4
+- chrysler
+- fiat_v1
+- fiat_v2
+- ford_v0
+- ford_v1
+- ford_v2
+- ford_v3
+- gm
+- gm_rolling
+- hitag2_seed
+- honda_v1
+- honda_v2
+- keeloq
+- kia_v0
+- kia_v1
+- kia_v2
+- kia_v3_v4
+- kia_v5
+- kia_v6
+- kia_v7
+- mazda_siemens
+- mazda_v0
+- mercedes
+- mercedes_v0
+- mercedes_v1
+- nissan
+- porsche_cayenne
+- protocol_items
+- protocol_timings
+- psa
+- psa2
+- renault_v0
+- renault_v1
+- toyota
+- toyota_lexus
+- vag
+
+### Garage Doors & Gates
+- allstar_firefly
+- beninca_arc
+- came
+- came_atomo
+- came_twee
+- chamberlain_code
+- keeloq
+- nice_flo
+- nice_flor_s
+
+### Keeloq & Rolling Code
+- alutech_at_4n
+- audi
+- auto_rke_protocols
+- beninca_arc
+- bmw_cas4
+- came_atomo
+- came_twee
+- chrysler
+- datsun_lada
+- ditec_gol4
+- faac_slh
+- fiat_marelli
+- fiat_spa
+- fiat_v0
+- fiat_v1
+- fiat_v2
+- ford_v0
+- ford_v1
+- ford_v2
+- gm
+- gm_rolling
+- hay21
+- honda_acura
+- honda_v1
+- honda_v2
+- hundai
+- hyundai_new
+- jarolift
+- keeloq
+- keeloq_common
+- kia_v0
+- kia_v1
+- kia_v2
+- kia_v3_v4
+- kia_v5
+- kia_v6
+- kia_v7
+- kinggates_stylo_4k
+- mazda_infinity
+- mazda_siemens
+- mazda_v0
+- mazda_v2
+- mercedes
+- mitsubishi_v0
+- nice_flor_s
+- nissan
+- phoenix_v2
+- porsche_cayenne
+- protocol_items
+- psa
+- psa2
+- renault
+- renault_v0
+- renault_v1
+- scher_khan
+- secplus_v1
+- secplus_v2
+- sheriff_cfm
+- somfy_keytis
+- somfy_telis
+- star_line
+- subaru
+- suzuki
+- toyota_lexus
+- treadmill37
+- vag
+- volvo

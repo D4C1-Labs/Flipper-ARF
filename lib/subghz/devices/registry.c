@@ -1,6 +1,7 @@
 #include "registry.h"
 
 #include "cc1101_int/cc1101_int_interconnect.h"
+#include "cc1101_ext/flux_capacitor_interconnect.h"
 #include <flipper_application/plugins/plugin_manager.h>
 #include <loader/firmware_api/firmware_api.h>
 
@@ -39,12 +40,13 @@ void subghz_device_registry_init(void) {
         FURI_LOG_W(TAG, "No " SUBGHZ_RADIO_DEVICE_PLUGIN_FAL_PREFIX "*.fal loaded");
     }
 
-    subghz_device->size = plugin_count + 1; // [UNLEASHED_PORT]
+    subghz_device->size = plugin_count + 2; // +1 for Flux Capacitor, +1 for CC1101 internal
     subghz_device->items =
         (const SubGhzDevice**)malloc(sizeof(SubGhzDevice*) * subghz_device->size);
     subghz_device->items[0] = &subghz_device_cc1101_int;
-    for(uint32_t i = 1; i < subghz_device->size; i++) {
-        const SubGhzDevice* plugin = plugin_manager_get_ep(subghz_device->manager, i - 1);
+    subghz_device->items[1] = &subghz_device_flux_capacitor;
+    for(uint32_t i = 2; i < subghz_device->size; i++) {
+        const SubGhzDevice* plugin = plugin_manager_get_ep(subghz_device->manager, i - 2);
         subghz_device->items[i] = plugin;
     }
 
